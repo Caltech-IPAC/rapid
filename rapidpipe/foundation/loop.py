@@ -283,7 +283,7 @@ class Snapshot:
 
     Keys are tuples: an L2 key is ``(expid, sca, fid)``, a reference key
     ``(field, fid)``. ``jobs`` are this run's jobs of the loop's stages:
-    dicts with ``id``, ``stage``, ``state`` and ``scope``.
+    dicts with ``id``, ``stage``, ``state``, ``scope`` and ``refusal``.
     """
 
     dataset: str
@@ -322,7 +322,7 @@ def snapshot(conn, run: int) -> Snapshot:
         stems = {r["file"] for r in _rows(
             cur, "SELECT scope->>'file' AS file FROM jobs WHERE stage = 'intake'"
                  " AND state = 'published' AND scope->>'dataset' = %s", (d,))}
-        jobs = _rows(cur, "SELECT id, stage, state, scope FROM jobs WHERE run = %s AND stage = ANY(%s)"
+        jobs = _rows(cur, "SELECT id, stage, state, scope, refusal FROM jobs WHERE run = %s AND stage = ANY(%s)"
                           " ORDER BY id", (run, list(STAGES)))
         bound = _rows(cur, "SELECT id, product, key, job FROM official WHERE closed_at IS NULL"
                            " AND job IS NOT NULL AND key->>'dataset' = %s", (d,))
@@ -492,7 +492,9 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     With ``max_submissions``, only the first that many are made, in stage order, and
     ``deferred`` counts the rest; the next pass plans them again. (An exposure's
     ``exposures`` expectation rides on its first SCA's intake, earlier in the order than
-    its other SCAs', so a cut never strands it.)
+    its other SCAs', so a cut never strands it.) A job published but refused its binding
+    (``refusal`` set) is reported under ``failed`` with a failed one, each with its
+    ``refusal``, and like a failed one holds its key: neither is submitted again.
     """
     d = snap.dataset
     fids = {name: _fid(name, snap.fids) for name in selection.filters}
@@ -500,8 +502,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     for job in snap.jobs:
         run_jobs[job["stage"]].append(job)
     pending = {s: [j for j in run_jobs[s] if j["state"] in PENDING] for s in STAGES}
-    failed = [j for j in snap.jobs if j["state"] == "failed"]
-    taken = {s: [j for j in run_jobs[s] if j["state"] != "published"] for s in STAGES}
+    failed = [j for j in snap.jobs if j["state"] == "failed" or (j["state"] == "published" and j.get("refusal"))]
+    taken = {s: [j for j in run_jobs[s] if j["state"] != "published" or j.get("refusal")] for s in STAGES}
 
     def key(expid, sca, fid):
         return {"dataset": d, "expid": expid, "sca": sca, "fid": fid}
@@ -631,7 +633,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     counts = {"listed": len(stems), "admitted": len(admitted), "new": len(new), "deferred": deferred,
               "submitted": {s: sum(1 for o in out if o["stage"] == s) for s in STAGES},
               "pending": {s: len(pending[s]) for s in STAGES},
-              "failed": [{"job": j["id"], "stage": j["stage"], "scope": j["scope"]} for j in failed],
+              "failed": [{"job": j["id"], "stage": j["stage"], "scope": j["scope"],
+                          "refusal": j.get("refusal")} for j in failed],
               "held": held}
     return out, counts
 

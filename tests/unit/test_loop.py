@@ -27,7 +27,11 @@ in stage order, an exposure's expectation kept on its first intake; an intake
 names the dataset's official Gaia catalog, and only the PSF without one.
 `--passes` selects the survey's passes in stems and rows alike, all by default.
 `job wait` returns once every named job is published or failed, holds a
-failed row under Batch's retry, gives up at its timeout and names a missing job.
+failed row under Batch's retry, gives up at its timeout and names a missing job;
+it exits 0 when all published, 1 when one failed, 2 at the timeout. A job
+published with its binding refused is reported under ``failed`` with its
+reason and its key not resubmitted, and the loop exits 1 for it as for a
+failed job once the rest drains.
 A pass reports the quality gate's held sets when given the query.
 Spot, with ``[batch.spot]``: a stage's submissions go to the Spot queue
 while more than ``backlog`` remain, the rest to the prompt queue, and none
@@ -201,7 +205,18 @@ def test_failed_job_is_reported_and_its_key_not_resubmitted():
     failed = [{"id": 80, "stage": "difference", "state": "failed", "scope": {"expid": k1[0], "sca": 8, "fid": 8}}]
     subs, counts = loop.plan(snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, jobs=failed), [], SEL)
     assert stages(subs, "difference") == []
-    assert counts["failed"] == [{"job": 80, "stage": "difference", "scope": failed[0]["scope"]}]
+    assert counts["failed"] == [{"job": 80, "stage": "difference", "scope": failed[0]["scope"],
+                                 "refusal": None}]
+
+
+def test_a_job_published_with_its_binding_refused_is_reported_failed_and_its_key_not_resubmitted():
+    k1 = (expid(1, 1, 1), 8, 8)
+    refused = [{"id": 81, "stage": "difference", "state": "published", "refusal": "no sources rows",
+                "scope": {"expid": k1[0], "sca": 8, "fid": 8}}]
+    subs, counts = loop.plan(snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, jobs=refused), [], SEL)
+    assert stages(subs, "difference") == []
+    assert counts["failed"] == [{"job": 81, "stage": "difference", "scope": refused[0]["scope"],
+                                 "refusal": "no sources rows"}]
 
 
 def test_drained_pass_exits_zero(monkeypatch, capsys):
@@ -228,9 +243,12 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
     assert summary["sets_waiting"] == [90] and not summary["drained"]
 
 
-def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_2_once_the_rest_drains(monkeypatch, capsys):
+@pytest.mark.parametrize("state, refusal", [("failed", None), ("published", "binding refused")])
+def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_1_once_the_rest_drains(
+        monkeypatch, capsys, state, refusal):
     k1, k2 = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
-    failed = {"id": 80, "stage": "difference", "state": "failed", "scope": {"expid": k1[0], "sca": 8, "fid": 8}}
+    failed = {"id": 80, "stage": "difference", "state": state, "refusal": refusal,
+              "scope": {"expid": k1[0], "sca": 8, "fid": 8}}
     rows = {"published_stems": {stem(1, 1, 1), stem(2, 1, 1)}, "l2": {k1: l2row(7, 1.0, 20), k2: l2row(7, 1.1, 21)},
             "refs": {(7, 8): 30}, "diffs": {k2: 42}, "sources": {k2: 42}}
     passes = iter([snap(jobs=[failed], **rows),                                     # k2's packet is due
@@ -256,7 +274,7 @@ def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_2_once_the_re
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert submitted == ["packet"] and len(lines) == 2           # the other chain went on past the failure
     assert lines[-1]["drained"] and lines[-1]["failed"][0]["job"] == 80
-    assert code == ExitCode.INCOMPLETE
+    assert code == ExitCode.FAILURE
 
 
 class Batch:
@@ -499,6 +517,18 @@ def test_job_wait_holds_a_failed_row_under_batchs_retry_and_gives_up_at_the_time
     result = loop.wait(lambda: contextlib.nullcontext(conn), [3], Batch({}), timeout=60, interval=30,
                        sleep=lambda s: None, clock=lambda: next(ticks))
     assert not result["ended"] and result["states"] == {3: "failed"}
+
+
+@pytest.mark.parametrize("states, ended, code", [
+    ({1: "published", 2: "published"}, True, ExitCode.SUCCESS),
+    ({1: "published", 2: "failed"}, True, ExitCode.FAILURE),
+    ({1: "published", 2: "running"}, False, ExitCode.INCOMPLETE)])
+def test_job_wait_exits_0_when_all_published_1_when_one_failed_and_2_at_the_timeout(
+        monkeypatch, capsys, states, ended, code):
+    monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: None)
+    monkeypatch.setattr(loop, "wait", lambda *a, **kw: {"states": states, "ended": ended, "seconds": 1.0})
+    assert cli.main(["job", "wait", "--job", "1", "2", "--timeout", "1"]) == code
 
 
 def test_job_wait_names_a_job_that_does_not_exist():

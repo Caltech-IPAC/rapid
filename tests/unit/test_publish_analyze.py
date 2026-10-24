@@ -78,7 +78,7 @@ def test_the_publisher_analyses_every_table_it_wrote_to(tmp_path, monkeypatch, l
                         "checksum": "sha256:" + hashlib.sha256(table.encode()).hexdigest()})
     (tmp_path / "manifest.json").write_text(json.dumps({"outputs": outputs}))
     loaded = []
-    monkeypatch.setattr(publisher, "_rows", lambda path: [])
+    monkeypatch.setattr(publisher, "_rows", lambda path: [{"row": 1}])  # loaded, so bindable
     monkeypatch.setattr(publisher, "_insert", lambda cur, table, rows, job: loaded.append(table))
     analysed: list[str] = []
 

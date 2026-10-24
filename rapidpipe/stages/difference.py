@@ -822,6 +822,7 @@ def run(job: JobContext) -> None:
     job.write_manifest(
         [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet"),
          ("objects", "objects.parquet"), ("memberships", "memberships.parquet")],
+        empty_ok=("sources",),                  # a difference with nothing above the cut
         reads=reads, catalog=catalog, association=association,
         difference={
             "pid": inputs.pid, "rid": inputs.rid, "rfid": inputs.rfid,

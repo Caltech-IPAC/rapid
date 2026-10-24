@@ -39,15 +39,16 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``job wait --job N [N ...] [--timeout S] [--interval S]`` blocks until
   every named job is ``published`` or ``failed``, reconciling their runs
   with Batch each check (``rapidpipe.foundation.loop.wait``), and prints the
-  states; exit 0, or 75 when the timeout passes first: one blocking waiter
-  for hand-submitted jobs;
+  states; exit 0 when every job published, 1 when one failed, 2 when the
+  timeout passes first: one blocking waiter for hand-submitted jobs;
 - ``loop --run --filters --scas --pointings [--passes] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained: exit 0,
-  or 2 when a job of the run has failed, the failed jobs named in the
-  pass's ``failed`` (a failed job holds only the work that depends on it,
-  and the rest drains first); a job whose
+  or 1 when a job of the run has failed or was published with its binding
+  refused, those jobs named in the pass's ``failed`` with their ``refusal``
+  (such a job holds only the work that depends on it, and the rest drains
+  first); a job whose
   container Batch ended without ``job run`` recording it is resubmitted
   once (its Batch name ending ``-rerun``) and fails the loop only if the
   rerun's container dies too, and a pass submits at most the run's
@@ -204,10 +205,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "wait", help="Wait until every named job is published or failed.",
         description="Block until every named job is published or failed (a container Batch ended "
                     "without the row recording it counts as failed, Batch's own retry as not "
-                    "ended); print the states; exit 0, or 75 when --timeout passes first.")
+                    "ended); print the states; exit 0 when all published, 1 when one failed, "
+                    "2 when --timeout passes first.")
     job_wait.add_argument("--job", required=True, type=int, nargs="+", dest="jobs", metavar="N")
     job_wait.add_argument("--timeout", type=float, default=7000.0,
-                          help="Seconds before giving up with exit 75 (default 7000).")
+                          help="Seconds before giving up with exit 2 (default 7000).")
     job_wait.add_argument("--interval", type=float, default=30.0,
                           help="Seconds between checks (default 30).")
 
@@ -247,8 +249,8 @@ def _build_parser() -> argparse.ArgumentParser:
                     "and submit every ready job one stage forward on Batch, never waiting; end "
                     "each pass by producing the run's newly official packet sets to the topic. "
                     "Repeat every --interval seconds until a pass finds nothing new, pending or "
-                    "to submit: exit 0, or 2 when a job of the run has failed; the work that does "
-                    "not depend on a failed job drains first.")
+                    "to submit: exit 0, or 1 when a job of the run has failed or was published "
+                    "with its binding refused; the work that does not depend on it drains first.")
     loop_parser.add_argument("--run", required=True, type=int)
     loop_parser.add_argument("--filters", required=True, help="Comma-separated, e.g. F146.")
     loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
@@ -501,9 +503,9 @@ def _loop(args: argparse.Namespace) -> int:
         print(json.dumps(summary, sort_keys=True), flush=True)
         if args.once or summary["drained"]:
             if summary["failed"]:
-                sys.stderr.write(f"rapidpipe loop: failed jobs of run {args.run}: "
+                sys.stderr.write(f"rapidpipe loop: failed or refused jobs of run {args.run}: "
                                  f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
-                return int(ExitCode.INCOMPLETE)
+                return int(ExitCode.FAILURE)
             return int(ExitCode.SUCCESS)
         time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
 
@@ -527,7 +529,9 @@ def _foundation_command(args: argparse.Namespace) -> int:
         result = loop.wait(lambda: connect(application_name="rapidpipe-job-wait"), args.jobs,
                            launch.batch_client(), args.timeout, args.interval)
         _print_json(result)
-        return int(ExitCode.SUCCESS) if result["ended"] else int(ExitCode.TRANSIENT_FAILURE)
+        if not result["ended"]:
+            return int(ExitCode.INCOMPLETE)
+        return int(ExitCode.FAILURE) if "failed" in result["states"].values() else int(ExitCode.SUCCESS)
     elif command == ("job", "show"):
         with connect(application_name="rapidpipe-job-show") as conn:
             _print_json(foundation.job_show(conn, args.id))

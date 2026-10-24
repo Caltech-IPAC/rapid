@@ -79,10 +79,14 @@ class JobContext:
     def path(self) -> Path:
         return self.workdir if self.workdir is not None else local_path(self.prefix)
 
-    def write_manifest(self, outputs: Iterable[tuple[str, str]], **fields: Any) -> None:
+    def write_manifest(self, outputs: Iterable[tuple[str, str]], empty_ok: Iterable[str] = (),
+                       **fields: Any) -> None:
         """Write ``manifest.json`` declaring each ``(table, relative path)`` with its checksum.
 
-        ``fields`` are recorded beside ``outputs`` (an import's ``provenance``).
+        ``empty_ok`` names the tables that may validly hold no rows (the
+        publisher refuses to bind an expected product that loaded none
+        otherwise); ``fields`` are recorded beside ``outputs`` (an import's
+        ``provenance``).
         """
         declared = []
         for table, relative in outputs:
@@ -92,6 +96,8 @@ class JobContext:
                     digest.update(block)
             declared.append({"table": table, "path": relative,
                              "checksum": f"sha256:{digest.hexdigest()}"})
+        if empty_ok:
+            fields["empty_ok"] = sorted(empty_ok)
         (self.path / "manifest.json").write_text(json.dumps({**fields, "outputs": declared}, indent=1))
 
 

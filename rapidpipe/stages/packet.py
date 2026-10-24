@@ -516,8 +516,10 @@ def run(job: JobContext) -> None:
     read = _read(job)
     summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
                         sync_seed=f"{job.job}/{job.attempt}")
+    # A source set with no triggers is a set of no packets, validly; one with triggers is not.
     job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
-                        ("external", "external.parquet")], packet=summary, reads=read.reads,
+                        ("external", "external.parquet")],
+                       empty_ok=() if read.triggers else ("packets",), packet=summary, reads=read.reads,
                        metrics={"n_packets": summary["packets"],
                                 "n_packets_snr_gt20": summary["packets_snr_gt20"],
                                 "n_packets_bright_footprint": summary["packets_bright_footprint"]})
