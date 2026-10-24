@@ -48,6 +48,37 @@ def test_run_create_prints_the_new_runs_id(capsys, conn, tmp_path):
         assert cur.fetchone() == ("tester", "abc123", {"associate": {"radius": 1.0}}, SURVEY, DATASET)
 
 
+def test_run_create_stores_the_resolved_body_and_its_layers(capsys, conn, tmp_path):
+    base = tmp_path / "base.toml"
+    base.write_text("[associate]\nradius = 1.0\nmode = 'a'\n")
+    overlay = tmp_path / "ds.toml"
+    overlay.write_text("[associate]\nmode = 'b'\n")
+    code, out, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123",
+                          "--settings", str(base), "--overlay", str(overlay),
+                          "--set", "associate.radius=2.5", "--survey", SURVEY, "--dataset", DATASET)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    code, shown, err = _run(capsys, "run", "show", out.strip())
+    shown = json.loads(shown)
+    assert shown["settings"] == {"associate": {"radius": 2.5, "mode": "b"}}
+    assert [layer["layer"] for layer in shown["layers"]["layers"]] == ["base", "overlay", "set"]
+    assert shown["layers"]["settings_hash"].startswith("sha256:")
+
+
+def test_run_create_refuses_an_overlay_key_the_base_lacks(capsys, conn, tmp_path):
+    base = tmp_path / "base.toml"
+    base.write_text("[associate]\nradius = 1.0\n")
+    overlay = tmp_path / "ds.toml"
+    overlay.write_text("[associate]\nradius_arcsec = 2.0\n")
+    code, out, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123",
+                          "--settings", str(base), "--overlay", str(overlay),
+                          "--survey", SURVEY, "--dataset", DATASET)
+    assert (code, out) == (ExitCode.USAGE, "")
+    assert "associate.radius_arcsec" in err
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM runs")
+        assert cur.fetchone() == (0,)
+
+
 def test_run_create_refuses_an_unreadable_settings_file(capsys, conn, tmp_path):
     code, out, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123",
                           "--settings", str(tmp_path / "absent.toml"),

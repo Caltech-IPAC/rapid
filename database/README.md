@@ -16,7 +16,10 @@ the pipeline imports.
   It creates the Q3C extension and its indexes when Q3C is installed and
   says so in a NOTICE when it is not, as on a developer's container. There
   is no migration machinery until the first change after real data; from
-  then on changes are incremental SQL.
+  then on changes are incremental SQL: `schema.sql` carries every change
+  for a fresh database, and a dated file beside it
+  (`2026-10-23-runs-layers.sql`, the first) brings an existing one to it,
+  applied once.
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven
   statements: packet history three ways, lineage up and down) and the

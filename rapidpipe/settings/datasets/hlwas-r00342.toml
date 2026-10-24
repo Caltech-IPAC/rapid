@@ -1,0 +1,13 @@
+# The overlay for dataset family r00342 (STScI's SOC HLWAS simulation, L2
+# ASDF), given at `rapidpipe run create --overlay`. It holds only the keys
+# whose value differs from the shipped defaults (foundation-thin.toml, dev's
+# values) for this dataset, each with the measurement that earned it; a key
+# the base does not have is refused (rapidpipe.foundation.layers). Locations
+# and per-run values are not here: `intake.source_root` (the L2 prefix) and
+# `reference.selection.before_mjd` (the bound, which differs per filter) come
+# by `--set` at `run create`.
+
+[intake]
+# The SOC simulations sit in a public bucket, read anonymously: a Batch
+# container read 204 MB unsigned in 0.8 s (runbook part 7 step 6, run 12).
+unsigned = true
