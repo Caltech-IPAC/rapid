@@ -7469,6 +7469,66 @@ Check, held:
 
 Evidence is in the brief's `t1/`.
 
+### Step dev-prefilter: dev's database prefilter on SFFT's catalog, measured against ZOGY and raw SFFT on the same bytes; the default stays ZOGY
+
+**The change (rapid PR 431, merged `14860f57`; rapid PR 432; rapid_docs PR 114).**
+
+- **What.** Under `diff_flavor = "sfft"`, `source_set` applies `dev`'s database prefilter to SFFT's positive PSF-fit catalog after the fit-position bounds and before the 500 cap. A source is kept when its `sumrat` is finite and above `[difference.database_prefilter] sumrat_prefilter_threshold` (0.4) and its nearest pixel is at least 2 px from every edge (`catalogs.EDGE_MARGIN`). This ports `dev` c931b001 (963eb440), as `loadPSFCatIntoDBSourcesTable.py` applies it.
+- **Where the edge comes from.** `dev`'s XSources loader (57559572). Its PSF path has no edge cut, so this is a divergence, recorded in `decisions.md`.
+- **Divergence: null sumrat.** A null `sumrat` is rejected; `dev` passes it.
+- **What is not added.** `rb > 0`: the rebuild has no score. An SNR cut: `dev`'s is XSources-only.
+- **The off setting.** `""` turns off the whole predicate: sumrat, null and edge.
+- **Under ZOGY.** Nothing changes.
+- **`n_candidates`.** It is now the count the cap chooses from, so after the cut.
+
+**The proof.** Image `rebuild-14860f57…`, `rapid-rebuild:76`. Run 88's same-bytes method: six new datasets and live runs, each with Gaia imported, and the loop for PSF and intake. Difference and packet jobs were submitted by hand against run 81's `refimages` 22029 and `psfs` 22015 (injected) and the same rows through run 95 (null).
+
+| arm | settings | injected run | null run |
+|---|---|---|---|
+| A | `diff_flavor = "zogy"` (shipped) | 103 | 104 |
+| B | `"sfft"`, `sumrat_prefilter_threshold = ""` | 105 | 102 |
+| C | `"sfft"`, the prefilter at 0.4 | 107 | 106 |
+
+```sh
+arm.sh <a|b|c> <inj|null> 14860f57… rapid-rebuild:76    # the brief's t1/: run create, live, import, loop, submit.py, rp job wait, check_run
+python scripts/completeness.py --run N --truth truth-sca8.parquet --expids 4040101,5040101,6010101
+metrics.py 103 105 107 104 102 106; gate_proof.py 103 104; gate_proof.py 107 106            # the brief's t1/scripts
+```
+
+Check, held: all six runs `check_run.sh` **CLEAN** (consumer 1,158, 1,393, 1,420 injected; 182, 471, 478 null), and every job published on its first attempt.
+
+**Measured.** The injected sample is passes 4 to 6, 600 injected; the null sample is epoch 4040101.
+
+| | A: ZOGY | B: raw SFFT | C: SFFT + prefilter |
+|---|---|---|---|
+| detected of 600 | **542** | 256 | 275 |
+| AB 24 to 25, of 96 | **93** | 59 | 78 |
+| alerted of detected | 516 / 542 | 238 / 256 | 257 / 275 |
+| false positives per epoch, mean (highest) | **214 (233)** | 385 (390) | 388 (390) |
+| of them bright-flagged | 0.62 | 0.75 | 0.86 |
+| candidates before the cap, per injected epoch | 954–1,018 | 2,217–2,359 | 1,524–1,677 |
+| null: S/N > 20 / packets | **20 / 182** | 500 / 471 | 500 / 478 |
+| container seconds | 199–251 | 246–252 | 250–252 |
+| core / ring fraction | −0.0011 to +0.0032 / −0.0000 to +0.0017 | +0.251 to +0.271 / −0.002 to +0.021 | as B |
+
+- **The cut.** It keeps 0.67 to 0.71 of SFFT's candidates, column D, read from the catalog files through `n_candidates`. It removes "other" false positives (97 → 55 per epoch), and the bright-star residuals refill the cap (289 → 334).
+- **What C recovers.** 19 injected sources, all at AB 24.5. AB 25 and fainter stay at 0.
+- **The default rule.** Arm C against arm A must be at least as good on detections in total and at AB 24 to 25, on false positives per epoch (mean and highest) and on null packets (mean and highest). It is worse on every count, so `diff_flavor` stays `"zogy"`.
+
+**Re-based.** Arm B is run 88 to the digit: candidates, core, 256 detected, 385 false positives. Runs 91 and 92's 415 came from their own reference and PSF rows (`refimages` 22868/22867, `psfs` 22838/22839), not from the image between them. Which part of those references makes it is unread.
+
+**The gate.**
+
+- **The inputs.** Core and ring are image metrics (`quality.residuals`), not read from the source set; they are identical between B and C.
+- **Healthy epochs.** No arm-C difference is healthy. They pass `usable_fraction` (0.9994) and registration (at most 0.019 px), but carry SFFT's bright-star core residual, so nothing is calibrated from them and nothing is widened.
+- **The shipped bounds.** Arm A's four differences sit inside them, so they stay. The `[gate]` comment carries the measurement.
+- **`decide` over every recorded set,** at the shipped bounds, each run's own table, as recorded and with `min_epochs = 1` (past the minimum):
+  - **ZOGY.** 4,457 sets, 15 held as recorded and 18 past the minimum: runs 72, 73, 80 and 81 as before, plus F213's residual in runs 54 and 76. Arm A's four send.
+  - **SFFT.** 29 sets, 0 held as recorded and 19 held past the minimum, all on core: every HLWAS SFFT set, arm C's four among them. OpenUniverse run 89's 10 send.
+- **Publication smoke.** The sampled runs' own verdicts are send, warming up.
+
+Raw evidence is in the brief's `t1/`: `metrics.txt`, `c-103/`, `c-105/`, `c-107/` and their `.txt`, `gate-zogy.txt`, `gate-sfft.txt`, `?-inj/` and `?-null/`.
+
 ## Results of part 13 so far (2026-10-24 22:35 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
