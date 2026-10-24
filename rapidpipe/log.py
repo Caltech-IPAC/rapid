@@ -45,8 +45,9 @@ DEFAULT_LEVEL = logging.INFO
 
 #: The environment variable a caller may set to override the default log
 #: level: ``stage_log_context`` (stages) defaults to ``DEFAULT_LEVEL``
-#: (INFO) when unset; ``configure_root`` (the CLI) defaults to WARNING.
-#: Either way this variable, when set, wins.
+#: (INFO) when unset; ``configure_root`` (the CLI) defaults to INFO for
+#: rapidpipe's own loggers and WARNING for every other library's.
+#: Either way this variable, when set, wins for all of them.
 LEVEL_ENV_VAR = "RAPIDPIPE_LOG_LEVEL"
 
 #: The root logger name for rapidpipe. Every module's
@@ -186,9 +187,13 @@ def configure_root(level: int | str | None = None, stream: Any = None) -> None:
     and does not propagate to the real root) falls through to Python's
     last-resort handler -- one line to stderr with no timestamp and no
     run context. ``level`` defaults to ``RAPIDPIPE_LOG_LEVEL`` if set,
-    else ``logging.WARNING``. Idempotent, like :func:`configure`.
+    else ``logging.WARNING`` for the root and ``DEFAULT_LEVEL`` (INFO) for
+    the ``rapidpipe`` logger, so a Batch job's ``job run`` writes its own
+    INFO lines (a packet set produced, acknowledged) to CloudWatch and a
+    library's INFO chatter stays out. Idempotent, like :func:`configure`.
     """
     resolved_level = resolve_level(level, logging.WARNING)
+    own_level = resolve_level(level, DEFAULT_LEVEL)
 
     root = logging.getLogger()
     for handler in list(root.handlers):
@@ -197,9 +202,10 @@ def configure_root(level: int | str | None = None, stream: Any = None) -> None:
             handler.close()
 
     root.setLevel(resolved_level)
+    logging.getLogger(ROOT_LOGGER_NAME).setLevel(own_level)
     handler = _make_handler(
         stream=stream if stream is not None else sys.stderr,
-        level=resolved_level, run_id="-", attempt_id="-", stage="-", unit_id="-")
+        level=min(resolved_level, own_level), run_id="-", attempt_id="-", stage="-", unit_id="-")
     root.addHandler(handler)
 
 
