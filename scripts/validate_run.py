@@ -16,11 +16,12 @@ jobs of ``--run``:
   rows of the job that it did not declare.
 - ``catalog``: the object catalog's contract (plan amendment 2026-10-24):
   every official source of the run that the association accepts (its
-  ``[associate]`` flags and S/N) in its image's field has a membership (a
-  neighbour's joins only an object within the radius); every membership's source is within the match radius of
+  ``[associate]`` flags and S/N), wherever on its image it falls, is a
+  member of an object in its own field or a neighbouring one (the field
+  rule, runbook part 12 step 1); every membership's source is within the match radius of
   its object's founding position; no two objects of the run founded by
-  different jobs are within the radius of each other (no duplicate
-  founders); ``memberships_official`` holds no membership of a source set
+  different jobs are within the radius of each other, in one field or
+  either side of a boundary (no duplicate founders); ``memberships_official`` holds no membership of a source set
   that is not official; every ``objects_official`` row's sums are its
   official members' aggregated directly.
 - ``packets``: every packet set of the run decodes, by its index, to the
@@ -93,6 +94,7 @@ from rapidpipe.foundation.prefix import get
 from rapidpipe.products import storage
 from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS
 from rapidpipe.products.spatial import within
+from rapidpipe.science.spatial import field_neighbours
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import read_packets as rpk  # noqa: E402 - a sibling script, not a package
@@ -274,36 +276,37 @@ def check_catalog(run: int) -> bool:
     (row,) = q("SELECT settings -> 'associate' AS a FROM runs WHERE id = %s", (run,))
     radius, flags, snr = (float(row["a"]["match_radius"]), int(row["a"]["source_flags"]),
                           float(row["a"]["min_snr"]))
-    sources = q("""SELECT s.job, s.sid, s.field, d.field AS image_field FROM sources_official s
-                   JOIN diffimages d ON d.job = s.job WHERE s.run = %s AND s.flags & ~%s = %s
-                   AND s.fluxerr > 0 AND s.fluxfit / s.fluxerr >= %s
-                   AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.job = s.job AND m.sid = s.sid)""",
-                (run, INFORMATIONAL_SOURCE_FLAGS, flags, snr))
-    unmatched = [r for r in sources if r["field"] == r["image_field"]]
+    unmatched = q("""SELECT s.job, s.sid FROM sources_official s
+                     WHERE s.run = %s AND s.flags & ~%s = %s
+                     AND s.fluxerr > 0 AND s.fluxfit / s.fluxerr >= %s
+                     AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.job = s.job AND m.sid = s.sid)""",
+                  (run, INFORMATIONAL_SOURCE_FLAGS, flags, snr))
     bad += [f"source ({r['job']}, {r['sid']}) is accepted and a member of nothing" for r in unmatched[:5]]
-    members = q("""SELECT m.job, m.sid, m.object_job, m.aid, s.ra, s.dec, o.ra0, o.dec0
+    members = q("""SELECT m.job, m.sid, m.object_job, m.aid, s.ra, s.dec, s.field, o.ra0, o.dec0,
+                          o.field AS object_field
                    FROM memberships m JOIN jobs j ON j.id = m.job AND j.run = %s
                    JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
                    JOIN objects o ON o.job = m.object_job AND o.aid = m.aid""", (run,))
     far = [m for m in members if not within(m["ra"], m["dec"], m["ra0"], m["dec0"], radius)]
     bad += [f"membership ({m['job']}, {m['sid']}) of object ({m['object_job']}, {m['aid']}) is outside"
             " the radius" for m in far[:5]]
+    near = {f: {f, *field_neighbours(f)} for f in {m["field"] for m in members}}
+    astray = [m for m in members if m["object_field"] not in near[m["field"]]]
+    bad += [f"membership ({m['job']}, {m['sid']}) in field {m['field']} is of object"
+            f" ({m['object_job']}, {m['aid']}) in field {m['object_field']}, not it or a neighbour"
+            for m in astray[:5]]
     objects = q("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
-                " WHERE j.run = %s ORDER BY o.field, o.ra0", (run,))
-    by_field = defaultdict(list)
-    for o in objects:
-        by_field[o["field"]].append(o)
+                " WHERE j.run = %s ORDER BY o.ra0", (run,))
     duplicates = 0
-    for rows in by_field.values():      # sorted by ra0: a pair within the radius is within it in RA too
-        for i, a in enumerate(rows):
-            for b in rows[i + 1:]:
-                if b["ra0"] - a["ra0"] > radius / max(math.cos(math.radians(abs(a["dec0"]) + radius)), 1e-9):
-                    break
-                if a["job"] != b["job"] and within(a["ra0"], a["dec0"], b["ra0"], b["dec0"], radius):
-                    duplicates += 1
-                    if duplicates <= 5:
-                        bad.append(f"objects ({a['job']}, {a['aid']}) and ({b['job']}, {b['aid']}),"
-                                   " founded by two jobs, are within the radius")
+    for i, a in enumerate(objects):     # sorted by ra0: a pair within the radius is within it in RA too
+        for b in objects[i + 1:]:
+            if b["ra0"] - a["ra0"] > radius / max(math.cos(math.radians(abs(a["dec0"]) + radius)), 1e-9):
+                break
+            if a["job"] != b["job"] and within(a["ra0"], a["dec0"], b["ra0"], b["dec0"], radius):
+                duplicates += 1
+                if duplicates <= 5:
+                    bad.append(f"objects ({a['job']}, {a['aid']}) and ({b['job']}, {b['aid']}),"
+                               " founded by two jobs, are within the radius")
     (r,) = q("""SELECT count(*) n FROM memberships_official m WHERE m.run = %s AND NOT EXISTS (
                 SELECT 1 FROM official o WHERE o.closed_at IS NULL AND o.product = 'sources'
                 AND o.job = m.job)""", (run,))
@@ -325,11 +328,10 @@ def check_catalog(run: int) -> bool:
            or not math.isclose(x["sumdec"], x["dec"], rel_tol=1e-6, abs_tol=1e-12)]
     bad += [f"object ({x['job']}, {x['aid']}): sums {x['nsources']} members, the direct aggregation"
             f" {x['n']}" for x in off[:5]]
-    return report("catalog", bad, f"{len(objects)} objects in {len(by_field)} fields, {len(members)}"
-                  f" memberships within the radius ({superseded} of source sets not official, out of the"
-                  f" view), every accepted source of an image's field a member ({len(sources) - len(unmatched)}"
-                  f" accepted outside it, neighbours' joining only within the radius); no duplicate"
-                  f" founders; {len(sums)} official"
+    return report("catalog", bad, f"{len(objects)} objects in {len({o['field'] for o in objects})} fields,"
+                  f" {len(members)} memberships within the radius ({superseded} of source sets not official,"
+                  " out of the view), every accepted source a member of an object in its own field or a"
+                  f" neighbour; no duplicate founders; {len(sums)} official"
                   " objects' sums = their members'", t0)
 
 

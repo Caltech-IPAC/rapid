@@ -1,20 +1,11 @@
-"""Tests for rapidpipe.science.crossmatch.catalog: `dev`'s ordering, CSV lines and cone."""
+"""Tests for rapidpipe.science.crossmatch.catalog: `dev`'s ordering, CSV lines and object ids."""
 
 from __future__ import annotations
-
-import math
 
 import pytest
 
 from rapidpipe.science.crossmatch import catalog
-from rapidpipe.science.spatial import (
-    compute_angular_separation,
-    field_center,
-    field_corners,
-    field_neighbours,
-    index_to_radec,
-    radec_index,
-)
+from rapidpipe.science.spatial import index_to_radec, radec_index
 
 RUN_COLUMNS = ("01RUN", "01ATTEMPT", "01SET")
 
@@ -62,22 +53,3 @@ def test_new_object_id_is_radec_index_as_an_int():
 
 def test_equal_positions_make_equal_aids():
     assert catalog.new_object_id(269.46, -28.78) == catalog.new_object_id(269.46, -28.78)
-
-
-def test_inclusion_cone_radius_is_max_corner_separation_plus_match_radius():
-    center = (10.0, 0.0)
-    corners = [(9.9, -0.1), (10.1, -0.1), (10.1, 0.1), (9.95, 0.05)]
-    expected = max(compute_angular_separation(10.0, 0.0, ra, dec) for ra, dec in corners)
-    assert catalog.inclusion_cone_radius(center, corners, 0.001) == expected + 0.001
-
-
-def test_field_inclusion_cone_uses_the_closed_form_tile():
-    field = 4662268
-    assert len(field_neighbours(field)) == 8
-    ra0, dec0, radius = catalog.field_inclusion_cone(field, 0.00001528)
-    assert (ra0, dec0) == field_center(field)
-    seps = [compute_angular_separation(ra0, dec0, ra, dec) for ra, dec in field_corners(field)]
-    assert radius == max(seps) + 0.00001528
-    # A tile is ~0.088 deg wide in RA at dec -28.8: the half-diagonal.
-    assert 0.05 < radius < 0.07
-    assert math.isfinite(radius)

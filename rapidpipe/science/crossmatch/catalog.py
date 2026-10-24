@@ -17,21 +17,13 @@ No database access: the stage module runs the SQL and hands rows here.
   writes Parquet instead).
 - :func:`new_object_id`: `dev`'s ``aid = util.radec_index(ra, dec)``
   (line 407), as a Python ``int``.
-- :func:`inclusion_cone_radius`, :func:`field_inclusion_cone`: stage 2's
-  cone for a field with eight neighbours -- the largest centre-to-corner
-  separation plus the match radius (lines 673-703).
 """
 
 from __future__ import annotations
 
 from typing import Any, Iterable, Sequence
 
-from rapidpipe.science.spatial import (
-    compute_angular_separation,
-    field_center,
-    field_corners,
-    radec_index,
-)
+from rapidpipe.science.spatial import radec_index
 
 NEWLINE = "\n"
 
@@ -70,24 +62,3 @@ def astroobjects_line(aid: Any, ra: Any, dec: Any, flux: Any, run_columns: Seque
 def new_object_id(ra: float, dec: float) -> int:
     """`dev`'s ``aid`` for a new AstroObjects row: ``radec_index(ra, dec)``."""
     return int(radec_index(ra, dec))
-
-
-def inclusion_cone_radius(center: tuple[float, float],
-                          corners: Sequence[tuple[float, float]],
-                          match_radius: float) -> float:
-    """The largest centre-to-corner separation, plus ``match_radius``, in degrees.
-
-    `dev`: ``ang_sep = max(ang_sep1, ang_sep2, ang_sep3, ang_sep4)``, then
-    ``ang_sep += match_radius`` ("The tiles are not necessarily square or
-    even rectangular, so choose maximum separation").
-    """
-    ra0, dec0 = center
-    ang_sep = max(compute_angular_separation(ra0, dec0, ra, dec) for ra, dec in corners)
-    ang_sep += match_radius
-    return ang_sep
-
-
-def field_inclusion_cone(field: int, match_radius: float) -> tuple[float, float, float]:
-    """``(ra0, dec0, radius)``: the stage-2 cone of tile ``field``, from the closed-form tessellation."""
-    center = field_center(field)
-    return center[0], center[1], inclusion_cone_radius(center, field_corners(field), match_radius)

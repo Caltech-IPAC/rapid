@@ -198,24 +198,32 @@ def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, f
 
 def test_a_job_associates_its_sources_with_the_catalog_it_read_and_records_the_read(
         tmp_path, files, fakes):
-    """An empty catalog: every accepted source of the image's field founds an object, its own
-    membership at offset zero; the read (no founding job) and the catalog key are in the manifest.
-    The fake catalog's sources are at S/N 4, so the cut is lowered to take them."""
+    """An empty catalog: every accepted source founds an object in its own field, wherever on the
+    image it falls, its own membership at offset zero; the read (no founding job) and the fields
+    the publisher locks (each touched field and its neighbours) are in the manifest. The fake
+    catalog's sources are at S/N 4, so the cut is lowered to take them."""
     body = settings()
     body["associate"]["min_snr"] = 1.0
     prefix = run_difference(tmp_path, files, body=body)
     recorded = manifest(prefix)
     (row,) = read(prefix, "diffimages")
-    assert recorded["reads"] == []
-    assert recorded["catalog"] == {"dataset": "D", "survey": "S", "field": row["field"],
-                                   "radius": THIN["associate"]["match_radius"]}
+    sources = {s["sid"]: s for s in read(prefix, "sources")}
     founded, members = read(prefix, "objects"), read(prefix, "memberships")
-    assert founded and {o["field"] for o in founded} == {row["field"]}
+    assert recorded["reads"] == []
     own = [m for m in members if m["dra"] == 0.0 and m["ddec"] == 0.0]
     assert {m["aid"] for m in own} == {o["aid"] for o in founded}
+    field_of = {o["aid"]: o["field"] for o in founded}
+    assert all(field_of[m["aid"]] == sources[m["sid"]]["field"] for m in own)
+    touched = set(field_of.values())
+    assert row["field"] in touched
+    near = touched.union(*(difference.field_neighbours(f) for f in touched))
+    assert recorded["catalog"] == {"dataset": "D", "survey": "S", "fields": sorted(near),
+                                   "radius": THIN["associate"]["match_radius"]}
     assert {(m["object_job"], m["source_job"]) for m in members} == {(9, 9)}
     assert recorded["metrics"]["n_objects_founded"] == len(founded)
     assert recorded["metrics"]["n_objects_read"] == 0
+    assert recorded["metrics"]["n_sources_out_of_field"] == sum(
+        sources[m["sid"]]["field"] != row["field"] for m in own)
 
 
 def test_the_job_publishes_the_kept_set_gzipped_and_nothing_else(tmp_path, files, fakes):

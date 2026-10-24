@@ -8,16 +8,16 @@ as the branch's crossmatch ran it (``git show
 bd626950:rapidpipe/stages/crossmatch.py``): pass 1 exposure by exposure in
 ascending MJD, ``q3c_join`` all-within-radius against the catalog, the
 unmatched sources' new objects inserted after the exposure with ``ON
-CONFLICT DO NOTHING``; then pass 2, the neighbouring fields' sources
-inside the field's inclusion cone (``q3c_radial_query``) against the
-catalog, memberships only. Contract: the same objects (ids and founding
-positions), the same memberships and the same sums.
+CONFLICT DO NOTHING``. Contract: the same objects (ids and founding
+positions), the same memberships and the same sums. The branch's pass 2
+(the neighbouring fields' sources against the catalog, memberships only)
+is not replayed: the field rule (runbook part 12 step 1) retired it, and
+a source founds in its own field, which is pass 1 on that field.
 
 At dev's radius no epoch-2 source of this field lies within it of an
 epoch-1 object (the closest pair is 0.37 arcseconds apart), so the
 replay also runs at 5 arcseconds (one cross-epoch match) and 30 (sources
-joining several objects, and neighbour-pass memberships), on the field's
-real geometry.
+joining several objects), on the field's real geometry.
 
 Needs q3c: asserted under ``CI=true``, skipped with that reason otherwise.
 """
@@ -30,9 +30,8 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-from rapidpipe.science.crossmatch.catalog import expid_order, field_inclusion_cone, new_object_id
+from rapidpipe.science.crossmatch.catalog import expid_order, new_object_id
 from rapidpipe.science.crossmatch.memory import Catalog, Source, associate
-from rapidpipe.science.spatial import field_neighbours
 from rapidpipe.science.statistics.sums import Sums
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "associate" / "field-4658155-two-epochs.parquet"
@@ -55,7 +54,7 @@ def q3c_present(conn) -> bool:
     return present
 
 
-def sql_matcher(cur, rows, radius, neighbours, cone):
+def sql_matcher(cur, rows, radius):
     cur.execute("CREATE TEMP TABLE src (epoch int, sid bigint, expid int, mjdobs float8,"
                 " field int, ra float8, dec float8, fluxfit float8) ON COMMIT DROP")
     cur.executemany("INSERT INTO src VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
@@ -83,11 +82,6 @@ def sql_matcher(cur, rows, radius, neighbours, cone):
             cur.executemany("INSERT INTO mem VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
                             [(aid, epoch, sid) for sid, aid in matched]
                             + [(new_object_id(ra, dec), epoch, sid) for sid, ra, dec in unmatched])
-        cur.execute("INSERT INTO mem SELECT b.aid, a.epoch, a.sid FROM src a, cat b"
-                    " WHERE q3c_radial_query(a.ra, a.dec, %s, %s, %s)"
-                    " AND q3c_join(a.ra, a.dec, b.ra0, b.dec0, %s)"
-                    " AND a.field = ANY(%s) AND a.epoch = %s ON CONFLICT DO NOTHING",
-                    (*cone, radius, neighbours, epoch))
     cur.execute("SELECT aid, ra0, dec0 FROM cat")
     objects = {aid: (ra0, dec0) for aid, ra0, dec0 in cur.fetchall()}
     cur.execute("SELECT aid, epoch, sid FROM mem")
@@ -100,15 +94,14 @@ def sql_matcher(cur, rows, radius, neighbours, cone):
     return objects, memberships, sums
 
 
-def memory_matcher(rows, radius, neighbours, cone):
+def memory_matcher(rows, radius):
     catalog = Catalog(radius)
     memberships = []
     for epoch in (1, 2):
         sources = [Source(source_job=epoch, sid=r["sid"], expid=r["expid"], mjdobs=r["mjdobs"],
                           field=r["field"], ra=r["ra"], dec=r["dec"])
-                   for r in rows if r["epoch"] == epoch]
-        result = associate(catalog, [s for s in sources if s.field == FIELD],
-                           [s for s in sources if s.field in neighbours], cone)
+                   for r in rows if r["epoch"] == epoch and r["field"] == FIELD]
+        result = associate(catalog, sources)
         memberships += result.memberships
     by_key = {(r["epoch"], r["sid"]): r for r in rows}
     sums = {aid: Sums(ra0, dec0) for aid, (ra0, dec0) in catalog.positions.items()}
@@ -123,11 +116,9 @@ def test_the_in_memory_matcher_agrees_with_the_sql_matcher_on_the_field(conn, ra
     if not q3c_present(conn):
         pytest.skip("q3c is not installed here; the parity test runs in CI")
     rows = accepted()
-    neighbours = field_neighbours(FIELD)
-    cone = field_inclusion_cone(FIELD, radius)
     with conn.cursor() as cur:
-        sql_objects, sql_memberships, sql_sums = sql_matcher(cur, rows, radius, neighbours, cone)
-    objects, memberships, sums = memory_matcher(rows, radius, neighbours, cone)
+        sql_objects, sql_memberships, sql_sums = sql_matcher(cur, rows, radius)
+    objects, memberships, sums = memory_matcher(rows, radius)
 
     assert objects == sql_objects
     assert len(memberships) == len(set(memberships))
@@ -142,5 +133,3 @@ def test_the_in_memory_matcher_agrees_with_the_sql_matcher_on_the_field(conn, ra
         assert any(s.nsources > 1 for s in sums.values())
     if radius >= 30 / 3600:
         assert len(memberships) > len({(epoch, sid) for _, epoch, sid in memberships})
-        field_of = {(r["epoch"], r["sid"]): r["field"] for r in rows}
-        assert any(field_of[(epoch, sid)] != FIELD for _, epoch, sid in memberships)

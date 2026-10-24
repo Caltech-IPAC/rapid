@@ -77,11 +77,13 @@ carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
 in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`),
 ``objects`` and ``memberships`` (the association, :func:`associate`: the
 plan's amendment of 2026-10-24 moved it here from the retired associate
-stage; the job reads the field's objects of its run as they stand, records
-that read in the manifest's ``reads``, matches its sources in memory and
-publishes the objects it founded and its memberships, which the publisher
-reconciles under the field's lock against those founded since the read,
-:mod:`rapidpipe.foundation.catalog`).
+stage; the job reads the objects of its run in its sources' fields and
+their neighbours as they stand, records that read in the manifest's
+``reads``, matches its sources in memory, each founding in its own field
+wherever on the image it falls (the field rule, runbook part 12 step 1),
+and publishes the objects it founded and its memberships, which the
+publisher reconciles under the touched fields' locks against those founded
+since the read, :mod:`rapidpipe.foundation.catalog`).
 The manifest records `dev`'s gain-matching and
 catalog measurements under ``difference``, the reference PSF's
 measurement under ``difference.refpsf``, and ``metrics``, one flat dict of
@@ -106,7 +108,8 @@ background-subtracted science image, and ``sci_star_psf_sigma_ratio``, it
 over ``sci_psf_sigma_px``; and the
 uncapped catalog's ``n_sources_near_bright_px`` and
 ``n_sources_ring_snr_gt20``, defined there; ``n_objects_read``,
-``n_objects_founded`` and ``n_memberships``, the association's). The
+``n_objects_founded``, ``n_memberships`` and ``n_sources_out_of_field``,
+the accepted sources outside the image's own field, the association's). The
 residual stars' positions sit beside them as ``difference.residual_stars``
 for a reader's gallery. A metric the job cannot make is absent.
 
@@ -152,7 +155,6 @@ from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.products.diffimage import (
     INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT, catalog_outcome_bit)
-from rapidpipe.science.crossmatch.catalog import field_inclusion_cone
 from rapidpipe.science.crossmatch.memory import associate_epoch
 from rapidpipe.science.difference import (
     background,
@@ -197,11 +199,9 @@ REFERENCE_CATALOG_COLUMNS = ["ALPHAWIN_J2000", "DELTAWIN_J2000", "FLUX_AUTO", "F
                              "FLUXERR_APER_4"]
 
 #: `dev`'s pass 2 uses the field's inclusion cone only for a tile with this many neighbours.
-CONE_NEIGHBOURS = 8
-
-#: The field's objects of the job's run as they stand: every published difference job's founded ones.
-OBJECTS_SQL = ("SELECT o.job, o.aid, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
-               " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s AND o.field = %s")
+#: The fields' objects of the job's run as they stand: every published difference job's founded ones.
+OBJECTS_SQL = ("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
+               " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s AND o.field = ANY(%s)")
 
 OBJECTS_SCHEMA = pa.schema([
     ("aid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),
@@ -810,7 +810,8 @@ def run(job: JobContext) -> None:
     reads, catalog, association = associate(job, sources, diffimage["field"])
     metrics.update(n_objects_read=association["objects_read"],
                    n_objects_founded=association["founded"],
-                   n_memberships=association["pass1_memberships"] + association["pass2_memberships"])
+                   n_memberships=association["memberships"],
+                   n_sources_out_of_field=association["sources_out_of_field"])
     job.write_manifest(
         [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet"),
          ("objects", "objects.parquet"), ("memberships", "memberships.parquet")],
@@ -832,48 +833,65 @@ def run(job: JobContext) -> None:
         metrics=metrics)
 
 
-def associate(job: JobContext, sources: pa.Table, field: int) -> tuple[list, dict, dict]:
-    """Match the epoch's sources against the field's objects of the run as they stand; write the rows.
+def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[list, dict, dict]:
+    """Match the epoch's sources against their fields' objects of the run as they stand; write the rows.
 
-    The plan's amendment of 2026-10-24: one short read of the field's
-    objects of the job's run (:data:`OBJECTS_SQL`), recorded exactly as the
-    founding jobs it saw (the manifest's ``reads``, one ``objects`` input
-    each, which the publisher records in ``job_inputs``); then
-    :func:`rapidpipe.science.crossmatch.memory.associate_epoch` over the
-    sources ``[associate]`` accepts (``flags`` equal to ``source_flags``
-    once the informational bits are cleared, ``fluxfit / fluxerr >=
-    min_snr``) in the field (pass 1) and its neighbours (pass 2, inside
-    the inclusion cone when the field has eight). Writes
-    ``objects.parquet`` (founded here) and ``memberships.parquet`` (this
-    epoch's, onto existing objects too) under ``job.path``; returns the
-    manifest's ``reads``, its ``catalog`` (what the publisher reconciles
-    under) and the counts.
+    The plan's amendment of 2026-10-24 with the field rule (runbook part 12
+    step 1): the sources ``[associate]`` accepts (``flags`` equal to
+    ``source_flags`` once the informational bits are cleared, ``fluxfit /
+    fluxerr >= min_snr``), wherever on the image they fall, are grouped by
+    their own field; one short read of the run's objects in every such
+    field and its neighbours (:data:`OBJECTS_SQL`), recorded exactly as the
+    founding jobs it saw per field (the manifest's ``reads``, one
+    ``objects`` input per field and job, which the publisher records in
+    ``job_inputs``); then
+    :func:`rapidpipe.science.crossmatch.memory.associate_epoch`, each source
+    matched against its field's and the neighbours' objects and founding in
+    its own field. Writes ``objects.parquet`` (founded here, each with its
+    field) and ``memberships.parquet`` (this epoch's, onto existing objects
+    too) under ``job.path``; returns the manifest's ``reads``, its
+    ``catalog`` (what the publisher locks and reconciles under: ``fields``,
+    every field that gains an object or a membership and each one's
+    neighbours) and the counts, with ``sources_out_of_field``, the accepted
+    sources outside ``image_field``, the image's own (the geometry `dev`'s
+    rule left unfounded).
     """
     settings = job.settings["associate"]
     radius = float(settings["match_radius"])
-    neighbours = field_neighbours(field)
-    near = {field, *neighbours}
     wanted = int(settings["source_flags"])
     accepted = [r for r in sources.select(["sid", "expid", "mjdobs", "field", "ra", "dec", "fluxfit",
                                            "fluxerr", "flags"]).to_pylist()
-                if r["field"] in near and (r["flags"] & ~INFORMATIONAL_SOURCE_FLAGS) == wanted
+                if (r["flags"] & ~INFORMATIONAL_SOURCE_FLAGS) == wanted
                 and r["fluxerr"] > 0 and r["fluxfit"] / r["fluxerr"] >= float(settings["min_snr"])]
+    near = _with_neighbours({r["field"] for r in accepted})
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute(OBJECTS_SQL, (job.run, job.dataset, job.survey, field))
+        cur.execute(OBJECTS_SQL, (job.run, job.dataset, job.survey, sorted(near)))
         found = cur.fetchall()
         conn.commit()
-    objects = {aid: (owner, ra0, dec0) for owner, aid, ra0, dec0 in found}
-    cone = field_inclusion_cone(field, radius) if len(neighbours) == CONE_NEIGHBOURS else None
-    epoch = associate_epoch(objects, accepted, job=job.job, field=field, cone=cone, radius=radius)
+    objects = {aid: (owner, ra0, dec0) for owner, aid, _, ra0, dec0 in found}
+    field_of = {aid: field for _, aid, field, _, _ in found}
+    epoch = associate_epoch(objects, accepted, job=job.job, radius=radius)
     pq.write_table(pa.Table.from_pylist(
-        [{**r, "dataset": job.dataset, "survey": job.survey, "field": field} for r in epoch.founded],
+        [{**r, "dataset": job.dataset, "survey": job.survey} for r in epoch.founded],
         schema=OBJECTS_SCHEMA), job.path / "objects.parquet")
     pq.write_table(pa.Table.from_pylist(epoch.memberships, schema=MEMBERSHIPS_SCHEMA),
                    job.path / "memberships.parquet")
-    key = {"dataset": job.dataset, "survey": job.survey, "field": field}
-    reads = [{"product": "objects", "key": key, "source_job": owner}
-             for owner in sorted({owner for owner, *_ in found})]
-    return reads, {**key, "radius": radius}, epoch.counts
+    field_of.update({r["aid"]: r["field"] for r in epoch.founded})
+    touched = {field_of[m["aid"]] for m in epoch.memberships}
+    reads = [{"product": "objects",
+              "key": {"dataset": job.dataset, "survey": job.survey, "field": field},
+              "source_job": owner}
+             for field, owner in sorted({(field, owner) for owner, _, field, _, _ in found})]
+    catalog = {"dataset": job.dataset, "survey": job.survey,
+               "fields": sorted(_with_neighbours(touched)), "radius": radius}
+    counts = {**epoch.counts, "fields_read": len(near),
+              "sources_out_of_field": sum(r["field"] != image_field for r in accepted)}
+    return reads, catalog, counts
+
+
+def _with_neighbours(fields: set[int]) -> set[int]:
+    """``fields`` and every field sharing an edge or a corner with one of them."""
+    return set(fields).union(*(field_neighbours(f) for f in fields))
 
 
 def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh: float,

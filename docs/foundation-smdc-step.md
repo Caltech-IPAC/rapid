@@ -5844,6 +5844,11 @@ from in brackets):
   building it is a package install, so a docs task here cannot run the
   Sphinx build locally; CI is the only build (rapid_docs 98).
 
+## Part 12: the day, alert what is detected (2026-10-24)
+
+Brief `day-2026-10-24`: one step per task, numbered by task; a task's
+step lands when its task does, so the numbers can arrive out of order.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6

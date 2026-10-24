@@ -7,7 +7,12 @@ cutouts are (2 half width + 1) pixels square with off-chip pixels zero;
 a forced row a predecessor set holds is carried, not measured again,
 while a pair it lacks is measured; a difference image's neighbours are
 read under its own suffix, so a gzipped epoch gives the packets a plain
-one gives.
+one gives. The forced window is the images covering the triggers'
+objects, whichever field each image is centred on (the field rule,
+runbook part 12 step 1): an image centred elsewhere that holds an object
+is in it, one that holds none is not, the trigger's own always; the
+query's reach admits every image of the detector that overlaps the
+trigger's.
 """
 
 from __future__ import annotations
@@ -29,7 +34,8 @@ from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS
 from rapidpipe.science.alerts.records import Source
 from rapidpipe.science.statistics.sums import Sums
-from rapidpipe.stages.packet import Read, WindowImage, neighbour, write_set
+from rapidpipe.stages.packet import (
+    Read, WindowImage, _separation, covering, neighbour, window_reach, write_set)
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
@@ -213,3 +219,32 @@ def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):
             assert gzipped[sid][name] == record[name]
         assert [(f["psfFlux"], f["scienceFlux"]) for f in gzipped[sid]["prvDiaForcedSources"]] == [
             (f["psfFlux"], f["scienceFlux"]) for f in record["prvDiaForcedSources"]]
+
+
+def _image(job: int, ra0: float, dec0: float, half: float = 0.06) -> dict:
+    """A window candidate: a square footprint ``2 half`` degrees on a side centred at (ra0, dec0)."""
+    c = half / np.cos(np.radians(dec0))
+    corners = [(ra0 - c, dec0 - half), (ra0 + c, dec0 - half), (ra0 + c, dec0 + half),
+               (ra0 - c, dec0 + half)]
+    row = {"job": job, "ra0": ra0, "dec0": dec0}
+    for n, (ra, dec) in enumerate(corners, start=1):
+        row[f"ra{n}"], row[f"dec{n}"] = ra, dec
+    return row
+
+
+def test_the_window_is_the_images_covering_an_object_whichever_field_they_are_centred_on():
+    own = _image(1, RA0, DEC0)
+    east = _image(2, RA0 + 0.1 / np.cos(np.radians(DEC0)), DEC0)   # overlaps own's east half
+    far = _image(3, RA0 - 0.1 / np.cos(np.radians(DEC0)), DEC0)    # overlaps own's west half
+    obj = (RA0 + 0.05 / np.cos(np.radians(DEC0)), DEC0)            # in own and east, not far
+    assert [d["job"] for d in covering([own, east, far], [obj], own=1)] == [1, 2]
+    assert [d["job"] for d in covering([own, east, far], [], own=1)] == [1]
+
+
+def test_the_reach_admits_every_overlapping_image_of_the_detector():
+    """The farthest overlap is corner on corner: centres just under two half-diagonals apart."""
+    own = _image(1, RA0, DEC0)
+    c = 0.95 * 0.12 / np.cos(np.radians(DEC0))
+    corner_on_corner = _image(2, RA0 + c, DEC0 + 0.95 * 0.12)
+    assert covering([corner_on_corner], [(RA0 + 0.058 / np.cos(np.radians(DEC0)), DEC0 + 0.058)], own=1)
+    assert _separation(RA0, DEC0, corner_on_corner["ra0"], corner_on_corner["dec0"]) <= window_reach(own)
