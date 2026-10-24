@@ -221,21 +221,32 @@ def test_sextractor_command_sets_devs_per_call_values():
     assert opt("-STARNNW_NAME") == "/code/cdf/rapidSexRefImageStarGalaxyClassifier.nnw"
 
 
-def test_fwhm_statistics_as_dev(tmp_path):
+def test_fwhm_statistics_is_the_point_source_mode(tmp_path):
+    """fwhmmedpix is the mode over point sources, not the median (dev 1822789e).
+
+    Thirty stars sit at 2.0 px, forty more point sources spread over 2.5 to
+    6 px (their median is near 2.7), and twenty elongated galaxies at 9 px
+    fail the cut; min and max stay over all sources, fwhm_ref is the mode in
+    arcsec.
+    """
     params = tmp_path / "p.inp"
-    params.write_text("X_IMAGE\nFWHM_IMAGE\nFLUX_APER(6)\n")
+    params.write_text("NUMBER\nFLAGS\nELONGATION\nFWHM_IMAGE\nFLUX_AUTO\nFLUXERR_AUTO\n")
+    fwhm = [2.0] * 30 + list(np.linspace(2.5, 6.0, 40)) + [9.0] * 20
+    elongation = [1.0] * 70 + [2.0] * 20
+    rows = [f"{i} 0 {e} {f} 1000.0 10.0" for i, (f, e) in enumerate(zip(fwhm, elongation))]
     cat = tmp_path / "c.txt"
-    cat.write_text("#   1 X_IMAGE\n#   2 FWHM_IMAGE\n#   3 FLUX_APER\n"
-                   "1.0 2.0 5\n2.0 4.0 5\n3.0 nan 5\n4.0 3.0 5\n")
+    cat.write_text("#   1 NUMBER\n" + "\n".join(rows) + "\n")
     stats = catalog.fwhm_statistics(cat, params)
-    assert (stats.fwhmmedpix, stats.fwhmminpix, stats.fwhmmaxpix) == (3.0, 2.0, 4.0)
-    assert stats.nsexcatsources == 4
-    assert stats.fwhm_ref == 3.0
+    assert np.median(fwhm[:70]) > 2.5
+    assert stats.fwhmmedpix == pytest.approx(2.0, abs=0.05)
+    assert (stats.fwhmminpix, stats.fwhmmaxpix) == (2.0, 9.0)
+    assert stats.nsexcatsources == 90
+    assert stats.fwhm_ref == pytest.approx(stats.fwhmmedpix * 0.11)
 
 
 def test_fwhm_statistics_empty_catalog_raises_as_dev(tmp_path):
     params = tmp_path / "p.inp"
-    params.write_text("FWHM_IMAGE\n")
+    params.write_text("FLAGS\nELONGATION\nFWHM_IMAGE\nFLUX_AUTO\nFLUXERR_AUTO\n")
     cat = tmp_path / "c.txt"
     cat.write_text("#   1 FWHM_IMAGE\n")
     with pytest.raises(ValueError):
