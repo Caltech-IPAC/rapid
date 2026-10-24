@@ -7259,6 +7259,85 @@ contracts (`tests/unit/test_job_failure.py`, `test_connection.py`,
 `test_launch.py`, `test_validate_counts.py`, `test_public_safety.py`).
 No transient failure was staged live.
 
+### Step dev-columns: dev's sumrat, nneg and nbad on every SFFT candidate, measured injected against noise
+
+**The change (rapid PR 422, merged `74eafe20`; rapid_docs PR 112).** The change ports `dev`'s ZTF candidate metrics into `rapidpipe/science/difference/columns.py` (fa600637, babd5d16, 9af0f59f, e4a49c97, 0c1ef727, c32e28f6, 41473d60).
+
+- **What is measured.** `sumrat` is `sum(p) / sum(|p|)` over a 5 x 5 stamp after a 3 x 3 truncated median filter, with `lower_median = false`. `nneg` and `nbad` are the stamp's finite negative and non-finite pixels. All three are measured after a 64 px Background2D local background, the same as `dev`.
+- **Where.** On every row of both SFFT PSF-fit catalogs, before the cap. Each catalog is measured on the image its sources are positive in.
+- **Where they land.** The published `sfftdiffimage_masked_psfcat[_negative].parquet` files, and three nullable columns on `sources`.
+- **Settings.** `[difference.sumrat]` and `[difference.extra_catalog_cols]`, holding only the keys `dev`'s ini has.
+- **What is unchanged.** The cap and the selection.
+
+The granted schema statement, `database/2026-10-24-pixel-columns.sql` (`ALTER TABLE sources ADD COLUMN sumrat real, nneg smallint, nbad smallint`), was applied once on SMDC as `postgres` by SSM on the database host before the merge. The file was piped to `podman exec -i rapid-postgres psql -U postgres -d rapid -X -1 -v ON_ERROR_STOP=1`, with `lock_timeout` 20 s. Check, held:
+
+- `ALTER TABLE` at 21:26:38 UTC, command `37a9006b`.
+- The three columns are nullable.
+- 2,615,828 rows, every value null.
+- The grants are kept: `rapid_rebuild_pipeline` SELECT, INSERT, UPDATE, DELETE; `rapid_read` SELECT.
+
+`sources_official` on SMDC keeps its column list without the three columns. Its `t.*` was expanded when it was created, and re-creating it takes a `DROP VIEW`, which the grant does not allow. A reader joins `sources` to `official`.
+
+**The proof.** Image `rebuild-74eafe20…`, `rapid-rebuild:72`. Run 88's same-bytes method: new dataset `r00342-dc-cols-inj` (run **96**) from run 88's layers, Gaia imported, the loop on passes 4 to 6 for PSF and intake (the reference held by design). Difference jobs 22903–22905 and packet jobs 22908–22910 were submitted by hand against run 81's `refimages` 22029 and `psfs` 22015 rows.
+
+```sh
+rp run create ... --survey HLWAS --dataset r00342-dc-cols-inj     # run 96; run 88's layers at 74eafe20
+rp loop --run 96 --filters F146 --scas 8 --pointings 001_0001 --passes 4,5,6 --job-definition rapid-rebuild:72
+submit.py difference 96 81 rapid-rebuild:72; rp job wait ...; submit.py packet 96 81 rapid-rebuild:72   # the brief's t1/scripts
+scripts/check_run.sh --run 96 --inspect DIR
+python scripts/completeness.py --run 96 --truth truth-sca8.parquet --expids 4040101,5040101,6010101
+measure_columns.py --run 96 --truth truth-sca8.parquet --out DIR                                        # the brief's t1/scripts
+```
+
+Check, held:
+
+- `check_run.sh --run 96`: **CLEAN** (validate 6/6, reader 3/3, consumer 1,393/1,393).
+- Every job published on its first attempt.
+- All three epochs' catalog files and their 1,500 `sources` rows carry the columns. One kept row (expid 5040101) is null, where the catalog's value is NaN because its stamp leaves the image. There are 0 value mismatches between the rows and the catalogs.
+
+**Invariance.**
+
+- **Unit.** `test_the_pixel_columns_add_three_columns_and_change_nothing_else` runs the stage with the step and without it on identical inputs. Both give the same ids, every other column of every row and catalog, and every published image's pixels.
+- **Live, beside run 88.** On every epoch: the same 500 source ids and values, the same candidate counts (2,279, 2,217 and 2,359), and the same core fraction (+0.251, +0.252, +0.271) and ring fraction. The difference images' pixels are equal; only CHECKSUM, CREATED, DATE and SWVERS differ. Detected 256 of 600, alerted 238, false positives per epoch 385 (289 bright-flagged): all as run 88.
+
+**Measured.** The population is every SFFT positive candidate `source_set` considers, before the cap: 6,855 over three epochs.
+
+- **Matching.** `completeness.py`'s rule, 0.3 arcsec through the corrected WCS. A candidate matched to a truth row is injected (391). Every other candidate is noise (6,464); the noise inside a bright reference footprint is bright-flagged (2,257).
+- **Magnitude.** The truth AB magnitude for injected candidates, and the candidate's own PSF-fit magnitude for noise ("none": `fluxfit` ≤ 0).
+- **Nulls.** A null counts in its denominator and does not survive: 86 noise candidates, 0 injected.
+
+| AB | injected: n / survive > 0.4 | noise: n / survive | bright-flagged: n / survive | noise not bright: n / survive |
+|---|---|---|---|---|
+| < 21 | — | 39 / 0.74 | 39 / 0.74 | — |
+| 21 | 61 / 1.00 | 116 / 0.78 | 112 / 0.80 | 4 / 0.00 |
+| 22 | 78 / 1.00 | 249 / 0.72 | 184 / 0.87 | 65 / 0.28 |
+| 23 | 58 / 1.00 | 558 / 0.85 | 389 / 0.95 | 169 / 0.62 |
+| 24 | 84 / 1.00 | 1,065 / 0.85 | 759 / 0.94 | 306 / 0.61 |
+| 25 | 74 / 1.00 | 1,548 / 0.85 | 607 / 0.97 | 941 / 0.78 |
+| 26 | 36 / 0.97 | 1,684 / 0.73 | 96 / 0.70 | 1,588 / 0.73 |
+| ≥ 27 | — | 387 / 0.15 | 3 / 0.33 | 384 / 0.15 |
+| none | — | 818 / 0.11 | 68 / 0.32 | 750 / 0.09 |
+| all | **391 / 0.997** | **6,464 / 0.68** | **2,257 / 0.90** | 4,207 / 0.55 |
+
+The quartiles (q1 / median / q3) are in `t1/m-96.txt`:
+
+- **Injected.** sumrat +1.00 / +1.00 / +1.00 overall (+0.85 / +0.96 / +1.00 at AB 26); nneg 0 / 1 / 4, rising from 0 at AB 21 to 8 at AB 26; nbad 0 throughout.
+- **Bright-flagged.** sumrat +0.99 / +1.00 / +1.00; nneg 1 / 3 / 6.
+- **Noise not bright.** sumrat −0.48 / +0.79 / +1.00; nneg 5 / 10 / 14.
+
+nbad is 0 at every quartile of every class.
+
+**`dev`'s figure.** `dev`'s socsims page gives the population behind 37 per cent (2026-10-20 and the later GBTDS test): every SFFT PSF-fit row of both signs, loaded when inside the fit-position bounds with sumrat > 0.4 and rb > 0 where computed. 717,644 of 1,937,852 rows passed, and 22,216,362 of 59,352,608. The 41 and 40 per cent are the SExtractor XSources catalogs, with an S/N > 5 and 2 px edge cut. The same rule without rb, on this sample, passes **6,243 of 9,834 rows (0.635)**: 0.68 to 0.73 of the positive rows and 0.48 to 0.49 of the negative. The comparison is like for like in its rule, but not in its field (HLWAS injected against GBTDS socsims) or its rb cut.
+
+**Seen, reported, not tuned.** sumrat passes SFFT's bright-star residuals: they are positive point-like cores, 0.90 above 0.4. So on HLWAS the cut alone removes a third of the noise and almost none of the bright-flagged false positives that fill the cap. The noise it does remove is the faint and negative-flux tail, and the unflagged candidates with negative sumrat (their nature unread; the gallery is `t1/inspect-96/`). Cost: `pixel_columns_s` 4.3 to 5.2 s a difference. Container seconds 193 to 228, against run 88's 187 to 222.
+
+**What `dev-prefilter` must know.**
+
+- **The flavour.** PR 425 (session `diff-flavor`, merged after this step's code) made the published differencer `[difference] diff_flavor`, shipped as `zogy`. The columns are computed on every SFFT candidate whatever the flavour. Published `sources` rows carry them only under `diff_flavor = "sfft"`; under ZOGY they are null.
+- **The prefilter alone.** A prefilter at sumrat 0.4 alone will not stop the bright-star cores on HLWAS.
+
+Raw evidence is in the brief's `t1/`: `m-96/` (candidates.parquet, stats.csv, survival.csv, dev.csv, kept.json), `m-96.txt`, `c-96/` and `c-96.txt`, `check-96.txt`, `inspect-96/`, `pixels-88-96.txt` and `ssm-out.txt`.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
