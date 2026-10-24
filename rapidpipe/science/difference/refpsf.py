@@ -249,15 +249,29 @@ def _stamp_usable(usable: np.ndarray, x: np.ndarray, y: np.ndarray, size: int) -
 
 
 def _evaluate_centred(epsf, size: int, iterations: int = 10) -> np.ndarray:
-    """``epsf`` at the pixel centres of a ``size x size`` stamp, centroid on the centre, unit sum."""
+    """``epsf`` at the pixel centres of a ``size x size`` stamp, centroid on the centre, unit sum.
+
+    Each axis's shift is a secant step on the measured centroid after the
+    first, plain step: evaluated at pixel centres, an oversampled ePSF's
+    centroid can move by more than the shift (by 1.8 times it on run 59's
+    F146 SCA 5 pass 4, job 20184), and the plain step then oscillates and
+    shrinks only as 0.8 per shift, still 0.06 px off after ten.
+    """
     centre = (size - 1) / 2
     cols, rows = np.meshgrid(np.arange(size, dtype=float), np.arange(size, dtype=float))
-    x0 = y0 = centre
+    position = np.array([centre, centre])
+    previous = None
     for _ in range(iterations):
-        stamp = np.asarray(epsf.evaluate(cols, rows, 1.0, x0, y0), dtype=np.float64)
-        dx, dy, _ = moments(stamp)
-        if max(abs(dx), abs(dy)) < CENTRING_TOLERANCE_PX:
+        stamp = np.asarray(epsf.evaluate(cols, rows, 1.0, *position), dtype=np.float64)
+        offset = np.array(moments(stamp)[:2])
+        if np.max(np.abs(offset)) < CENTRING_TOLERANCE_PX:
             return stamp / stamp.sum()
-        x0, y0 = x0 - dx, y0 - dy
-    raise ValueError(f"refpsf: centroid still ({dx:.4f}, {dy:.4f}) px off centre after "
+        step = offset.copy()
+        if previous is not None:
+            moved, change = position - previous[0], offset - previous[1]
+            secant = np.abs(change) > 1e-9
+            step[secant] = offset[secant] * moved[secant] / change[secant]
+        previous = (position.copy(), offset)
+        position = position - step
+    raise ValueError(f"refpsf: centroid still ({offset[0]:.4f}, {offset[1]:.4f}) px off centre after "
                      f"{iterations} shifts")
