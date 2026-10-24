@@ -1,5 +1,5 @@
 # ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ d6aac515
-"""``difference``: one epoch's L2 image minus its reference, ZOGY first, as `dev` does it.
+"""``difference``: one epoch's L2 image minus its reference, ZOGY then SFFT, as `dev` does it.
 
 Ported from `origin/dev`'s ``pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py``
 (its science only: the S3 transfers, the job-config parsing and the
@@ -21,6 +21,9 @@ reference by the medians -> ZOGY -> coverage mask, NaN restore, negation
 -> difference uncertainty -> SExtractor and Photutils catalogs, positive
 and negative. SFFT and the naive subtraction follow ZOGY and run as `dev`
 runs them (``[sfft] run_sfft``, ``[naive_diffimage] naive_diffimage_flag``).
+SFFT is the published differencer, as on `dev` since b725007d (2026-04-20;
+its ``diff_flavor = sfft``): ``run_sfft = false`` fails the settings check
+and a nonzero SFFT exit fails the job (exit 70), never a fallback to ZOGY.
 
 Scope: ``{"expid", "sca", "fid"}``, the epoch's key without the dataset
 (the run's). Settings: the run's ``[difference]`` table, whose subtables
@@ -55,22 +58,24 @@ instead, so this is a recorded divergence (rapid_docs ``decisions.md``,
 
 Outputs under ``job.path``. ``[paths] work_subdirectory`` holds what the
 packet stage and a person read, and nothing else (:func:`trim`, Ben's
-ruling of 2026-10-22): the ZOGY difference image, its uncertainty, its
-mask (the resampled reference coverage map it is masked with) and its
-positive PSF-fit catalog (``*_psfcat.parquet``, uncapped), and the packet
+ruling of 2026-10-22): the SFFT difference image, its uncertainty, its
+mask (the resampled reference coverage map it is masked with), the
+positive and negative PSF-fit catalogs of SFFT and of ZOGY
+(``*_psfcat[_negative].parquet``, uncapped; ZOGY's and the negatives are
+diagnostics, read by no stage), and the packet
 stage's other reads beside the difference image, the difference PSF
-(``diffpsf.fits``, forced photometry), the background-subtracted science
+(``sfftdiffpsf.fits``, forced photometry), the background-subtracted science
 image (forced photometry and the science cutout) and the resampled
 gain-matched reference (the template cutout), and the measured reference
 PSF (``refimage_psf.fits``). Every FITS file is
 gzipped (``.fits.gz``, level 1, as the intake's). The rest of `dev`'s
-diagnostic files (SFFT and naive products, negatives, S_corr,
-intermediate images, text catalogs) is not published; a variant is
-re-created by rerunning the job. Declared tables: ``diffimages`` (one
-row, the ZOGY image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
+diagnostic files (ZOGY's and naive's images, S_corr, intermediate
+images, text catalogs) is not published; a variant is re-created by
+rerunning the job. Declared tables: ``diffimages`` (one
+row, the SFFT image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
 table's identity sequence so the sources can carry it; ``infobitssci`` is
 `dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
-and ``sources`` (the ZOGY positive PSF-fit catalog through
+and ``sources`` (the SFFT positive PSF-fit catalog through
 :func:`rapidpipe.science.load.catalogs.source_set`, capped at ``max_sources``
 as the import caps it; a source in a bright reference source's footprint
 carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
@@ -94,7 +99,7 @@ stamp's centroid minus the science stamp's, px: their relative centring
 is what ZOGY sees; ``ref_sigma_px``, the median second-moment sigma of
 the stars the reference PSF was built from, on the resampled reference,
 px, and ``ref_sci_sigma_ratio``, it over ``sci_psf_sigma_px``;
-``noise_correlation``, the masked ZOGY difference's 4 x 4 block-mean
+``noise_correlation``, the published difference's 4 x 4 block-mean
 sigma times 4 over its pixel sigma, both clipped, 1 for white noise,
 absent when the image has too few full blocks,
 :func:`rapidpipe.science.difference.noise.noise_correlation`; and
@@ -120,11 +125,12 @@ settings have it. `dev`'s unseeded clipping-correction draw (negative)
 moves every clipped standard deviation by about 3e-4 and the source count
 by a few (foundation/determinism).
 
-Departures from `dev` (difference page): SFFT and naive files are not
-published as rows (a run has one differencer), nor uploaded at all (the
-trim above; SFFT and naive still run when their settings say so, for the
-outcome bits); a missing ZOGY PSF-fit catalog publishes an empty source
-set with its outcome bit set, where `dev`'s loader skips the job.
+Departures from `dev` (difference page): ZOGY and naive files are not
+published as rows (a run has one differencer), and only ZOGY's PSF-fit
+catalogs are kept under the prefix (the trim above; ZOGY and naive still
+run, for the outcome bits and the diagnostics); a missing SFFT PSF-fit
+catalog publishes an empty source set with its outcome bit set, where
+`dev`'s loader skips the job.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
@@ -255,6 +261,10 @@ def check_settings(settings: dict[str, Any]) -> None:
         raise ValueError(
             "[difference.fake_sources] inject_fake_sources_flag = true is not supported: "
             "fake-source injection is not ported to the rebuild")
+    if not settings["sfft"]["run_sfft"]:
+        raise ValueError(
+            "[difference.sfft] run_sfft = false: SFFT is the published differencer, so the "
+            "job would publish nothing; there is no fallback to ZOGY")
     _zero_point_override(settings)
     cap = settings.get("max_sources", 0)
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
@@ -702,10 +712,6 @@ def run(job: JobContext) -> None:
             w(source), w(output_resampled_reference_cov_map), w(target), thresh)
     for target in (filename_diffimage_masked, filename_scorrimage_masked):
         _restore_nans(w(target), nan_indices_sciimage, nan_indices_refimage)
-    correlation = noise.noise_correlation(fits.getdata(w(filename_diffimage_masked), 0))
-    if correlation is not None:
-        metrics["noise_correlation"] = correlation
-
     filename_diffimage_masked_negative = filename_diffimage_masked.replace(".fits", "_negative.fits")
     scale_image_data(w(filename_diffimage_masked), -1.0, w(filename_diffimage_masked_negative))
     filename_scorrimage_masked_negative = filename_scorrimage_masked.replace(".fits", "_negative.fits")
@@ -744,37 +750,36 @@ def run(job: JobContext) -> None:
                   nan_indices=(nan_indices_sciimage, nan_indices_refimage),
                   reformatted_science_image=reformatted_science_image_filename,
                   gain_times_exptime=sca_gain * inputs.exptime, thresh=thresh)
-    sfft_note: dict[str, Any] = {"ran": False}
-    if settings["sfft"]["run_sfft"]:
-        exit_code, sfft_bits = _run_sfft(
-            science_image_filename=science_image_filename,
-            scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
-            refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
-            science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
-            **common)
-        sfft_note = {"ran": True, "exit_code": exit_code}
-        if exit_code == 0:
-            infobits |= sfft_bits
-        else:
-            logger.warning("SFFT did not execute successfully (exit %s); continuing with ZOGY "
-                           "only, as dev does", exit_code)
+    sfft_names, sfft_catalogs = _run_sfft(
+        science_image_filename=science_image_filename,
+        scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
+        refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
+        science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
+        **common)
+    infobits |= sfft_catalogs.bits
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         infobits |= _run_naive(reference_psf=REFERENCE_PSF_NAME, **common)
 
-    # Rows.
-    with fits.open(w(filename_diffimage_masked)) as hdul:
+    # Rows: SFFT's image and positive PSF-fit catalog are the published ones (dev's diff_flavor).
+    published_image = sfft_names["diffimage"]
+    correlation = noise.noise_correlation(fits.getdata(w(published_image), 0))
+    if correlation is not None:
+        metrics["noise_correlation"] = correlation
+    with fits.open(w(published_image)) as hdul:
         header = hdul[0].header.copy()
-    parquet = zogy_catalogs.parquet["positive"]
+    parquet = sfft_catalogs.parquet["positive"]
     if parquet is None:
-        logger.warning("no ZOGY PSF-fit catalog: the source set is empty")
+        logger.warning("no SFFT PSF-fit catalog: the source set is empty")
     catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
 
+    diagnostics = [p for c in (sfft_catalogs, zogy_catalogs) for p in c.parquet.values() if p]
     published = trim(work_dir, images=[
-        filename_diffimage_masked, filename_diffimage_unc_masked,
-        output_resampled_reference_cov_map, filename_diffpsf, filename_bkg_subbed_science_image,
+        published_image, sfft_names["diffimage_unc"],
+        output_resampled_reference_cov_map, sfft_names["diffpsf"],
+        filename_bkg_subbed_science_image,
         output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME],
-        others=[parquet] if parquet else [])
-    filename_diffimage_published = filename_diffimage_masked + ".gz"
+        others=diagnostics)
+    filename_diffimage_published = published_image + ".gz"
     centre, corners = image_centre_and_corners(WCS(header), header["NAXIS1"], header["NAXIS2"])
     footprint = {"ra0": centre["ra"], "dec0": centre["dec"]}
     for n, (ra, dec) in enumerate(corners, start=1):
@@ -826,10 +831,13 @@ def run(job: JobContext) -> None:
                                       "x_median": float(dxmedianfin),
                                       "y_median": float(dymedianfin)},
             "zogy_astrometric_sigma": zogy_astrometric_sigma,
-            "source_counts": {"sextractor": zogy_catalogs.sextractor,
-                              "photutils": zogy_catalogs.photutils},
+            "differencer": "sfft",
+            "source_counts": {"sextractor": sfft_catalogs.sextractor,
+                              "photutils": sfft_catalogs.photutils},
+            "zogy_source_counts": {"sextractor": zogy_catalogs.sextractor,
+                                   "photutils": zogy_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
-            "infobits_science_l2": inputs.infobits_science, "sfft": sfft_note,
+            "infobits_science_l2": inputs.infobits_science,
             "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
         metrics=metrics)
 
@@ -1075,7 +1083,7 @@ def _restore_nans(path: Path, nan_indices_sciimage, nan_indices_refimage) -> Non
 
 
 # ----------------------------------------------------------------------
-# SFFT and naive, as dev runs them; their files stay under the prefix
+# SFFT and naive, as dev runs them
 # ----------------------------------------------------------------------
 
 
@@ -1083,8 +1091,11 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               filename_bkg_subbed_science_image, gainmatched_reference, resampled_cov_map,
               nan_indices, scigainmatch_catalog, refgainmatch_catalog, science_psf,
               reference_psf, reformatted_science_image, gain_times_exptime,
-              thresh) -> tuple[int, int]:
-    """SFFT's command, then its masking, uncertainty and catalogs; ``(exit code, bits)``.
+              thresh) -> tuple[dict[str, str], _Catalogs]:
+    """SFFT's command, then its masking, uncertainty and catalogs; ``(file names, catalogs)``.
+
+    A nonzero exit stops the job with exit 70 (`dev` logs it and goes on
+    with ZOGY; here SFFT is the published differencer).
 
     Empty ``[sfft] python_cmd`` means the stage's own interpreter, the
     same convention ``[paths] python`` uses for ZOGY; empty
@@ -1104,10 +1115,12 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         science_image_filename, crossconv_flag,
         s["sfft_bsmask_value"], s["sfft_bsmask_radius"],
         bool(s["sfft_use_gainmatch_catalogs"]), bool(s["sfft_use_segmentation"]))
+    # The one unchecked tool: a failed SFFT leaves ZOGY's products, as in dev.
     exit_code = int(kit.runner.run_shell(
-        sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir))
+        sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir, check=False))
     if exit_code != 0:
-        return exit_code, 0
+        raise CommandExit(int(ExitCode.STAGE_ERROR),
+                          f"sfft exited {exit_code}: the published difference image was not made")
 
     def w(name: str) -> Path:
         return work_dir / name
@@ -1155,7 +1168,7 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         overrides=sextractor.detection_overrides(
             settings["sextractor_diffimage_sfft"], crossconv_flag, settings["paths"]["cfg_path"]),
         seed=seed)
-    return 0, catalogs.bits
+    return names, catalogs
 
 
 def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_image,

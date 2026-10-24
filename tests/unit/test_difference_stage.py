@@ -5,9 +5,14 @@ Contracts: a job naming one ``l2files``, one ``refimages`` and one
 ``objects`` and ``memberships`` with exactly their tables' columns from
 ``database/schema.sql``, sharing the ``pid`` drawn for the job; it
 associates its sources with the catalog it read, recording the read and
-the catalog key in the manifest; the work subdirectory publishes exactly the kept set (the ZOGY
-image, its uncertainty, mask and PSF-fit catalog, and the neighbours the
-packet stage reads), every FITS gzipped, and nothing else; the tools run in `dev`'s
+the catalog key in the manifest; the published difference image and source set are SFFT's (`dev`'s
+``diff_flavor = sfft``), and the packet stage's cutout and forced
+photometry reads resolve beside it to SFFT's PSF and uncertainty;
+``run_sfft = false`` fails the settings check and a nonzero SFFT exit
+fails the job, never a fallback to ZOGY;
+the work subdirectory publishes exactly the kept set (the SFFT
+image, its uncertainty, mask and PSF, both differencers' PSF-fit catalogs,
+and the neighbours the packet stage reads), every FITS gzipped, and nothing else; the tools run in `dev`'s
 order with the reference background subtracted by bkgest; ``max_sources``
 caps the source set (its choice is ``source_set``'s, tested with the load
 science); the reference
@@ -17,7 +22,8 @@ covered pixels and is the one ZOGY and naive get, published and
 recorded in the manifest's ``metrics``; too few stars stops the job with
 exit 65 and the reason, before a manifest; ``[difference] reference_psf =
 "science"`` measures nothing and gives ZOGY the science PSF for both
-images, the manifest saying so; a reference ``psfs`` input
+images, the manifest saying so; a failed SFFT is the one tool failure
+the job carries on past, with ZOGY's products; a reference ``psfs`` input
 fails; SFFT and naive catalogs take their detection
 overrides and the SFFT image is coverage-masked; every bad input fails the
 job before a manifest is written; the shipped ``[difference]`` table is
@@ -34,12 +40,16 @@ import tomllib
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from astropy.io import fits
 
 import rapidpipe.stages.difference as difference
-from rapidpipe.exitcodes import CommandExit
+from rapidpipe.exitcodes import CommandExit, ExitCode
+from rapidpipe.science.alerts import forced
+from rapidpipe.science.alerts.cutouts import CUTOUT_FILES
+from rapidpipe.science.load.catalogs import source_set
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.selftest.support.fakedifftools import (
     FakePsfCatalog,
@@ -185,7 +195,7 @@ def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, f
     assert {k: row[k] for k in ("pid", "dataset", "expid", "sca", "fid", "rid", "rfid")} == {
         "pid": PID, **KEY, "rid": RID, "rfid": RFID}
     assert row["jd"] == pytest.approx(MJDOBS + 2400000.5)
-    assert row["filename"] == prefix.as_uri() + "/diff/zogy_diffimage_masked.fits.gz"
+    assert row["filename"] == prefix.as_uri() + "/diff/sfftdiffimage_masked.fits.gz"
     sources = read(prefix, "sources")
     assert sources and {s["pid"] for s in sources} == {PID}
     assert {(s["dataset"], s["expid"], s["sca"], s["fid"]) for s in sources} == {
@@ -228,17 +238,78 @@ def test_a_job_associates_its_sources_with_the_catalog_it_read_and_records_the_r
 
 def test_the_job_publishes_the_kept_set_gzipped_and_nothing_else(tmp_path, files, fakes):
     work = run_difference(tmp_path, files) / "diff"
-    images = {"zogy_diffimage_masked.fits",                  # the difference
-              "zogy_diffimage_uncert_masked.fits",           # its uncertainty
+    images = {"sfftdiffimage_masked.fits",                   # the difference
+              "sfftdiffimage_uncert_masked.fits",            # its uncertainty
               "awaicgen_output_mosaic_cov_map_resampled.fits",  # its mask
-              "diffpsf.fits",                                # forced photometry
+              "sfftdiffpsf.fits",                            # forced photometry
               "bkg_subbed_science_image.fits",               # forced photometry, science cutout
               "awaicgen_output_mosaic_image_resampled_gainmatched.fits",  # template cutout
-              "refimage_psf.fits"}                           # ZOGY's reference PSF
-    assert {p.name for p in work.iterdir()} == (
-        {name + ".gz" for name in images} | {"zogy_diffimage_masked_psfcat.parquet"})
+              "refimage_psf.fits"}                           # the measured reference PSF
+    catalogs = {f"{d}_masked_psfcat{sign}.parquet"         # the published one and diagnostics
+                for d in ("sfftdiffimage", "zogy_diffimage") for sign in ("", "_negative")}
+    assert {p.name for p in work.iterdir()} == {name + ".gz" for name in images} | catalogs
     for name in images:
         assert fits.getdata(work / (name + ".gz")) is not None, name
+
+
+def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fakes, monkeypatch):
+    runner, catalog = fakes
+    kit = difference.toolkit()
+
+    def zogy_ids_apart(settings_, **kwargs):  # the fake's catalogs are alike; ZOGY's ids are moved
+        outcome = catalog(settings_, **kwargs)
+        if "zogy" in kwargs["label"] and kwargs["parquet"] and outcome.produced:
+            table = pq.read_table(kwargs["parquet"])
+            ids = table.column("id").to_numpy() + 1000
+            pq.write_table(table.set_column(0, "id", pa.array(ids)), kwargs["parquet"])
+        return outcome
+
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=runner, sip_to_pv=kit.sip_to_pv, psf_catalog=zogy_ids_apart,
+        reference_psf=kit.reference_psf))
+    prefix = run_difference(tmp_path, files)
+    work = prefix / "diff"
+    sfft_catalog = pq.read_table(work / "sfftdiffimage_masked_psfcat.parquet")
+    zogy_catalog = pq.read_table(work / "zogy_diffimage_masked_psfcat.parquet")
+    (row,) = read(prefix, "diffimages")
+    header = fits.getheader(work / "sfftdiffimage_masked.fits.gz")
+    expected, _ = source_set(sfft_catalog, KEY, PID, MJDOBS, header["NAXIS1"], header["NAXIS2"],
+                             max_sources=THIN["difference"]["max_sources"])
+    sources = read(prefix, "sources")
+    assert [(s["sid"], s["xfit"], s["yfit"]) for s in sources] == [
+        (s["sid"], s["xfit"], s["yfit"]) for s in expected.to_pylist()]
+    assert sources and not {s["sid"] for s in sources} & set(zogy_catalog.column("id").to_pylist())
+    assert all(s["isdiffpos"] for s in sources)
+    assert manifest(prefix)["difference"]["differencer"] == "sfft"
+
+
+def test_the_packet_stage_reads_resolve_to_sffts_files_beside_the_published_image(
+        tmp_path, files, fakes):
+    """The packet stage takes the cutout and forced photometry files beside ``diffimages.filename``."""
+    prefix = run_difference(tmp_path, files)
+    (row,) = read(prefix, "diffimages")
+    plain = row["filename"].rsplit("/", 1)[-1].removesuffix(".gz")
+    assert plain == "sfftdiffimage_masked.fits"
+    beside = {forced.DIFF_PSF_BASENAMES[plain], forced.DIFF_UNCERT_BASENAMES[plain],
+              *CUTOUT_FILES.values()}
+    assert beside >= {"sfftdiffpsf.fits", "sfftdiffimage_uncert_masked.fits"}
+    for name in beside:
+        assert (prefix / "diff" / (name + ".gz")).is_file(), name
+
+
+def test_run_sfft_false_fails_the_settings_check(tmp_path, files, fakes):
+    with pytest.raises(ValueError, match="run_sfft = false"):
+        run_difference(tmp_path, files, body=settings(sfft={"run_sfft": False}))
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_a_nonzero_sfft_exit_fails_the_job_without_falling_back_to_zogy(tmp_path, files, fakes):
+    runner, _ = fakes
+    runner.sfft_exit_code = 3
+    with pytest.raises(CommandExit) as failed:
+        run_difference(tmp_path, files)
+    assert failed.value.code == int(ExitCode.STAGE_ERROR) and "sfft exited 3" in str(failed.value)
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
 def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_path, files, fakes):
@@ -323,8 +394,8 @@ def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fak
     seen = {}
     trim = difference.trim
 
-    def look_then_trim(work_dir, **kept):   # SFFT's files are not published; read them first
-        seen["masked"] = fits.getdata(work_dir / "sfftdiffimage_masked.fits")
+    def look_then_trim(work_dir, **kept):   # the trim gzips the image; read it first, not mapped
+        seen["masked"] = fits.getdata(work_dir / "sfftdiffimage_masked.fits", memmap=False)
         seen["unmasked"] = (work_dir / "sfftdiffimage_unmasked.fits").is_file()
         return trim(work_dir, **kept)
 
@@ -332,6 +403,14 @@ def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fak
     run_difference(tmp_path, files)
     assert np.isnan(seen["masked"][:, :3]).all() and np.isfinite(seen["masked"][:, 10:-10]).any()
     assert seen["unmasked"]
+
+
+def test_a_failed_sfft_leaves_the_job_publishing_zogy(tmp_path, files, fakes):
+    runner, _ = fakes
+    runner.sfft_exit_code = 1
+    prefix = run_difference(tmp_path, files)
+    (row,) = read(prefix, "diffimages")
+    assert row["filename"].endswith("/diff/zogy_diffimage_masked.fits.gz")
 
 
 def test_max_sources_caps_the_source_set_and_records_the_count_before_it(tmp_path, files, fakes):
