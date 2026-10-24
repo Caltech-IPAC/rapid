@@ -7386,6 +7386,89 @@ The reference was pending for four passes (about five minutes) at the 9100 px mo
 
 Raw evidence is in the brief's `t1/`: `local-a{1,2}.*`, `night-a1.*`, `dated-files-check.txt`, `dry/`.
 
+### Step gate-metrics: the gate also holds on lost sky and misregistration, bounds from every recorded difference job
+
+**The change (PR 426, merged `05b81610`; rapid_docs PR 111, `332bb0b3`).**
+`gate.judge` holds a packet set when its difference job's
+`usable_fraction` is below `[gate] usable_fraction_min` (0.9) or its
+registration offset `hypot(registration_dx_px, registration_dy_px)` is
+above `[gate] registration_max_px` (0.25 px). Both checks run before the
+existing three, since lost sky or a misregistration inflates the count
+and the residuals checked after them. `min_epochs`, the median rule, the
+existing bounds and "a metric the job could not compute holds nothing"
+are unchanged. `decide` already read every metric of the set's
+difference job, so its query is untouched. No overlay value was set:
+every dataset's healthy population sits inside the shared defaults.
+
+**The calibration** (read only, every published difference job SMDC
+holds that carries the metrics, runs 46 to 95):
+
+| population | offset px, max | usable fraction, min |
+|---|---|---|
+| HLWAS SCA 8, seven filters, null and injected (162 epochs) | 0.123 (run 49 F129, 25 stars); 0.060 over 162 F146 epochs | 0.98881 |
+| HLWAS 18 SCAs (run 72), SCA 9 apart | 0.027 | 0.93853 (SCA 16) |
+| **HLWAS SCA 9 (run 72), target failure** | 0.132 to 0.160 | **0.70439** (reference from another SCA's frames) |
+| GBTDS (runs 67, 79) | 0.094 (67 has none) | 0.99035 |
+| OpenUniverse (runs 80, 89) | 0.034 | 0.99313 |
+
+Within one SCA the usable fraction is constant to 1e-4 across epochs: the
+SCA's reference coverage and mask set it. The offset's tail grows as
+registration stars fall (0.08 to 0.123 px with 25 to 35 stars). That is
+why the bound is twice the healthy maximum, set to catch an offset of the
+class of HLWAS's 1 px, not SCA 9's 0.13 to 0.16 (SCA 9 is held by its
+usable fraction). The first check: `001_0001` SCA 8 F146 reads 0.019 px
+and 0.99935, inside the plan's 0.12 px and 0.999.
+
+**The exercising proof** (read only, `gate.decide` at `05b81610`
+against SMDC's recorded rows, each run's own `[gate]` table):
+
+- Every published packet set, 59 runs and 4,627 sets: held 12 with the
+  new checks disabled, 15 with them on. The three new holds are run 72's
+  SCA 9 sets 21890, 21895 and 21900, each `usable_fraction 0.7044 below
+  0.9`. No healthy set is held, and no existing hold changes its reason.
+- Sets past `min_epochs` with the values `decide` read from the
+  difference job each names: run 49 sets 20023 and 20112 (offset 0.013
+  and 0.1231 px) send, run 48's 20122 (0.119 px) sends, run 72 SCA 16's
+  21907 (usable 0.9385) holds on `core_fraction` as before, run 72 SCA 9's
+  21890 (0.7044, 0.160 px) holds on `usable_fraction`.
+- `decide`'s first `sources` row is the set's own epoch in all 532 sets
+  that carry window neighbours' sources too (insertion order, not an SQL
+  promise; recorded under Improvements in PR 426).
+
+The registration hold has no recorded case past the bound. Its contract
+stands on a synthetic unit test (`tests/unit/test_gate.py`).
+
+**Publication smoke**, not an exercise of the new checks (one epoch, below
+`min_epochs`): image `rebuild-05b81610…` (digest `cbae47ab…`), job
+definition `rapid-rebuild:74`. Run **98** (`r00342-gm-smoke`, live, group
+21567; Gaia job 22912), HLWAS `001_0001` SCA 8 F146, passes 1 to 4.
+
+```sh
+rp run create ... --revision 05b81610... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+  --survey HLWAS --dataset r00342-gm-smoke                      # run 98
+rp loop --run 98 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:74 --interval 60
+scripts/check_run.sh --run 98 --inspect <dir>
+```
+
+Check, held:
+
+- **The drain.** The loop ran 21:51:46 to 22:04:46 UTC and exited 0, with
+  `failed` and `held_sets` empty in every pass. Jobs: psf 22913, intake
+  22914 to 22917, reference 22918, difference 22920, packet 22938. Each
+  published on attempt 1 with `refusal` null, and the packet set was
+  stamped sent.
+- **The difference's metrics**, the two the gate now reads: usable
+  0.99935, offset 0.019 px (-0.012, +0.014), the same as runs 59 to 95's
+  epoch. Core -0.001, 20 sources above S/N 20.
+- `check_run.sh --inspect`: **CLEAN**, validate 6/6, reader 1/1,
+  consumer 181/181.
+- 181 packets against runs 87, 90 and 95's 471: those ran under SFFT's
+  published catalog, and this run under ZOGY's, which has been the
+  default since PR 425. That is not this step's measurement.
+
+Evidence is in the brief's `t1/`.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
