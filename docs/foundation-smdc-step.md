@@ -6889,6 +6889,65 @@ The refusal itself, the loop's report of it and the exit codes stand on
 their CI contracts (`tests/db/test_publish.py`, `tests/unit/test_loop.py`);
 no live failure was staged.
 
+### Step err-inputs: a packet job's required inputs fail it; nothing is caught around the PSF fit
+
+**The change (PR 415, merged `f90d9fef`).** A packet job now fails,
+naming the file or key, when the trigger epoch's difference, science or
+template stamp image cannot be read (`write_set`), when the reference
+catalog is unreadable, empty or short of a `REFCAT_COLUMNS` column
+(`load_refcat`), or when the trigger's reference has no `refimcatalogs`
+row (`_read`). Each of these used to ship every packet of the set with
+null cutouts or null reference matches. Window images were already
+required here: they are fetched by `prefix.get` and read by forced
+photometry, both of which raise, so no optional-image path remains.
+`compute_psf_catalog` no longer catches anything around
+`PSFPhotometry.__call__`. The probe below found no empty input on which
+photutils 3.0.0 raises: no sources found, all-NaN or all-zero data, and
+filtered-out candidates all return `None`, which stays the empty
+catalog. It raises `ValueError` only for faults, such as a zero or NaN
+uncertainty under a source or a mismatched uncertainty shape. Over the
+prompt queue's 14-day log retention, the removed handler's message
+appears 0 times.
+
+**The census.** Every reference of the 50 live runs (436) and of every
+run (714) has its cattype-1 `refimcatalogs` row, so the new raise cannot
+fire on the data at hand.
+
+**The proof.** The image is `rebuild-f90d9fef…` (digest `b47e1c5c…`),
+job definition `rapid-rebuild:69`. The sample is HLWAS `001_0001`, SCA
+8, F146, passes 1 to 4: three reference frames, with epoch 4040101
+differenced and packeted. Run **90** (`r00342-ei-inputs`) is live under
+its own dataset. Evidence is in the brief's `t1/`.
+
+```sh
+rp run create ... --revision f90d9fef... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+  --survey HLWAS --dataset r00342-ei-inputs                                          # run 90
+rp official change --group live.json ...; rp job local --run 90 --stage import ...    # live; Gaia under the dataset's key
+rp loop --run 90 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:69 --interval 60
+```
+
+Check, held:
+
+- **The chain.** All nine jobs were published with exit 0 and no
+  refusal. The loop ran from 20:40:41 to 20:49:46 UTC, drained, and
+  exited 0. `check_run.sh --run 90` was **CLEAN**: validate 6/6, reader
+  1/1, consumer 471/471.
+- **The packets.** All 471 records carry all three cutouts. All 471
+  carry non-null reference star and galaxy match lists, and 285 have a
+  star match.
+- **Beside the earlier runs**, epoch 4040101:
+
+  | run | differencer | difference job, instance | candidates / kept | S/N > 20 | packet job, instance | packets | packets S/N > 20 |
+  |---|---|---|---|---|---|---|---|
+  | 84 | ZOGY (before PR 408) | 22767, m6a.2xlarge | 773 / 500 | 21 | 22775, m6a.2xlarge | 180 | 13 |
+  | 86 | SFFT | 22776, m6a.2xlarge | 2151 / 500 | 500 | 22777, m6a.2xlarge | 471 | 471 |
+  | 90 | SFFT | 22824, m6a.2xlarge | 2151 / 500 | 500 | 22866, r6i.8xlarge | 471 | 471 |
+
+  Run 90 equals run 86, the same differencer on the same epoch. The
+  change from run 84 is PR 408's switch to SFFT, which step differencer
+  reports, not this change.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
