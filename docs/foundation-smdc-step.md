@@ -4377,6 +4377,244 @@ would have caught the finding. One step per task.
    ledger's other routes, a drizzle factor below 1 passed to awaicgen and a
    finer mosaic, narrow the PSF without SWarp's kernel and are not built.
 
+5. **The metrics and the re-count (PRs 350, 351 and 352, merged
+   `096a1a09`, `70c6bfaa` and `2369769a`).** Every job's manifest carries
+   `metrics`, one flat dict of named numbers computed from arrays the job
+   already holds: intake `masked_fraction`; reference `star_sigma_px` and
+   `n_sigma_stars`, `coverage_lt1` to `_lt3` (share of the covered
+   pixels), `gmin`, `gmax`; difference the registration offset, the
+   reference stars' width and its ratio to the science PSF's, the core and
+   ring fractions at the 30 brightest isolated stars, the noise
+   correlation, the usable fraction, `n_candidates` before the cap,
+   `n_sources` after it, `n_sources_snr_gt20` and
+   `on_reference_star_fraction`, beside task 3's refpsf keys; packet
+   `n_packets` and `n_packets_snr_gt20`. Definitions:
+   `rapidpipe/science/difference/metrics.py`,
+   `rapidpipe/science/reference/measure.py` and the stages' docstrings.
+   The view `job_metrics` (one row per job and metric with run, stage,
+   dataset and scope) is `database/2026-10-24-job-metrics.sql`, applied
+   once on SMDC as `postgres` by SSM on the database host before the loops
+   started:
+
+   ```sh
+   podman exec rapid-postgres psql -U postgres -d rapid -v ON_ERROR_STOP=1 -c "<the file's CREATE VIEW and COMMENT>"
+   ```
+
+   Check, held: `CREATE VIEW` and `COMMENT` at 02:05:08 UTC; `jobs` 19,848
+   rows before and after; read back as `rapid_rebuild_pipeline` through
+   the default privileges. `scripts/inspect_run.py --run N --out DIR`
+   writes `run-N.md` (a table per stage, the run's median and each row's
+   deviation) and a PNG per sampled difference job (first and last epoch,
+   and any epoch above twice the median `n_sources_snr_gt20`);
+   `check_run.sh` runs it first (`--inspect DIR`, default
+   `$TMPDIR/inspect-run-N`).
+
+   Image `rebuild-096a1a09…` (`sha256:8e76c64d…`, build 22 s, deploy 74
+   s): **`rapid-rebuild:47`**. Seven datasets, each a new live run at
+   that sha on the HLWAS overlay with its filter's bound, its Gaia
+   imported under the dataset's key:
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 096a1a0993ddd08bb37c6c67c0c86722de7bc009 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=<bound> \
+     --survey HLWAS --dataset r00342-fx-<f>
+   rp official change --group live.json ...                 # the run live for HLWAS r00342-fx-<f>
+   rp job local --run <run> --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-fx-<f>", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "r00342-fx-<f>", "name": "gaia-r00342-fx-<f>", "version": "DR3"}, "binding": null}]'
+   timeout <s> rp loop --run <run> --filters <F> --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:47 --interval 60
+   scripts/check_run.sh --run <run> --inspect <dir>
+   ```
+
+   Runs **46** (F146), **47** (F087), **48** (F106), **49** (F129), **50**
+   (F158), **51** (F184), **52** (F213). F146 ran first and alone
+   (02:10:20 to 02:26:28 UTC, 16.1 min, exit 0) and was read before the
+   six were submitted (02:21:46 UTC, in parallel).
+
+   **F184 and F213 failed every difference** with task 3's named reason,
+   `refpsf: 9 stars, 10 needed` (pass 5: 8) and `refpsf: 6 stars, 10
+   needed`, exit 65; their loops exited 2. The fields are not sparse
+   (2,100 and 683 detections on the mosaics): the cut was the peak floor,
+   20 DN/s set on F146, where it is 886 times the noise; below it fall
+   1,944 of F184's 1,981 shaped detections and 616 of F213's 648. PR 351
+   states the floor as 400 times the clipped noise (mosaics: F146 64, F184
+   49, F213 20 stars). Image `rebuild-70c6bfaa…` (`sha256:1c75937c…`):
+   **`rapid-rebuild:48`**. Runs **53** (F184) and **54** (F213) at
+   `70c6bfaa`, made live in place of 51 and 52 by one change group each
+   (`{"close": <the live binding>, "open": {...}}`); their loops reused
+   the dataset's official intakes, PSF and reference and ran the
+   differences again (02:53:25 to 03:04:31 UTC). Runs 51 and 52 stay, not
+   live, their failed jobs recorded.
+
+   **The variety check.** F146's per-epoch `n_sources_snr_gt20` is 23, 19
+   and 15, median 19, below the brief's 20, so the same pointing ran on
+   SCAs 4 and 5 under run 46 (02:26:38 to 02:40:48 UTC). Checking run 46
+   while that loop had just submitted its PSF jobs gave `counts: FAIL (1):
+   2 psf jobs still launched`, a race of the two steps' order; the check
+   after the second loop held.
+
+   Check, held: every run drained, exit 0, no job failed but the four
+   above: run 46 (SCAs 4, 5, 8) CLEAN validate 6/6, reader 9/9, consumer
+   954/954; run 47 CLEAN 6/6, 2/2, 129/129; run 48 CLEAN 6/6, 13/13,
+   786/786; run 49 CLEAN 6/6, 13/13, 1,392/1,392; run 50 CLEAN 6/6, 14/14,
+   900/900; run 53 CLEAN 6/6, 2/2, 84/84; run 54 CLEAN 6/6, 2/2, 91/91.
+
+   **F146 against run 17** (passes 4, 5, 6: run 17 jobs 2455, 2456, 2457
+   against run 46 jobs 19864, 19865, 19866; run 17's figures from the
+   images ledger and runbook part 9, the same counts read again from the
+   database by lineage):
+
+   | | pass 4 before | **after** | pass 5 before | **after** | pass 6 before | **after** |
+   |---|---|---|---|---|---|---|
+   | candidates before the cap | 1,035 | **752** | 1,065 | **786** | 1,030 | **718** |
+   | `sources` kept | 500 | 500 | 500 | 500 | 500 | 500 |
+   | sources above S/N 20 | 80 | **23** | 79 | **19** | 75 | **15** |
+   | packets | 216 | **80** | 213 | **66** | 199 | **71** |
+   | packets above S/N 20 | 30 | **9** | 28 | **3** | 27 | **3** |
+   | on reference stars (ledger's list; mosaic catalog) | 74%; 71% | **44%** | 69%; 67% | **42%** | 72%; 69% | **43%** |
+   | core / ring of star flux | +0.030 / -0.027 | **+0.0062 / -0.0023** | +0.029 / -0.028 | **+0.0053 / -0.0023** | +0.028 / -0.027 | **+0.0084 / -0.0024** |
+   | reference star sigma / the PSF ZOGY gets for it, px | 1.10 / 0.95 | **1.108 / 1.080** | / 0.947 | **1.107 / 1.079** | / 0.947 | **1.108 / 1.076** |
+   | registration science − reference, px | -0.017, +0.014 | -0.023, +0.019 | | -0.017, +0.010 | | -0.007, -0.003 |
+
+   Pass 4 equals task 4's BILINEAR job 19845 (752 candidates, 23 above S/N
+   20, core +0.0062): the same inputs at another revision give the same
+   numbers.
+
+   **The six other filters**, before from the breadth runs' official
+   products of `001_0001` SCA 8 by lineage (`diffimages_official` by
+   dataset, `expid % 10000 = 101` and SCA 8, the producing job named; its
+   `sources` rows; `packets_official` joined to them for S/N; the
+   manifest's `sources_before_cap`; the reference's `refimcatalogs` file
+   for the share on reference sources, matched within 3 science pixels on
+   the sky), never from the images; the PSF and residual numbers have no
+   before outside F146. Per-epoch medians over the matched epochs (the
+   tables per epoch are in this step's pull request):
+
+   | filter | run | epochs | n_candidates | n_sources_snr_gt20 | n_packets | n_packets_snr_gt20 | on_reference_star_fraction | core / ring | ref / sci sigma px | refpsf stars | noise corr |
+   |---|---|---|---|---|---|---|---|---|---|---|---|
+   | F146 | 46 | 3 | 1035 → **752** | 79 → **19** | 213 → **71** | 28 → **3** | 69% → **43%** | +0.0062 / -0.0023 | 1.108 / 0.947 | 39 | 1.25 |
+   | F087 | 47 | 2 | 959 → **712** | 112 → **18** | 192 → **64** | 46 → **4** | 40% → **20%** | -0.0031 / +0.0070 | 1.009 / 0.804 | 26 | 1.34 |
+   | F106 | 48 | 13 | 1002 → **749** | 100 → **22** | 200 → **56** | 41 → **4** | 46% → **18%** | +0.0042 / +0.0050 | 1.036 / 0.826 | 33 | 1.31 |
+   | F129 | 49 | 13 | 1142 → **1047** | 101 → **42** | 213 → **108** | 46 → **12** | 42% → **17%** | +0.0067 / +0.0021 | 1.084 / 0.921 | 22 | 1.42 |
+   | F158 | 50 | 14 | 1467 → **901** | 156 → **18** | 216 → **57** | 75 → **6** | 38% → **37%** | +0.0105 / -0.0050 | 1.159 / 1.014 | 26 | 1.17 |
+   | F184 | 53 | 2 | 1904 → **842** | 373 → **19** | 255 → **42** | 188 → **3** | 4% → **24%** | +0.0013 / +0.0141 | 1.312 / 1.179 | 44 | 1.20 |
+   | F213 | 54 | 2 | 381 → **306** | 48 → **20** | 110 → **46** | 16 → **3** | 35% → **28%** | +0.0337 / +0.0225 | 1.388 / 1.291 | 19 | 1.13 |
+
+   **What remains** (the fixes ledger's corrected categories, first rule
+   that applies: bright star = 3 x 3 uncertainty over 4 times the median
+   on a reference source of aperture S/N above 100; defect = that
+   uncertainty otherwise, or a spike; hole = reference S/N below -5 or a
+   NaN within 3 px; on a reference source = reference S/N above 5), above
+   S/N 20:
+
+   | | sources above S/N 20 | bright star | defect | hole | reference source | unclassified |
+   |---|---|---|---|---|---|---|
+   | F146 SCA 8, passes 4 / 5 / 6 | 23 / 19 / 15 | 21 / 15 / 11 | 0 / 0 / 0 | 1 / 2 / 3 | 1 / 1 / 0 | 0 / 1 / 1 |
+   | F146 SCA 4, passes 4 / 5 / 6 | 48 / 53 / 66 | 31 / 40 / 44 | 0 | 12 / 7 / 11 | 5 / 5 / 7 | 0 / 1 / 4 |
+   | F146 SCA 5, passes 4 / 5 / 6 | 66 / 51 / 66 | 58 / 44 / 58 | 0 | 1 / 3 / 4 | 7 / 2 / 0 | 0 / 2 / 4 |
+   | run 17 SCA 8 pass 4 (before) | 80 | 24 | 6 | 18 | 25 | 7 |
+
+   The defects are gone and the PSF-mismatch core and ring are gone; what
+   is left at the bright end is bright stars: the gallery shows a residual
+   with the PSF's diffraction-spike pattern inside 15 px of each, and in
+   F213 a positive core with a positive ring (+0.034 / +0.023), a
+   flux-scale residual rather than a width one. 39 of F213's 40 sources
+   above S/N 20 sit within 3 px of a science pixel at or above 10,000 (F146
+   29 of 38, F087 7 of 15). One probe: dev's science extreme-pixel repair
+   (`[difference.sci_image] repair_extreme_artifact_pixels`, threshold
+   10,000) was turned off in a paired difference of the same inputs (runs
+   55 and 56, not live, jobs 20124 and 20125 against 20104 and 19864):
+   every count and the core and ring are identical, so the repair is not
+   the cause; the cause is not established. SCAs 4 and 5 leave two to
+   three times SCA 8's bright stars, as run 12 found three to four times
+   its artefacts.
+
+   **The reference's `star_sigma_px` as stored is wrong**: 1.55 to 1.65
+   px in every filter, because SExtractor's CLASS_STAR (PR 350's star cut)
+   does not separate stars from galaxies on these mosaics; PR 352 takes
+   the narrowest population of widths instead. The runs keep the stored
+   values; at `2369769a` the same mosaics give F087 0.914, F106 0.936, F129
+   0.987, F146 1.016 (the fixes ledger: 1.039), F158 1.063, F184 1.243,
+   F213 1.336 px.
+
+   PR 352's image `rebuild-2369769a…` (`sha256:8ae01699…`):
+   **`rapid-rebuild:49`**, the revision the next run takes; nothing ran
+   under it here.
+
+   Measurements (job rows, runs 46 to 50, 53, 54; launched to started is
+   the queue wait, started to ended the job):
+
+   | stage | jobs | queue wait s, median / max | job s, median / max |
+   |---|---|---|---|
+   | psf | 7 | 10 / 159 | 28 / 32 |
+   | intake | 72 | 141 / 152 | 49 / 87 |
+   | reference | 7 | 50 / 124 | 58 / 68 |
+   | difference | 55 | 157 / 219 | 217 / 275 |
+   | associate | 55 | 9 / 215 | 1 / 2 |
+   | packet | 54 | 9 / 215 | 42 / 198 |
+
+   - Loops: F146 16.1 min (SCAs 4 and 5 another 14.2 min); F087 12.1 min;
+     F106 47.2, F129 42.2, F158 50.2 min (13 and 14 epochs, the associate
+     chain); F184 and F213 again 11.1 and 10.1 min.
+   - The reference PSF measurement 6.7 / 8.5 / 10.2 s (min / median /
+     max) over 55 differences; the new metrics 0.13 s on one (measured on
+     job 19845's files on this host).
+   - Instances: m6a.2xlarge, m6a.8xlarge, r6i.2xlarge, r6i.8xlarge.
+   - Peak memory: not read this step (the jobs' CloudWatch streams are not
+     under the `rebuild/default/<job>` names part 4 used); task 4's
+     differences on the same chain peaked at 1.28 GB self and 15.2 GB in
+     children.
+   - The consumer checks took 4 to 47 s, from each run's first packet.
+
+## Results of part 10 (2026-10-24)
+
+The null test's two measured artefact sources are removed on pointing
+`001_0001`, SCA 8, in all seven filters, and every job now records the
+numbers that would have shown them on the first run.
+
+| filter | epochs | sources above S/N 20 per epoch, before → after | packets per epoch | packets above S/N 20 | core / ring after (before, F146) |
+|---|---|---|---|---|---|
+| F087 | 2 | 112 → 18 | 192 → 64 | 46 → 4 | -0.003 / +0.007 |
+| F106 | 13 | 100 → 22 | 200 → 56 | 41 → 4 | +0.004 / +0.005 |
+| F129 | 13 | 101 → 42 | 213 → 108 | 46 → 12 | +0.007 / +0.002 |
+| F146 | 3 | 79 → 19 | 213 → 71 | 28 → 3 | +0.006 / -0.002 (+0.030 / -0.027) |
+| F158 | 14 | 156 → 18 | 216 → 57 | 75 → 6 | +0.011 / -0.005 |
+| F184 | 2 | 373 → 19 | 255 → 42 | 188 → 3 | +0.001 / +0.014 |
+| F213 | 2 | 48 → 20 | 110 → 46 | 16 → 3 | +0.034 / +0.023 |
+
+(Medians per epoch over the matched epochs; before is run 17 for F146
+and the breadth runs' official products for the others, read by lineage.)
+
+- **What changed it**: the DQ mask at intake (step 2) removed the
+  defects, which were most of the bright end in F184 (373 per epoch above
+  S/N 20); the measured reference PSF (step 3) removed the core-and-ring
+  residual at every star; the kernel stayed BILINEAR (step 4).
+- **What remains above S/N 20** is bright stars: no defect category is
+  left, a few holes, and on F146 SCA 8 15 to 21 of 15 to 23 per epoch on
+  a reference source of aperture S/N above 100 with the PSF's
+  diffraction-spike pattern in the residual. F213 leaves a positive core
+  and ring at its bright stars, a flux-scale residual. The cause is not
+  established; dev's science extreme-pixel repair is ruled out by a paired
+  difference. F129 keeps the most (42 per epoch). SCAs 4 and 5 leave two
+  to three times SCA 8's (48 to 66 per epoch), bright stars again.
+- **The metrics the quality gate will read** are in `job_metrics`:
+  per difference job `n_sources_snr_gt20`, `n_candidates`, `core_fraction`,
+  `ring_fraction`, `on_reference_star_fraction`, `ref_sci_sigma_ratio`,
+  `registration_dx_px` / `_dy_px`, `noise_correlation`, `usable_fraction`;
+  per packet job `n_packets_snr_gt20`; per reference `star_sigma_px` (as
+  stored by these runs wrong, corrected by PR 352) and the coverage
+  histogram; per intake `masked_fraction`. Across this re-count's SCA 8
+  epochs the healthy ranges are: core within ±0.011 except F213's +0.034,
+  ring within ±0.015 except F213's +0.023, registration within 0.12 px,
+  usable fraction 0.999, noise correlation 1.12 to 1.44.
+- **Found on the way and fixed**: the reference PSF's peak floor was
+  F146's count rate and failed F184 and F213 (PR 351); the reference's
+  star width read the galaxies (PR 352).
+- **Next, by what this shows**: the bright-star residual (its cause; it
+  is now the whole bright end); the injection brief, whose completeness
+  count now has an artefact floor of about 20 per epoch per SCA above S/N
+  20 on SCA 8; and the second iteration's list in the plan.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
