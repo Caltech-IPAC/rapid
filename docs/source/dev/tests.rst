@@ -128,6 +128,13 @@ Date              Software modification
                   * ``sumrat``, ``nneg`` and ``nbad`` now measured after subtracting a local background (``[EXTRA_CATALOG_COLS] pixel_cols_bkg_box = 64``, ``pixel_cols_bkg_filter_size = 3``) (PR #258).
                   * XSources database prefilter adds an SNR cut, ``FLUX_APER_1 / FLUXERR_APER_1 > 5.0`` (``[DATABASE_PREFILTER] snr_prefilter_threshold``),
                     and the XSources loader rejects sources within 2 pixels of the image edge (PR #258).
+10/23/2026        Changes made to complete 10/21/2026 socsims test:
+                  * Select the not-best [x]sids on the database server in ``pruneNotBest[X]Merges.py``, instead of client-side selection,
+                    in order to eliminate queries larger than 1 GB (PostgreSQL has a 1 GB limit).
+                  * Optimized container run command::
+                    docker run -it --entrypoint bash --name russ-test-jobsubmit  --shm-size=64g -e TMPDIR=/dev/shm \
+                    -v /home/ubuntu/work/test_20261021:/work -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
+                    -e NUMEXPR_NUM_THREADS=1 public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
 ===============   ===============================================================================================================================================================================================================================
 
 
