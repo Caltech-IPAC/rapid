@@ -108,6 +108,19 @@ CATALOG_OUTCOME_BITS: dict[tuple[str, str], int] = {
 _MAX_CATALOG_OUTCOME_BITS = (1 << len(CATALOG_OUTCOME_BITS)) - 1
 
 
+#: ``sources.flags`` bit RAPID sets beside photutils' fit-condition bits
+#: (photutils 3.0 uses bits up to ``1 << 11``; ``sources.flags`` is a
+#: smallint, so ``1 << 14`` is the highest free bit): the source lies in a
+#: bright reference source's footprint
+#: (:mod:`rapidpipe.science.difference.metrics`). Informational.
+SOURCE_FLAG_BRIGHT_FOOTPRINT = 1 << 14
+#: The ``sources.flags`` bits that do not reject a source: a source with no
+#: other bit set is associated and alerted as ``flags = 0`` ones are, its
+#: flag carried into the packet's ``psfFitFlags``. Every eligibility
+#: predicate reads this one mask (``flags & ~INFORMATIONAL_SOURCE_FLAGS = 0``).
+INFORMATIONAL_SOURCE_FLAGS = SOURCE_FLAG_BRIGHT_FOOTPRINT
+
+
 def catalog_outcome_bit(differencer: str, sign: str) -> int:
     """The mask value (``2**bit``) for no Photutils catalog on (differencer, sign)."""
     try:
