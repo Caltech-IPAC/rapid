@@ -4034,6 +4034,140 @@ would have caught the finding. One step per task.
    `unknown settings key 'intake.unsinged'` before any connection, and no
    run is written.
 
+2. **The DQ mask at intake (PR 343, merged `f948dbf7`).** Commissioning
+   #238's rule in `build_fits_file`: where `DQ & dq_mask_bits` is nonzero,
+   `SCI`, `ERR` and `VAR_*` are NaN, `DQ` is written unchanged, and each
+   masked HDU carries `DQMASK` and `NDQMASK`. `[intake] dq_mask_bits`
+   defaults to `0` (dev: nothing masked); the HLWAS overlay sets
+   `0x2110C01` (#238's `0x2110C03` without SATURATED). The intake manifest
+   records `dq` (`mask_bits`, and the science image's `nan_input`,
+   `masked`, `nan_output`) and `metrics.masked_fraction`.
+
+   The image and its revision (build 23 s, deploy 74 s):
+
+   ```sh
+   env -u TMPDIR containers/rapid-pipeline/build-rebuild.sh f948dbf7140a897da1e4ca293a598b17b6399738 --tag rebuild-f948dbf7140a897da1e4ca293a598b17b6399738
+   RELEASE_TAG=rebuild-f948dbf7140a897da1e4ca293a598b17b6399738 RELEASE_IMAGE_DIGEST=sha256:106ed00f… cloudformation/release-hooks/deploy
+   ```
+
+   Check, held: **`rapid-rebuild:43`** (and `rapid-rebuild-production:34`),
+   image `sha256:106ed00f…`, read back with `describe-job-definitions`.
+
+   The dataset `r00342-fx-dq` and its live run, the step 1 recipe:
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision f948dbf7140a897da1e4ca293a598b17b6399738 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-fx-dq
+   rp official change --group live.json ...      # run 41 live for HLWAS r00342-fx-dq
+   rp job local --run 41 --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00342-fx-dq", "version": "DR3", "path": "gaia-dr3-hlwas-r00342-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "r00342-fx-dq", "name": "gaia-r00342-fx-dq", "version": "DR3"}, "binding": null}]'
+   ```
+
+   Check, held: run **41**, `dq_mask_bits` 34671617 (`0x2110C01`) in its
+   body, live (group 18432); Gaia job **19806** published.
+
+   The proof samples passes 1 to 4 (the reference's three frames and one
+   differenced epoch). The loop has no pass selection, so a wrapper kept
+   beside the brief replaces its one listing function, `loop.list_stems`,
+   with one that drops stems of pass 5 and later, and hands the arguments
+   to the CLI unchanged:
+
+   ```sh
+   MAX_PASS=4 timeout 5400 $PY loop-passes.py loop --run 41 --filters F146 --scas 8 --pointings 001_0001 --job-definition rapid-rebuild:43
+   ```
+
+   - It drained in **20.2 min** (00:29:50 to 00:50:01 UTC, 11 passes), exit 0, no
+     job failed: psf **19807**, intakes **19808 to 19811** (passes 1 to
+     4), reference **19812** (exactly three frames), difference **19821**
+     (pass 4), associate **19826**, packet **19828** (194 packets, produced and stamped).
+   - **The intake's FITS** (pass 4, job 19811), checked against its own
+     ASDF by an independent read: the file's own NaN **1,281** (1,278 of
+     them DO_NOT_USE), masked **6,904**, their union 6,904, and `SCI`'s
+     NaN exactly that union; `DQMASK` `0x2110c01` and `NDQMASK` 6904 on
+     `SCI`, `ERR` and `VAR_POISSON` (the file's only `VAR_*`), NaN at every
+     masked pixel of each; `DQ` bit-identical to the ASDF's and without the
+     cards. The manifests (`nan_input` / `masked` / `nan_output`): pass 1
+     1,279 / 6,903 / 6,903, pass 2 1,282 / 6,904 / 6,904, pass 3 1,276 /
+     6,904 / 6,906, pass 4 1,281 / 6,904 / 6,904; **masked fraction
+     0.041%** (6,904 of 16,711,744). Every native NaN but pass 3's two is
+     already under the mask.
+   - **The reference** (job 19812) against run 17's unmasked reference 2454,
+     the same three frames, over the whole 7000 x 7000 mosaic (the ledger's
+     3000 px test region is not recorded; the whole mosaic contains it):
+
+     | | run 17, 2454 (unmasked) | run 41, 19812 (masked) |
+     |---|---|---|
+     | `gmin` / `gmax` (manifest, DN/s) | -66,520 / 26,925 | **-88.5 / 9,135** |
+     | pixels below -1000 DN/s | 24 | **0** |
+     | pixels above 1000 DN/s | 268 | 225 |
+     | of them in a star (a > 50 DN/s blob of 25 px or more) | 220 | 220 |
+     | of them in a smaller blob | 48 (23 blobs of 3 to 4 px) | 5 (4 blobs of 16 to 21 px) |
+     | `nsexcatsources` | 4,567 | 4,240 |
+     | NaN pixels | 33,003,245 | 33,005,293 |
+
+     The defects baked into the reference are gone: no pixel below -1000,
+     no blob of 3 to 4 px above 1000 DN/s (the fixes ledger's "isolated"
+     pixels, spread by the coadd's overlap weights onto two or three
+     neighbours, which is why a strict eight-neighbour rule finds none in
+     either mosaic). The 5 bright pixels left in small blobs have the same
+     value in both mosaics: unflagged compact stars. `gmax` is now a bright
+     star's core (a 737-pixel blob at (4966, 1874)); before it was a 4-pixel
+     defect at (4381, 3796).
+   - **Star flux unchanged**: the 30 brightest compact isolated stars of the
+     masked mosaic (DAOStarFinder at 8 sigma, sharpness 0.3 to 1.0, no
+     neighbour within 12 px, 40 px from an edge; peaks 70 to 7,424 DN/s),
+     5 px aperture less the 8 to 12 px annulus median: flux ratio masked
+     over unmasked **1.0000 for all 30** (to 1e-4), no NaN within 5 px of
+     any; SATURATED out of the mask keeps every core.
+   - **Coverage at the masked pixels**: pass 1's 6,903 masked pixels mapped
+     through the two WCSs onto the mosaic; at the 4,702 where the unmasked
+     mosaic had full coverage (3.000), the masked mosaic's is below 3 at
+     every one (median 1.036, max 2.307), and its 3 x 3 minimum is below
+     2.5 at all 4,702 and below 2 at 4,581: a coverage threshold near 2.5
+     would blank them, as the ledger said.
+   - **The pass 4 difference** (job 19821) against run 17's 2455, sources
+     with a mask bit within a 3 x 3 / 7 x 7 box of their fit position, on
+     pass 4's own DQ (the ledger's measurement, reproduced exactly on
+     2455):
+
+     | | 2455 (unmasked) | 19821 (masked) |
+     |---|---|---|
+     | candidates before the cap | 1,035 | **907** |
+     | `sources` kept | 500 | 500 |
+     | above S/N 20 | 80 | **45** |
+     | #238's mask bit within 3 x 3 / 7 x 7, all | 55 / 65 | **8 / 12** |
+     | the same, above S/N 20 | 26 / 34 | **5 / 8** |
+     | the HLWAS mask's bit within 3 x 3 / 7 x 7, all | 47 / 53 | **0 / 0** |
+     | the same, above S/N 20 | 21 / 26 | **0 / 0** |
+     | photutils detections, positive / negative | 1,041 / 426 | 910 / 282 |
+     | packets | 216 | **194** |
+     | packets above S/N 20 | 30 | **13** |
+
+     An observation, not a gate: no kept source touches a masked pixel, the
+     8 left near #238's bits touch SATURATED only (star cores, kept on
+     purpose), and the bright end falls from 80 to 45. The PSF mismatch,
+     73% of the sources on reference stars, is untouched by this step and
+     is task 3's; what remains above S/N 20 is read in task 5.
+
+   Measurements (Batch's created to started is the queue wait, started to
+   stopped the container; peak RSS is `job run`'s `peak_rss_kib`, self
+   plus children):
+
+   | stage | job | instance | queue wait s | container s | peak RSS MiB | before (part 9 step 1, run 17) |
+   |---|---|---|---|---|---|---|
+   | psf | 19807 | m6a.2xlarge | 121 | 11.7 | 302 | 186 s wait, 10.9 s, 302 MiB |
+   | intake | 19808 to 19811 | the same | 131 to 132 | 25.3 / 26.4 / 27.0 (min / median / max) | 911 | 37.6 s median, 940 MiB |
+   | reference | 19812 | the same | 5 | 46.1 | 1,388 | 45.7 s, 1,439 MiB |
+   | difference | 19821 | the same | 41 | 170 | 16,120 | 232.6 s median, 14,889 MiB (as part 9 recorded it) |
+
+   - The intake's conversion step: 8.4 to 12.0 s (fetch 0.9 to 1.1 s, gzip
+     5.5 to 5.6 s, limmag 3.7 to 4.3 s); the mask adds one boolean array
+     and one NaN count, not seen in the times. The brief's 21 s intake and
+     98 s reference befores are not part 9's figures; part 9's are the
+     comparison above.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
