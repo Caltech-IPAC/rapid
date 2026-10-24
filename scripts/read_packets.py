@@ -19,8 +19,11 @@ set (a ``packets_official`` job; ``--job`` narrows to some), it checks:
   index row's ``trigger_mjd``;
 - index: every ``packets_official`` row's ``(filename, byte_offset,
   byte_length)`` decodes, with the container's header, to the record of its
-  ``sid`` and ``aid`` at its ``trigger_mjd``, and its ``object_job`` and
-  ``source_job`` are ``input`` rows of the packet job (its recorded inputs).
+  ``sid`` and ``aid`` at its ``trigger_mjd``, its ``source_job`` is an
+  ``input`` row of the packet job (its recorded inputs), and its object
+  is one the trigger is a member of: the trigger's membership of
+  ``(object_job, aid)``, the difference job's (since 2026-10-24), or for
+  an earlier set, its object set among the recorded inputs.
 
 Usage::
 
@@ -115,6 +118,9 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
     inputs = {(r["product"], r["source_job"]) for r in _query(
         conn, "SELECT product, source_job FROM job_inputs WHERE job = %s AND kind = 'input'",
         (job,))}
+    member_of = {(r["object_job"], r["aid"], r["sid"]) for r in _query(
+        conn, "SELECT m.object_job, m.aid, m.sid FROM memberships m"
+              " WHERE m.job = (SELECT source_job FROM packets WHERE job = %s LIMIT 1)", (job,))}
     (settings,) = _query(conn, "SELECT r.settings FROM jobs j JOIN runs r ON r.id = j.run"
                                " WHERE j.id = %s", (job,))
     size = 2 * int(settings["settings"]["packet"]["stamp_half_width"]) + 1
@@ -170,9 +176,12 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
                 row["sid"], row["aid"], row["trigger_mjd"]):
             failures.append(f"{where}: locator decodes to source {record['diaSourceId']} object"
                             f" {record['diaObject']['diaObjectId']} at {source['midpointMjd']}")
-        for product, source_job in (("objects", row["object_job"]), ("sources", row["source_job"])):
-            if (product, source_job) not in inputs:
-                failures.append(f"{where}: {product} job {source_job} is not a recorded input")
+        if ("sources", row["source_job"]) not in inputs:
+            failures.append(f"{where}: sources job {row['source_job']} is not a recorded input")
+        if (("objects", row["object_job"]) not in inputs
+                and (row["object_job"], row["aid"], row["sid"]) not in member_of):
+            failures.append(f"{where}: object ({row['object_job']}, {row['aid']}) is neither a recorded"
+                            " input nor one its trigger is a member of")
 
         for name in CUTOUTS:
             col = int(round(source["x"] + 1.0)) - 1
