@@ -33,6 +33,14 @@ same for every SCA of the exposure as `dev`'s one ``Exposures`` row per
 exposure is. The manifest records the file's provenance: its observation
 identifiers, romancal's version and the Gaia fit's summary.
 
+``[intake] reader`` names the input format. ``soc-l2`` (the default,
+`dev`'s) is the above. ``openuniverse`` reads OpenUniverse 2024's
+``<source_root><filter>/<pointing>/<file>_simple.asdf``
+(:mod:`rapidpipe.science.intake_openuniverse`): the stem is
+``roman_<survey>_<filter>_<pointing>_wfi<sca>``, the file's own filter and
+detector must agree with it, and the ``expid`` is the pointing, the index
+into the survey's observing sequence (one exposure per pointing).
+
 ``[intake] dq_mask_bits`` is commissioning #238's DQ mask (0, `dev`'s
 behaviour, masks nothing): the conversion sets ``SCI``, ``ERR`` and
 ``VAR_*`` NaN where ``DQ`` has any of the bits. The manifest's ``dq``
@@ -83,6 +91,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.science import intake_openuniverse
 from rapidpipe.science.astrometry import gaia_offset
 from rapidpipe.science.intake import asdf_to_fits, gzip_file
 from rapidpipe.science.limmag import limiting_magnitude
@@ -128,7 +137,10 @@ def run(job: JobContext) -> None:
     stem = job.scope["file"]
     if job.scope["dataset"] != job.dataset:
         raise ValueError(f"scope dataset {job.scope['dataset']!r} is not the run's {job.dataset!r}")
-    ids = parse_stem(stem)
+    reader = settings["reader"]
+    if reader not in READERS:
+        raise ValueError(f"[intake] reader {reader!r} is not one of {sorted(READERS)}")
+    ids = READERS[reader]["parse_stem"](stem)
     timings: dict[str, float] = {}
     mark = time.monotonic()
 
@@ -138,7 +150,7 @@ def run(job: JobContext) -> None:
         timings[step] = round(now - mark, 3)
         mark = now
 
-    source = settings["source_root"].rstrip("/") + "/" + stem + "_cal.asdf"
+    source = settings["source_root"].rstrip("/") + "/" + READERS[reader]["source_key"](stem)
     asdf_path = get(source, unsigned=bool(settings["unsigned"]))
     lap("fetch")
 
@@ -150,7 +162,7 @@ def run(job: JobContext) -> None:
             distortion = fetch_reference(job.settings["psf"]["crds_server"],
                                          ref_file(asdf_path, "distortion"), Path(scratch))
             lap("distortion")
-        conversion = asdf_to_fits(
+        conversion = READERS[reader]["convert"](
             asdf_path, fits_path, distortion=distortion, sip_degree=int(settings["sip_degree"]),
             sip_max_pix_error=float(settings["sip_max_pix_error"]),
             nominal_zptmag=settings["nominal_zptmag"], swname="rapidpipe intake",
@@ -168,7 +180,8 @@ def run(job: JobContext) -> None:
             n_pixels = int(hdul[1].data.size)
             nan_output = int(np.count_nonzero(np.isnan(hdul[1].data)))
             gaia = _gaia_metrics(job, hdul[1].data, WCS(header))
-        _check_key(stem, ids, header)
+        if reader == "soc-l2":
+            _check_key(stem, ids, header)  # the openuniverse reader checks its file's own in the conversion
         fid = FIDS[header["FILTER"]]
         psf = _science_psf(job, fid, ids["sca"])
         _check_epsf(stem, primary, psf)
@@ -178,7 +191,7 @@ def run(job: JobContext) -> None:
         lap("limmag" if gaia is None else "limmag_gaia")
         fits_bytes = fits_path.stat().st_size
 
-    key = {"dataset": job.dataset, "expid": expid(ids), "sca": ids["sca"], "fid": fid}
+    key = {"dataset": job.dataset, "expid": READERS[reader]["expid"](ids), "sca": ids["sca"], "fid": fid}
     l2file = _l2file(job, header, key, fits_name, limmag)
     dateobs = datetime.fromisoformat(header["DATE-OBS"])
     exposure = {"dataset": job.dataset, "expid": key["expid"], "dateobs": dateobs,
@@ -212,6 +225,18 @@ def run(job: JobContext) -> None:
                     "fits_bytes": fits_bytes, "fits_gz_bytes": (job.path / fits_name).stat().st_size,
                     "timings_s": timings})
     log.info("intake %s: %s", stem, timings)
+
+
+#: Each ``[intake] reader``: its stem parser, the file's path under the source root, its
+#: conversion and the exposure's integer id.
+READERS = {
+    "soc-l2": {"parse_stem": parse_stem, "source_key": lambda stem: stem + "_cal.asdf",
+               "convert": asdf_to_fits, "expid": expid},
+    "openuniverse": {"parse_stem": intake_openuniverse.parse_stem,
+                     "source_key": intake_openuniverse.source_key,
+                     "convert": intake_openuniverse.simple_model_to_fits,
+                     "expid": lambda ids: ids["pointing"]},
+}
 
 
 def ref_file(path: Path, reftype: str) -> str:

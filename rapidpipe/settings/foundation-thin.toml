@@ -22,6 +22,11 @@ limmag_maxiters = 10
 # run's: `source_root` in the overlay given at `run create`, never here.
 # Read the source root anonymously (a public bucket).
 unsigned = false
+# The input format: "soc-l2", the SOC's L2 `<stem>_cal.asdf` read as a Roman
+# data model (dev's ingestL2Files.py, the only format dev reads), or
+# "openuniverse", OpenUniverse 2024's `<filter>/<pointing>/<stem>_simple.asdf`
+# (rapidpipe.science.intake_openuniverse).
+reader = "soc-l2"
 # dev's ingestL2Files.py: SIPDISTORTIONDEGREE's default, to_fits_sip's
 # max_pix_error, L2GZIPLEVEL's default (PR 291).
 sip_degree = 5

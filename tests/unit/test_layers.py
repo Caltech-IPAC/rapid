@@ -124,8 +124,10 @@ def test_the_hlwas_overlay_resolves_to_the_hand_built_body():
     assert record["settings_hash"] == body_hash(hand_built)
 
 
-def test_the_hlwas_overlay_holds_only_keys_that_differ_from_the_base():
-    base, overlay = tomllib.loads(SHIPPED.read_text()), tomllib.loads(HLWAS.read_text())
+@pytest.mark.parametrize("path", sorted((SETTINGS / "datasets").glob("*.toml")), ids=lambda p: p.name)
+def test_every_dataset_overlay_resolves_and_holds_only_keys_that_differ_from_the_base(path):
+    resolve(SHIPPED, path)  # a key the base lacks is refused
+    base, overlay = tomllib.loads(SHIPPED.read_text()), tomllib.loads(path.read_text())
 
     def differing(upper, lower):
         for key, value in upper.items():

@@ -1,0 +1,39 @@
+# The overlay for OpenUniverse 2024's Roman time-domain survey (roman_imsim
+# `simple_model` ASDF files, one per filter, pointing and SCA), given at
+# `rapidpipe run create --overlay`. It holds only the keys whose value
+# differs from the shipped defaults (foundation-thin.toml, dev's values) for
+# this dataset, each with the measurement that earned it (runbook part 11
+# step 2, LEDGER-openuniverse). `intake.source_root` (the `simple_model/`
+# prefix) comes by `--set` at `run create`.
+
+[intake]
+# The files sit in a public bucket, read anonymously.
+unsigned = true
+# Not the SOC's L2: a plain ASDF tree, counts per exposure, a one-based gWCS
+# and the truth tables in the file (rapidpipe.science.intake_openuniverse).
+reader = "openuniverse"
+# surveys: (-2, 'OpenUniverse', 'SIM').
+program_id = -2
+# GalSim's images are one-based and the file's gWCS takes its pixels: R062
+# pointing 10032 SCA 17's 69 bright stars sit at (-1.16, -1.06) px from the
+# file's WCS (zero-based centroids, scatter 0.08 and 0.04 px), the truth
+# index's x - 1, y - 1 at 0.000 px; after [-1, -1], H158 pointing 1012 SCA 4's
+# 124 stars sit at (-0.004, -0.010) px. The convention, not a fit: R062's
+# residual (-0.16, -0.06) is that filter's and is recorded, not shifted.
+crpix_shift = [-1.0, -1.0]
+
+[intake.nominal_zptmag]
+# The file has no meta.photometry, and its meta.zptmag is 2.5 log10(37570 cm^2
+# x exp_time), the catalog's photon flux to counts, not an AB zero point
+# (exact over the 10,487 galaxies of R062 pointing 10032 SCA 17). These are
+# galsim.roman 2.8.5's bandpass AB zero points (photons/s/cm^2) plus 2.5
+# log10(37570 cm^2): the AB magnitude of 1 count per second, gain 1. The
+# truth index's `mag` column is the bandpass zero point minus 2.5 log10(counts).
+F062 = 26.7339
+F087 = 26.4014
+F106 = 26.4607
+F129 = 26.4767
+F146 = 27.7072
+F158 = 26.5113
+F184 = 26.0591
+F213 = 26.0164

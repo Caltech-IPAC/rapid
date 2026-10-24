@@ -52,7 +52,7 @@ STEM = "r0034201001001004001_0001_wfi08_f146"
 N = 64
 EXPTIME = 294.1
 EPSF = "roman_wfi_epsf_0276.asdf"
-SETTINGS = {"intake": {"source_root": None, "unsigned": False, "sip_degree": 5,
+SETTINGS = {"intake": {"source_root": None, "unsigned": False, "reader": "soc-l2", "sip_degree": 5,
                        "sip_max_pix_error": 0.1, "gzip_level": 1, "program_id": -1,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10,
                        "nominal_zptmag": {"F146": 27.5}, "dq_mask_bits": 0,
