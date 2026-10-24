@@ -18,7 +18,8 @@ re-centred on the central pixel, with what it measured:
 
 - stars: ``DAOStarFinder`` at :data:`THRESHOLD_SIGMA` times the clipped
   standard deviation of the usable pixels, kept when the peak is in
-  :data:`PEAK_RANGE`, the sharpness in :data:`SHARPNESS_RANGE`, both
+  at least :data:`PEAK_MIN_SIGMA` times that deviation and at most
+  :data:`PEAK_MAX`, the sharpness in :data:`SHARPNESS_RANGE`, both
   roundnesses within :data:`ROUNDNESS_MAX`, no other detection within
   :data:`ISOLATION_PX`, every pixel of the star's stamp usable, and its own
   width between the science PSF's and that plus :data:`WIDTH_EXCESS_MAX_PX`;
@@ -72,8 +73,12 @@ import numpy as np
 THRESHOLD_SIGMA = 8.0
 #: The finder's kernel FWHM, px: the resampled reference's star sigma 1.10 x 2.355.
 FWHM_PX = 2.6
-#: Peaks kept, in the image's units (DN/s for an awaicgen reference): faint stars are noisy, bright ones near saturation.
-PEAK_RANGE = (20.0, 3500.0)
+#: Peaks kept: at least this many clipped standard deviations of the usable pixels (faint stars
+#: are noisy), at most this, in the image's units (DN/s for an awaicgen reference: bright ones
+#: near saturation). The floor was 20 DN/s, set on F146, where it is 886 sigma; in F184 and F213
+#: (r00342, SCA 8) it left 8 and 6 stars of 2,100 and 683 detections and failed the job (fixes
+#: task 5, runs 51 and 52); at 400 sigma their mosaics keep 49 and 20, F146's 64.
+PEAK_MIN_SIGMA, PEAK_MAX = 400.0, 3500.0
 #: DAOStarFinder's sharpness range and roundness magnitude kept (its defaults). On a resampled
 #: image the stars' sharpness spans 0.4 to 1.0 with the sub-pixel phase, overlapping defect
 #: pixels and galaxies, so these are loose and the width cut below does the separating.
@@ -179,7 +184,7 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
 
     shaped = ((sharp >= SHARPNESS_RANGE[0]) & (sharp <= SHARPNESS_RANGE[1])
               & (np.abs(round1) <= ROUNDNESS_MAX) & (np.abs(round2) <= ROUNDNESS_MAX))
-    keep = (peak >= PEAK_RANGE[0]) & (peak <= PEAK_RANGE[1]) & shaped
+    keep = (peak >= PEAK_MIN_SIGMA * std) & (peak <= PEAK_MAX) & shaped
     keep &= _isolated(x, y, ISOLATION_PX)
     keep &= _stamp_usable(usable, x, y, STAMP_PX)
     half = STAMP_PX // 2
