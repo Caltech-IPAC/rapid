@@ -92,6 +92,15 @@ ROUNDNESS_MAX = 1.0
 WIDTH_EXCESS_MAX_PX = 0.4
 #: No other detection within this distance, px: a neighbour's wings stay out of the stamp.
 ISOLATION_PX = 14.0
+#: The crowded variant (``crowded=True``, ``[difference] reference_psf = "measured-crowded"``),
+#: for a confusion-limited field, where the clipped deviation is crowding, not noise (GBTDS
+#: r00340's bulge: 14.8 DN/s, so 400 of it sits above :data:`PEAK_MAX`), and nearly every star
+#: has a detection within :data:`ISOLATION_PX`: the peak floor is the peak of the
+#: :data:`CROWDED_BRIGHTEST`-th brightest detection under :data:`PEAK_MAX`, and a star is
+#: isolated when no other detection within :data:`CROWDED_ISOLATION_PX` peaks above
+#: :data:`CROWDED_CONTRAST` times its own peak.
+CROWDED_BRIGHTEST = 300
+CROWDED_ISOLATION_PX, CROWDED_CONTRAST = 6.0, 0.1
 #: The builder's oversampling and the side of each star's stamp, px.
 OVERSAMPLE, STAMP_PX = 4, 31
 #: Stars needed and stars used.
@@ -152,13 +161,15 @@ def moments(stamp: np.ndarray, radius: float = MOMENT_RADIUS_PX) -> tuple[float,
     return x - cx, y - cy, sigma
 
 
-def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> ReferencePsf:
+def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray,
+            crowded: bool = False) -> ReferencePsf:
     """The reference PSF of ``image`` from its stars.
 
     ``usable`` marks the pixels it may read; ``science_psf`` is the science
     PSF's stamp, an odd square (:data:`SIZE` shipped): its :func:`moments`
     sigma is the floor of a star's width, its wings are the stamp's and its
-    side is the stamp's.
+    side is the stamp's. ``crowded`` takes the peak floor and the isolation
+    rule of the crowded variant (:data:`CROWDED_BRIGHTEST`).
     """
     size = science_psf.shape[0]
     if science_psf.shape != (size, size) or size % 2 == 0 or size < STAMP_PX:
@@ -191,8 +202,14 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
 
     shaped = ((sharp >= SHARPNESS_RANGE[0]) & (sharp <= SHARPNESS_RANGE[1])
               & (np.abs(round1) <= ROUNDNESS_MAX) & (np.abs(round2) <= ROUNDNESS_MAX))
-    keep = (peak >= PEAK_MIN_SIGMA * std) & (peak <= PEAK_MAX) & shaped
-    keep &= _isolated(x, y, ISOLATION_PX)
+    if crowded:
+        under = np.sort(peak[shaped & (peak <= PEAK_MAX)])[::-1]
+        floor = under[min(CROWDED_BRIGHTEST, len(under)) - 1] if len(under) else np.inf
+        keep = (peak >= floor) & (peak <= PEAK_MAX) & shaped
+        keep &= _contrast_isolated(x, y, peak, CROWDED_ISOLATION_PX, CROWDED_CONTRAST)
+    else:
+        keep = (peak >= PEAK_MIN_SIGMA * std) & (peak <= PEAK_MAX) & shaped
+        keep &= _isolated(x, y, ISOLATION_PX)
     keep &= _stamp_usable(usable, x, y, STAMP_PX)
     half = STAMP_PX // 2
     width = np.full(len(x), np.nan)
@@ -236,6 +253,20 @@ def _isolated(x: np.ndarray, y: np.ndarray, radius: float) -> np.ndarray:
     pairs = cKDTree(np.column_stack([x, y])).query_pairs(radius, output_type="ndarray")
     crowded = np.zeros(len(x), dtype=bool)
     crowded[pairs.ravel()] = True
+    return ~crowded
+
+
+def _contrast_isolated(x: np.ndarray, y: np.ndarray, peak: np.ndarray, radius: float,
+                       contrast: float) -> np.ndarray:
+    """True for each point with no other point within ``radius`` peaking above ``contrast`` times its peak."""
+    from scipy.spatial import cKDTree
+
+    pairs = cKDTree(np.column_stack([x, y])).query_pairs(radius, output_type="ndarray")
+    crowded = np.zeros(len(x), dtype=bool)
+    if len(pairs):
+        i, j = pairs[:, 0], pairs[:, 1]
+        crowded[i[peak[j] > contrast * peak[i]]] = True
+        crowded[j[peak[i] > contrast * peak[j]]] = True
     return ~crowded
 
 

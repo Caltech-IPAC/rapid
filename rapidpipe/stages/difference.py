@@ -898,12 +898,13 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
                                    star_sigma_px=float("nan"))
         return ({"mode": "science", "seconds": round(time.perf_counter() - start, 3)},
                 {"sci_psf_sigma_px": sci[2]}, none)
-    if mode != "measured":
-        raise ValueError(f"[difference] reference_psf is {mode!r}, not 'measured' or 'science'")
+    if mode not in ("measured", "measured-crowded"):
+        raise ValueError(f"[difference] reference_psf is {mode!r}, not 'measured', "
+                         "'measured-crowded' or 'science'")
     image = fits.getdata(reference, 0)
     usable = fits.getdata(coverage, 0) >= thresh
     try:
-        measured = kit.reference_psf(image, usable, science)
+        measured = kit.reference_psf(image, usable, science, crowded=mode == "measured-crowded")
     except refpsf.TooFewStars as exc:
         raise CommandExit(int(ExitCode.INPUT_REJECTED), str(exc)) from exc
     header = fits.Header()
@@ -915,7 +916,7 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
     seconds = round(time.perf_counter() - start, 3)
     logger.info("reference PSF: %d stars of %d detections, sigma %.3f px (science %.3f), %.1f s",
                 measured.stars, measured.detections, measured.sigma_px, sci[2], seconds)
-    record = {"mode": "measured", "stars": measured.stars, "detections": measured.detections,
+    record = {"mode": mode, "stars": measured.stars, "detections": measured.detections,
               "passed_cuts": measured.passed_cuts, "seconds": seconds,
               "centroid_px": list(measured.centroid_px), "science_centroid_px": [sci[0], sci[1]]}
     metrics = {"refpsf_sigma_px": measured.sigma_px, "refpsf_stars": measured.stars,
