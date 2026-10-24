@@ -152,3 +152,12 @@ def test_the_ring_count_takes_bright_sources_6_to_20_px_from_a_top_star():
     flux = np.array([300.0, 300.0, 300.0, 10.0])
     assert metrics.ring_count(x, y, flux, np.ones(4), found) == 1
     assert metrics.ring_count(x, y, flux, np.ones(4), np.empty((0, 3))) is None
+
+
+def test_the_star_sigma_is_the_stars_own_width():
+    image = gaussians(STARS, 1.3)
+    assert metrics.star_sigma(image, np.array(STARS)) == pytest.approx(
+        metrics.star_sigma(gaussians([(200.3, 200.6)], 1.3), np.array([(200.3, 200.6)])), abs=1e-6)
+    assert metrics.star_sigma(image, np.array(STARS)) > metrics.star_sigma(
+        gaussians(STARS, 1.0), np.array(STARS))
+    assert metrics.star_sigma(image, np.empty((0, 2))) is None

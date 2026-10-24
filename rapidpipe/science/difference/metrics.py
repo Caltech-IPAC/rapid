@@ -43,6 +43,9 @@ grid, 0-based pixels.
   counted as ``n_in_bright_footprint`` (all kept sources) and
   ``bright_footprint_fraction`` (of the sources above S/N
   :data:`BRIGHT_SNR`); flag, not fix (Ben, 2026-10-24).
+- :func:`star_sigma`: the median second-moment sigma of stars on an image
+  (``sci_star_sigma_px``, the registration stars on the science image,
+  beside the ePSF's ``sci_psf_sigma_px``).
 - :func:`near_bright_count`: ``n_sources_near_bright_px``, the uncapped
   PSF-fit sources within :data:`NEAR_BRIGHT_PX` of a reference pixel above
   :data:`BRIGHT_PIXEL_LEVEL` (the fixes' task 4 measure: 28 on run 44
@@ -219,6 +222,16 @@ def footprint_counts(inside: np.ndarray, flux: np.ndarray, flux_err: np.ndarray)
     if bright.any():
         out["bright_footprint_fraction"] = float(np.mean(inside[bright]))
     return out
+
+
+def star_sigma(image: np.ndarray, stars: np.ndarray) -> float | None:
+    """The median second-moment sigma of ``image``'s stars at ``stars`` rows ``(x, y)``; ``None`` without any."""
+    ny, nx = image.shape
+    h = _STAMP_HALF
+    widths = [_sigma(_stamp(image, x, y)) for x, y in stars
+              if h <= round(x) < nx - h and h <= round(y) < ny - h]
+    widths = [w for w in widths if np.isfinite(w)]
+    return float(np.median(widths)) if widths else None
 
 
 def near_bright_count(x: np.ndarray, y: np.ndarray, reference: np.ndarray) -> int:

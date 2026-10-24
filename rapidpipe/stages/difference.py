@@ -89,7 +89,11 @@ absent when the image has too few full blocks,
 :mod:`rapidpipe.science.difference.metrics`' registration offset, core
 and ring fractions, usable fraction and source counts, ``n_candidates``
 before the cap and ``n_sources`` after it, the bright footprint's
-``n_in_bright_footprint`` and ``bright_footprint_fraction``, and the
+``n_in_bright_footprint`` and ``bright_footprint_fraction``; ``scalefacref``,
+the gain match's scale applied to the reference; ``sci_star_sigma_px``, the
+median second-moment sigma of the registration stars on the
+background-subtracted science image, and ``sci_star_psf_sigma_ratio``, it
+over ``sci_psf_sigma_px``; and the
 uncapped catalog's ``n_sources_near_bright_px`` and
 ``n_sources_ring_snr_gt20``, defined there). The
 residual stars' positions sit beside them as ``difference.residual_stars``
@@ -561,10 +565,18 @@ def run(job: JobContext) -> None:
     refpsf_record, metrics, measured_psf = _measure_reference_psf(
         kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
         w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME))
-    # Registration, before the subpixel offset corrects it; the reference catalog's sky positions.
+    # Registration, before the subpixel offset corrects it; the science stars' own width beside
+    # the ePSF's; the reference catalog's sky positions.
+    science_pixels = fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float)
     metrics.update(quality.registration(
-        fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float),
-        fits.getdata(w(output_resampled_reference_image), 0).astype(float), measured_psf.stars_xy))
+        science_pixels, fits.getdata(w(output_resampled_reference_image), 0).astype(float),
+        measured_psf.stars_xy))
+    sci_star_sigma = quality.star_sigma(science_pixels, measured_psf.stars_xy)
+    if sci_star_sigma is not None:
+        metrics["sci_star_sigma_px"] = sci_star_sigma
+        if metrics["sci_psf_sigma_px"] > 0:
+            metrics["sci_star_psf_sigma_ratio"] = sci_star_sigma / metrics["sci_psf_sigma_px"]
+    del science_pixels
     reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
         w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", REFERENCE_CATALOG_COLUMNS)
 
@@ -589,6 +601,7 @@ def run(job: JobContext) -> None:
     logger.info("scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = %s %s %s %s %s",
                 scalefac, dxrmsfin_measured, dyrmsfin_measured, dxmedianfin, dymedianfin)
     scalefacref = 1. / scalefac
+    metrics["scalefacref"] = float(scalefacref)
 
     output_resampled_gainmatched_reference_image = output_resampled_reference_image.replace(
         ".fits", "_gainmatched.fits")
