@@ -129,7 +129,9 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     leaves the job ``failed`` and the exception propagates. A stage that
     stops with a named reason raises :class:`~rapidpipe.exitcodes.CommandExit`:
     the job row records its code and its message in ``refusal``; any other
-    exception records 70.
+    exception records 70 and its type and message in ``refusal`` (a
+    :class:`~rapidpipe.science.difference.tools.ToolFailed` names the tool,
+    its exit code and its last output lines).
     """
     with connect() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -184,7 +186,7 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
         code = exc.code if named else int(ExitCode.STAGE_ERROR)
         with connect() as conn:
             _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s, refusal = %s",
-                    (code, str(exc) if named else None))
+                    (code, str(exc) if named else f"{type(exc).__name__}: {exc}"))
             _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "failed", "exit_code": code})
         raise
     return {**result, "peak_rss_kib": _peak_rss_kib()}

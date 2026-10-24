@@ -139,7 +139,7 @@ class FakeReferenceToolRunner:
     def tools_called(self) -> list[str]:
         return ["sextractor" if a[0].endswith("sex") else Path(a[0]).name for a in self.calls]
 
-    def run(self, args, *, cwd: Path) -> int:
+    def run(self, args, *, cwd: Path, check: bool = True) -> int:
         args = [str(a) for a in args]
         self.calls.append(args)
         cwd = Path(cwd)

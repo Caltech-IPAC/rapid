@@ -34,6 +34,7 @@ from astropy.io import fits
 
 from rapidpipe.science.difference.psfcat import PsfCatalogResult
 from rapidpipe.science.difference.refpsf import ReferencePsf, TooFewStars
+from rapidpipe.science.difference.tools import ToolFailed
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 #: The env var an operator can point at an arbitrary cdf/ checkout, read
@@ -260,7 +261,7 @@ class FakeToolRunner:
                 names.append(args[0])
         return names + ["sfft"] * len(self.shell_calls)
 
-    def run(self, args, *, cwd: Path) -> int:
+    def run(self, args, *, cwd: Path, check: bool = True) -> int:
         args = [str(a) for a in args]
         self.calls.append(args)
         cwd = Path(cwd)
@@ -276,9 +277,11 @@ class FakeToolRunner:
             raise AssertionError(f"unexpected tool call {args!r}")
         return 0
 
-    def run_shell(self, command: str, *, cwd: Path) -> int:
+    def run_shell(self, command: str, *, cwd: Path, check: bool = True) -> int:
         self.shell_calls.append(command)
         if self.sfft_exit_code != 0:
+            if check:
+                raise ToolFailed("sfft", self.sfft_exit_code, "")
             return self.sfft_exit_code
         # No activation: the whole command is the sfft call. With
         # activation, dev's "source ... && <sfft cmd> && deactivate".
