@@ -10,6 +10,12 @@ header and the manifest carry the reference's name; a reference for
 another detector or filter fails before a manifest. With ``epsf_cache``,
 the reference is read from the cache by its name, and from CRDS only when
 the cache lacks it, the manifest saying which. The fetch is faked.
+
+With ``[intake] reader = "openuniverse"``, the stem's filter and SCA name
+the stamp galsim.roman draws: no file is read and nothing is fetched, the
+row's fid and file name are the filter's, and the header and manifest name
+galsim; galsim's own stamp (when galsim imports) is ``size x size`` with
+unit sum. The draw is faked in the plumbing test.
 """
 
 from __future__ import annotations
@@ -141,3 +147,39 @@ def test_the_epsf_cache_is_read_first_and_crds_only_for_a_name_it_lacks(tmp_path
     (cache / EPSF).unlink()
     prefix = run_psf(tmp_path / "miss", source, monkeypatch, epsf_cache=cache.as_uri())
     assert json.loads((prefix / "manifest.json").read_text())["psf"]["fetched_from"].startswith("https://crds")
+
+
+OU_STEM = "roman_tds_H158_1012_wfi10"
+
+
+def test_an_openuniverse_stem_names_the_galsim_stamp_and_reads_nothing(tmp_path, monkeypatch):
+    drawn = []
+
+    def fake_stamp(filter_name, sca, size):
+        drawn.append((filter_name, sca, size))
+        stamp = np.zeros((size, size))
+        stamp[size // 2, size // 2] = 1.0
+        return stamp, {"source": "galsim.roman 0.0 getPSF", "wavelength_nm": 1579.1, "size": size}
+
+    monkeypatch.setattr(psf, "galsim_stamp", fake_stamp)
+    monkeypatch.setattr(psf, "fetch", lambda url, target: pytest.fail("fetched " + url))
+    settings = {"intake": {"source_root": (tmp_path / "absent").as_uri() + "/", "unsigned": True,
+                           "reader": "openuniverse"},
+                "psf": {"crds_server": "https://crds.example/", "size": 15, "epsf_cache": ""}}
+    job = JobContext(job=1, run=1, stage="psf", scope={"dataset": "ou-tds2", "file": OU_STEM},
+                     survey="HLTDS", dataset="ou-tds2", settings=settings, inputs=[], attempt=1,
+                     prefix=tmp_path.as_uri() + "/", connect=lambda: contextlib.nullcontext(None))
+    psf.run(job)
+    assert drawn == [("H158", 10, 15)]
+    rows = pq.read_table(tmp_path / "psfs.parquet").to_pylist()
+    assert [(r["kind"], r["fid"], r["sca"]) for r in rows] == [("science", psf.FIDS["H158"], 10)]
+    header = fits.getheader(tmp_path / "sciimage_psf_f158_sca10.fits")
+    assert header["PSFSRC"].startswith("galsim.roman") and header["FILTER"] == "F158"
+    assert json.loads((tmp_path / "manifest.json").read_text())["psf"]["source"].startswith("galsim.roman")
+
+
+def test_galsims_stamp_is_the_size_asked_with_unit_sum():
+    pytest.importorskip("galsim")
+    stamp, recorded = psf.galsim_stamp("H158", 10, 15)
+    assert stamp.shape == (15, 15) and stamp.sum() == pytest.approx(1.0, abs=1e-9)
+    assert 0.5 < recorded["flux_held"] < 1.0 and recorded["wavelength_nm"] > 1000

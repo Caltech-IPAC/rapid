@@ -5844,10 +5844,141 @@ from in brackets):
   building it is a package install, so a docs task here cannot run the
   Sphinx build locally; CI is the only build (rapid_docs 98).
 
-## Part 12: the day, alert what is detected (2026-10-24)
+## Part 12: the day (2026-10-24)
 
-Brief `day-2026-10-24`: one step per task, numbered by task; a task's
-step lands when its task does, so the numbers can arrive out of order.
+Brief `day-2026-10-24` (plan v9 Part 7's pruned list): one step per task, numbered by task;
+a task's step lands when its task does, so the numbers can arrive out of order.
+
+6. **SCAs 7 and 9's low detection: area lost to masked pixels the
+   finder cannot see past (read-only diagnosis; no code, no setting
+   changed).** Part 11 step 9's 18-SCA table had SCAs 7 and 9 detecting
+   0.73 and 0.67 of the injected sources below AB 25 where SCA 8 detects
+   0.99. Read from run 72's rows and products only: the completeness
+   tables (`completeness.py`'s `truth`, part 11 step 9's `comp-72-18/` and
+   `comp-72/`), `job_metrics`, the references' inputs, and each pass 4
+   difference's masked image and resampled reference coverage from the
+   scratch bucket. Sample: `001_0001` F146 passes 4 to 6 (expids 4040101,
+   5040101, 6010101), 200 injected sources an image, the same positions
+   every epoch; the masks of pass 4 for the per-pixel reads.
+
+   **The mechanism.** The difference catalog's finder (`psfcat.py`,
+   photutils `DAOStarFinder`, dev's call) runs on the masked difference
+   with its NaNs in place, and a star with a NaN pixel within 4 px is not
+   found: on a synthetic star (photutils 3.0.0, the difference's finder
+   settings) it is lost with one NaN at 0 to 4 px, found from 5 px, and
+   found at every distance when the NaNs are passed as `mask=`. On run 72
+   (SCAs 7, 8 and 9, pass 4, below AB 25) every injected source 6 px or
+   more from a masked pixel is detected, 298 of 298; within 4 px, 0 of 62;
+   at 4 to 6 px, 8 of 23. A missed source has no candidate within 0.3"
+   at all (the nearest a median 9" away on SCA 7, 39" on SCA 9), so the 500-source cap
+   is not what drops it.
+
+   | | SCA 7 | SCA 8 | SCA 9 |
+   |---|---|---|---|
+   | detected below AB 25 (3 epochs) | 0.728 | 0.992 | 0.669 |
+   | the same 5 px or more from a masked pixel / within 5 px | 0.926 / 0.097 | 0.992 / none | 0.977 / 0.000 |
+   | difference masked (NaN) / area within 5 px of one | 0.0325 / 0.242 | 0.0006 / 0.013 | 0.2956 / 0.351 |
+   | `usable_fraction` | 0.968 | 0.999 | 0.704 |
+   | the field's reference built from | SCA 7's own passes 1 to 3 (field 5383348, job 21832) | SCA 8's own (field 5387158, job 20996) | **SCA 8's frames of `001_0002`**, passes 1 to 3 (field 5390959, job 20997) |
+   | reference coverage below 0.5 on the science grid | 0.0275 | 0.0004 | 0.2942 |
+   | science pixels masked by the overlay's `dq_mask_bits` | 0.0063 | | |
+   | registration dx / dy, px | -0.010 / +0.008 | -0.007 / +0.003 | **-0.068 / +0.131** |
+   | `sci_star_psf_sigma_ratio` / `refpsf_stars` | 1.038 / 68 | 1.024 / 65 | 1.035 / 48 |
+   | detection by magnitude (AB 21, 23, 25) | 0.79, 0.79, 0.46 | 1.00, 1.00, 1.00 | 0.71, 0.80, 0.69 |
+   | sets held by the gate | none | none (`001_0001`) | none |
+
+   Detection below AB 25 by quarter of the SCA (left, three epochs; the
+   top row is high y) beside the share of each quarter 5 px or more from
+   a masked pixel (right):
+
+   ```text
+   SCA 7                                       SCA 9
+   1.00 1.00 0.92 0.92 | 0.95 0.93 0.81 0.93    0.00 1.00 0.90 1.00 | 0.11 0.97 0.85 0.98
+   0.76 0.67 0.22 0.57 | 0.93 0.77 0.41 0.65    0.12 0.83 0.86 0.90 | 0.10 0.88 0.81 0.97
+   0.81 0.50 0.60 0.86 | 0.83 0.49 0.62 0.81    0.20 0.86 0.80 1.00 | 0.10 0.85 0.88 0.98
+   1.00 0.82 0.57 0.38 | 0.96 0.85 0.75 0.47    0.00 0.80 0.70 1.00 | 0.06 0.60 0.61 0.62
+   correlation 0.93                             correlation 0.95
+   ```
+
+   SCA 8's quarters are 0.91 to 1.00 against 0.98 to 0.99. The figure
+   (`t6/sca-7-8-9.png` in the brief directory) draws the area within
+   5 px of a mask with the detected and missed sources on it.
+
+   **SCA 9: the reference covers 70% of the image.** Field 5390959's
+   reference was coadded at 09:11 to 09:13 UTC, during the SCA 8
+   footprint, from SCA 8's frames of pointing `001_0002` (expids 1040102,
+   2040102, 3040102), the only frames of that field the selection then
+   held. The 18-SCA loop at 09:35 found the field's reference and
+   differenced SCA 9 against it; SCA 9's own passes 1 to 3 (1040101,
+   2040101, 3040101, in the field) never entered it. The left 900 px and
+   the bottom 380 px of SCA 9 are uncovered, and the registration offset,
+   (-0.068, +0.131) px, is six to eleven times every other SCA's (at most
+   0.012), another detector's distortion through the reference. This is
+   a measurement artefact of growing one run's selection after a field's
+   reference exists, not the reference stage's rule (a run whose
+   selection holds every SCA from the start coadds a field from all its
+   frames once the intake drains).
+
+   **SCA 7: the detector's own masked pixels.** Its reference is its own.
+   0.63% of SCA 7's science pixels carry `DO_NOT_USE`, `DEAD`,
+   `NO_LIN_CORR` and `UNRELIABLE_FLAT` together, every one of them in the
+   HLWAS overlay's `dq_mask_bits`, mostly isolated pixels on arcs across
+   the middle of the detector; resampled, the reference coverage falls
+   below 0.5 on 2.75% of the science grid and the difference masks 3.25%.
+   Each isolated pixel blinds the finder over a disc of about 5 px, so a
+   quarter of SCA 7's area cannot yield a detection.
+
+   **Ruled out with the numbers:** depth or the detection threshold (the
+   misses are as bright as the hits, detection flat with magnitude on
+   both SCAs and 0.93 to 0.98 away from a mask); registration on SCA 7
+   (within 0.01 px, as SCA 8); the science PSF's width (1.035 and 1.038
+   against SCA 8's 1.024); the 500-source cap (no candidate at all); the
+   gate (no held set on SCAs 7, 8 or 9 in passes 4 to 6).
+
+   **Every SCA of `001_0001` loses area the same way**, pass 4's masks
+   against the three epochs' sources below AB 25:
+
+   | SCA | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 |
+   |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+   | area within 5 px of a mask | 0.07 | 0.05 | 0.05 | 0.07 | 0.04 | 0.04 | **0.24** | 0.01 | **0.35** | 0.02 | 0.04 | 0.02 | 0.06 | 0.07 | 0.04 | 0.07 | 0.03 | 0.12 |
+   | detected, away from a mask | 0.97 | 0.99 | 0.98 | 0.96 | 0.94 | 0.98 | 0.93 | 0.99 | 0.98 | 0.95 | 1.00 | 0.98 | 0.90 | 0.91 | 1.00 | 0.93 | 1.00 | 0.98 |
+   | detected, within 5 px | 0.13 | 0.50 | 0.40 | 0.13 | 0.00 | 0.24 | 0.10 | | 0.00 | 0.00 | 0.00 | 0.25 | 0.22 | 0.11 | 0.00 | 0.09 | 0.00 | 0.13 |
+
+   Away from a mask SCAs 13, 14, 7, 16 and 5 still detect 0.90 to 0.94:
+   another cause, not read here.
+
+   **No fix on one key.** `dq_mask_bits` without these bits would let
+   back the isolated spikes the overlay masks them for (its comment),
+   and `post_zogy_keep_diffimg_lower_cov_map_thresh` (0.5) already keeps
+   every pixel any reference frame covers; SCA 9's cause is the run's
+   order, not a setting. The fix is code, a divergence from dev: the
+   finder and the PSF fit given the difference's non-finite pixels as
+   `mask=`, with a `decisions.md` line. **The next measurement**: that
+   change on SCA 7's three epochs under a dataset of its own,
+   `completeness.py` before and after (up to a quarter of SCA 7's area,
+   1 to 12% on the other SCAs); and SCA 9 counted on a dataset whose
+   selection holds SCA 9 from the start, so its field's reference is
+   coadded from its own frames.
+
+   **SCAs 16 and 17's held sets are a real residual, not a gate bound to
+   revisit.** All six epochs' published metrics sit at core +0.027 to +0.036
+   against the bound's 0.025 and ring -0.014 to -0.024 (bound 0.015);
+   SCA 14's pass 4 at +0.026, its passes 5 and 6 at +0.019 and +0.022. Across the 51 epochs the core follows the science stars'
+   width against the ePSF (`sci_star_psf_sigma_ratio`, r = -0.71; 0.985
+   on SCAs 16 and 17, 0.994 on 13 and 14, 1.00 to 1.04 on the rest) and
+   the ePSF's centroid offset in x (r = +0.57; 0.15 to 0.23 px on SCAs
+   13, 14, 16 and 17 against -0.03 to 0.14 elsewhere), not `scalefacref`
+   (r = -0.07). A positive core with a negative ring is a science PSF
+   broader than the stars it models: the residual is the per-SCA ePSF on
+   those detectors. Detection is untouched (SCA 17 0.992 below AB 25, the
+   best with SCA 8), so the gate holds sets of a real residual as
+   designed; the next measurement is those SCAs' science PSF measured on
+   their own stars, not a wider bound.
+
+   Raw evidence in the brief directory's `t6/` (`probe.py`,
+   `lostarea.py`, `nandist.py`, `all18.py` and `all18.csv`,
+   `finder_nan.py`, `dqbits.py`, `figure.py` and `sca-7-8-9.png`,
+   `metrics72.jsonl`, `m18.jsonl`).
 
 ## Validation
 

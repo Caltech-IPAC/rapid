@@ -19,10 +19,18 @@ A pointing is ``VVV_EEEE``, a visit and exposure, the same in every pass
 of a filter; a pass is the survey's (the stem's three digits after the
 plan), so a sampled proof of a few epochs is ``--passes 1,2,3,4``.
 
+With ``[intake] reader = "openuniverse"`` the source root holds
+OpenUniverse ``simple_model`` files, ``<filter>/<pointing>/roman_tds_<filter>
+_<pointing>_wfi<sca>_simple.asdf`` with the filter in the RAPID spelling
+(``H158``): ``--filters`` stays in the pipeline's names (``F158``) and is
+mapped for the listing, a pointing is the survey's observing-sequence row
+(``1012``), which the intake writes as the ``expid``, and there are no
+passes.
+
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported and not resubmitted: its key
 counts as taken until a person reruns it (``job run --job <id>``, or
-``job submit --job <id>`` on Batch). The one exception is a container
+``job submit --job <id>`` on Batch, which marks the row ``launched``). The one exception is a container
 that died for a reason not the code's (Batch ended it while its row was
 ``launched`` or ``running``: a host reclaimed, a task that failed to start,
 a kill): the pass resubmits it once, its Batch job named with
@@ -119,6 +127,7 @@ from typing import Any, Callable, Iterable
 import psycopg2.extras
 
 from rapidpipe.foundation import attempts
+from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
 
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
 STEM = re.compile(r"r\d{5}\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<visit>\d{3})"
@@ -126,6 +135,12 @@ STEM = re.compile(r"r\d{5}\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<vis
 #: Any key under the source root that begins with a stem.
 KEY = re.compile(STEM.pattern.removesuffix("$"))
 SUFFIX = "_cal.asdf"
+#: An OpenUniverse ``simple_model`` stem (the intake parses it, ``rapidpipe.science.intake_openuniverse``):
+#: the filter in the RAPID spelling, the observing sequence's row and the SCA.
+OU_STEM = re.compile(r"roman_(?:tds|was)_(?P<filter>[A-Z]\d{3})_(?P<pointing>\d+)_wfi(?P<sca>\d{2})$")
+OU_SUFFIX = "_simple.asdf"
+#: The ``[intake] reader`` whose stems are :data:`OU_STEM`'s; every other is the SOC's.
+OPENUNIVERSE = "openuniverse"
 PENDING = ("launched", "running")
 #: Batch's job states before it ends one (``SUCCEEDED`` and ``FAILED`` end it).
 BATCH_ACTIVE = ("SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING")
@@ -134,50 +149,60 @@ STAGES = ("psf", "intake", "reference", "difference", "packet")
 
 @dataclasses.dataclass(frozen=True)
 class Selection:
-    """Filters (``F146``), SCAs, pointings (``(visit, exposure)``) and the survey's passes, ``None`` for
-    all pointings or all passes."""
+    """Filters (``F146``), SCAs, pointings (``(visit, exposure)``, or the observing sequence's row for
+    :data:`OPENUNIVERSE`) and the survey's passes, ``None`` for all pointings or all passes; ``reader``
+    the run's ``[intake] reader``."""
 
     filters: frozenset[str]
     scas: frozenset[int]
-    pointings: frozenset[tuple[int, int]] | None
+    pointings: frozenset | None
     passes: frozenset[int] | None = None
+    reader: str = "soc-l2"
 
     @classmethod
-    def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all") -> "Selection":
-        points = None if pointings == "all" else frozenset(
-            (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
+    def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all",
+              reader: str = "soc-l2") -> "Selection":
+        if reader == OPENUNIVERSE:
+            if passes != "all":
+                raise ValueError("an OpenUniverse selection has no passes: select its pointings")
+            points = None if pointings == "all" else frozenset(int(p) for p in pointings.split(","))
+        else:
+            points = None if pointings == "all" else frozenset(
+                (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
         return cls(frozenset(f.strip().upper() for f in filters.split(",")),
                    frozenset(int(s) for s in scas.split(",")), points,
-                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")))
+                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader)
 
     def admits_stem(self, stem: str) -> dict | None:
         """The stem's SCA, filter and pointing when the selection admits it, else ``None``."""
-        m = STEM.match(stem)
-        if m is None:
+        ids = stem_ids(stem)
+        if ids is None or (ids["pass"] is None) != (self.reader == OPENUNIVERSE):
             return None
-        sca, band = int(m["sca"]), m["filter"].upper()
-        point = (int(m["visit"]), int(m["exposure"]))
-        if sca not in self.scas or band not in self.filters:
+        if ids["sca"] not in self.scas or ids["filter"] not in self.filters:
             return None
-        if self.pointings is not None and point not in self.pointings:
+        if self.pointings is not None and ids["pointing"] not in self.pointings:
             return None
-        if self.passes is not None and int(m["pass"]) not in self.passes:
+        if self.passes is not None and ids["pass"] not in self.passes:
             return None
-        return {"sca": sca, "filter": band, "expid": stem_expid(stem)}
+        return {"sca": ids["sca"], "filter": ids["filter"], "expid": ids["expid"]}
 
     def admits_row(self, expid: int, sca: int, fid: int, fids: set[int]) -> bool:
         """Whether an L2 key is selected, ``fids`` the selected filters' fids; ``expid``
-        packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits."""
+        packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits, or is the
+        OpenUniverse pointing."""
         if sca not in self.scas or fid not in fids:
             return False
+        if self.reader == OPENUNIVERSE:
+            return self.pointings is None or expid in self.pointings
         if self.passes is not None and expid // 10**6 not in self.passes:
             return False
         return self.pointings is None or ((expid // 100) % 100, expid % 100) in self.pointings
 
     def summary(self) -> dict:
-        return {"filters": sorted(self.filters), "scas": sorted(self.scas),
-                "pointings": "all" if self.pointings is None
-                else [f"{v:03d}_{e:04d}" for v, e in sorted(self.pointings)],
+        points = "all" if self.pointings is None else sorted(self.pointings)
+        if self.reader != OPENUNIVERSE and points != "all":
+            points = [f"{v:03d}_{e:04d}" for v, e in points]
+        return {"filters": sorted(self.filters), "scas": sorted(self.scas), "pointings": points,
                 "passes": "all" if self.passes is None else sorted(self.passes)}
 
 
@@ -186,6 +211,18 @@ def stem_expid(stem: str) -> int:
     m = STEM.match(stem)
     return (int(m["pass"]) * 10**6 + int(m["observation"]) * 10**4 + int(m["visit"]) * 10**2
             + int(m["exposure"]))
+
+
+def stem_ids(stem: str) -> dict | None:
+    """A SOC or OpenUniverse stem's ``sca``, ``filter`` (the pipeline's name, ``F158``), ``expid``,
+    ``pointing`` and ``pass`` (``None`` for OpenUniverse); ``None`` for any other name."""
+    if m := STEM.match(stem):
+        return {"sca": int(m["sca"]), "filter": m["filter"].upper(), "expid": stem_expid(stem),
+                "pointing": (int(m["visit"]), int(m["exposure"])), "pass": int(m["pass"])}
+    if m := OU_STEM.match(stem):
+        return {"sca": int(m["sca"]), "filter": RAPID_TO_ROMAN_FILTER_NAMES.get(m["filter"], m["filter"]),
+                "expid": int(m["pointing"]), "pointing": int(m["pointing"]), "pass": None}
+    return None
 
 
 def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]:
@@ -198,8 +235,21 @@ def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]
     one-key request per observation, each starting after the last one's
     prefix, reads its first key's filter. Each selected observation's prefix
     is then listed through the paginator; nothing outside them is listed.
+
+    For :data:`OPENUNIVERSE`, each selected filter's prefix (``<root>H158/``) is
+    listed through the paginator and its ``_simple.asdf`` stems kept.
     """
     bucket, _, root = source_root.removeprefix("s3://").partition("/")
+    if selection.reader == OPENUNIVERSE:
+        found = []
+        for band in sorted(selection.filters):
+            for page in client.get_paginator("list_objects_v2").paginate(
+                    Bucket=bucket, Prefix=root + rapid_filter_name(band) + "/"):
+                for item in page.get("Contents", []):
+                    name = item["Key"].rsplit("/", 1)[-1]
+                    if name.endswith(OU_SUFFIX):
+                        found.append(name[: -len(OU_SUFFIX)])
+        return found
     observations, after = [], root
     while first := client.list_objects_v2(Bucket=bucket, Prefix=root, StartAfter=after,
                                           MaxKeys=1).get("Contents"):
@@ -467,14 +517,14 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     admitted = {s: a for s in stems if (a := selection.admits_stem(s)) is not None}
     known = snap.published_stems | {j["scope"]["file"] for j in run_jobs["intake"]}
     new = sorted(s for s in admitted if s not in known)
-    claimed = set(snap.exposures) | {stem_expid(j["scope"]["file"]) for j in pending["intake"]
-                                     if STEM.match(j["scope"]["file"])}
+    claimed = set(snap.exposures) | {ids["expid"] for j in pending["intake"]
+                                     if (ids := stem_ids(j["scope"]["file"])) is not None}
 
     # PSF: per (filter, SCA) of the new stems without an official science row, one job; its stems wait.
     served = set()
     for job in run_jobs["psf"]:
-        m = STEM.match(job["scope"]["file"])
-        served.add((_fid(m["filter"].upper(), snap.fids), int(m["sca"])))
+        ids = stem_ids(job["scope"]["file"])
+        served.add((_fid(ids["filter"], snap.fids), ids["sca"]))
     unready = {}
     for stem in new:
         a = admitted[stem]

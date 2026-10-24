@@ -47,6 +47,7 @@ OPTIONAL_BY_REQUIREMENT = {
     "gwcs": "gwcs",
     "sympy": "sympy",
     "photutils": "photutils.psf",
+    "galsim": "galsim.roman",
 }
 
 

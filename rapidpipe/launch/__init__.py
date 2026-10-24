@@ -69,7 +69,9 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     reconcile sends the next attempt to the prompt queue.
     With ``conn``, the id is recorded as the row's ``batch_job_id`` and its submission
     in ``jobs.attempts`` (``rapidpipe.foundation.attempts``), and committed; a
-    resubmission replaces the id, so the row names its latest Batch job. With
+    resubmission replaces the id, so the row names its latest Batch job, and a
+    ``failed`` row becomes ``launched`` again, so a loop started at once counts it
+    pending, not failed, before its container starts. With
     ``memory_mib`` (the run's ``[batch.memory_mib]`` value for the stage, :func:`memory_mib`),
     the job asks for that memory instead of the job definition's. ``name_suffix`` ends
     the Batch job's name (the loop's rerun marks its one automatic rerun so).
@@ -96,7 +98,8 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     response = (client or batch_client()).submit_job(**request)
     if conn is not None:
         with conn.cursor() as cur:
-            cur.execute("UPDATE jobs SET batch_job_id = %s WHERE id = %s", (response["jobId"], job_id))
+            cur.execute("UPDATE jobs SET batch_job_id = %s, state = CASE WHEN state = 'failed'"
+                        " THEN 'launched' ELSE state END WHERE id = %s", (response["jobId"], job_id))
             attempts.record(cur, job_id, response["jobId"], {
                 "queue": queue, "submitted": attempts.now(), "why": "rerun" if name_suffix else "first"})
         conn.commit()

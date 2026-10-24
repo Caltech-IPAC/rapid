@@ -39,6 +39,10 @@ scipy>=1.11
 # are imported lazily, inside the producer's factory, so nothing else needs them.
 kafka-python>=3.0
 aws-msk-iam-sasl-signer-python>=1.0
+# The psf stage draws an OpenUniverse dataset's science PSF with galsim.roman, the
+# simulation's own PSF model, imported lazily inside rapidpipe.stages.psf.galsim_stamp.
+# The pipeline image's conda environment carries 2.8.5; wheels exist for CPython 3.9 to 3.14.
+galsim>=2.8
 # The intake stage (rapidpipe.science.intake) reads SOC L2 ASDF files with asdf
 # and roman_datamodels, whose gWCS is a gwcs object fitted to FITS-SIP; the
 # difference stage's modules/sip_tpv converts SIP to PV with sympy.

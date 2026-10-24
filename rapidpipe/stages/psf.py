@@ -41,6 +41,17 @@ kind; ``rapidpipe.science.difference.refpsf``). The header and the manifest
 carry the reference name (``EPSFREF``, the keyword the copied F146 files carry), the file's
 CRDS context, the position, the oversampling and the block, so the intake
 can compare a file's own ePSF with its bound PSF's.
+
+With ``[intake] reader = "openuniverse"`` the job's stem is an OpenUniverse
+file's (``roman_tds_H158_1012_wfi04``), which names no CRDS reference: the
+simulation drew its stars with galsim.roman's PSF, so the stage draws that
+(:func:`galsim_stamp`, as the stamp run 64's intake imported was made,
+runbook part 11 step 2): ``galsim.roman.getPSF`` for the stem's filter and
+SCA at :data:`GALSIM_POSITION`, achromatic at the bandpass's effective
+wavelength, drawn ``size x size`` at the detector's pixel scale with the
+pixel response (method ``auto``), unit sum. The file is not read. The
+header carries ``PSFSRC`` (the galsim version) and ``PSFWAVE``; the manifest
+the same under ``psf``. The SOC path is unchanged.
 """
 
 from __future__ import annotations
@@ -62,7 +73,8 @@ from astropy.nddata import NDData
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
-from rapidpipe.products.filters import rapid_filter_name
+from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
+from rapidpipe.science.intake_openuniverse import parse_stem
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +83,9 @@ FIDS = {"F184": 1, "H158": 2, "J129": 3, "K213": 4, "R062": 5, "Y106": 6, "Z087"
 
 #: Where on the detector the stamp is evaluated: the SCA's centre, (x, y), 0-based pixels.
 POSITION = (2048.0, 2048.0)
+#: Where galsim.roman evaluates an OpenUniverse SCA's PSF: its centre in GalSim's one-based pixels, as
+#: the stamp run 64's intake imported was drawn.
+GALSIM_POSITION = (2044.0, 2044.0)
 #: The reference's in-focus plane and the spectral type taken, as ``romanisim.psf`` takes them.
 FOCUS, SPECTRAL_TYPE = 0, "G2V"
 
@@ -96,6 +111,16 @@ def run(job: JobContext) -> None:
         timings[step] = round(now - mark, 3)
         mark = now
 
+    if source_settings.get("reader", "soc-l2") == "openuniverse":
+        ids = parse_stem(stem)
+        stamp, provenance = galsim_stamp(str(ids["filter"]), int(ids["sca"]), int(settings["size"]))
+        lap("draw")
+        cards = {"PSFSRC": (provenance["source"], "the simulation's PSF model"),
+                 "PSFWAVE": (provenance["wavelength_nm"], "[nm] achromatic at the effective wavelength"),
+                 "PSFX": GALSIM_POSITION[0], "PSFY": GALSIM_POSITION[1]}
+        write(job, stamp, RAPID_TO_ROMAN_FILTER_NAMES[str(ids["filter"])], int(ids["sca"]), cards,
+              timings, lap, source=None, psf=provenance)
+        return
     source = source_settings["source_root"].rstrip("/") + "/" + stem + "_cal.asdf"
     cal = cal_meta(get(source, unsigned=bool(source_settings["unsigned"])))
     lap("read_cal")
@@ -130,13 +155,24 @@ def run(job: JobContext) -> None:
     stamp, recorded = reduce(model, oversample, size)
     lap("reduce")
 
-    sca = int(cal["detector"].removeprefix("WFI"))
-    filter_name = cal["filter"]
-    fid = FIDS[rapid_filter_name(filter_name)]
     provenance = {"epsf": name, "context": cal["context"], "position": list(POSITION),
                   "focus": FOCUS, "spectral_type": SPECTRAL_TYPE, "oversample": oversample,
                   "block": oversample, "size": size, "epsf_bytes": reference_bytes,
                   "fetched_from": fetched_from, **recorded}
+    cards = {"EPSFREF": (name, "CRDS ePSF reference reduced"),
+             "CRDSCTX": (cal["context"], "the L2 file's CRDS context"),
+             "PSFX": POSITION[0], "PSFY": POSITION[1],
+             "EPSFOVS": (oversample, "the reference's oversampling"),
+             "EPSFBIN": (oversample, "samples summed per pixel per axis")}
+    write(job, stamp, cal["filter"], int(cal["detector"].removeprefix("WFI")), cards, timings, lap,
+          source=source, psf=provenance)
+
+
+def write(job: JobContext, stamp: np.ndarray, filter_name: str, sca: int, cards: dict, timings: dict,
+          lap, **manifest) -> None:
+    """The stamp's FITS file per kind, its ``psfs`` rows and the manifest; ``filter_name`` the Roman
+    spelling (``F146``), ``cards`` the header's provenance keywords, ``manifest`` its extra keys."""
+    fid = FIDS[rapid_filter_name(filter_name)]
     rows = []
     for kind, keyword in KINDS.items():
         filename = f"{keyword}_{filter_name.lower()}_sca{sca:02d}.fits"
@@ -145,19 +181,37 @@ def run(job: JobContext) -> None:
         header["FILTER"] = filter_name
         header["PSFKIND"] = keyword
         header["OVERSAMP"] = (1, "detector pixels")
-        header["EPSFREF"] = (name, "CRDS ePSF reference reduced")
-        header["CRDSCTX"] = (cal["context"], "the L2 file's CRDS context")
-        header["PSFX"], header["PSFY"] = POSITION[0], POSITION[1]
-        header["EPSFOVS"] = (oversample, "the reference's oversampling")
-        header["EPSFBIN"] = (oversample, "samples summed per pixel per axis")
+        for card, value in cards.items():
+            header[card] = value
         fits.PrimaryHDU(stamp.astype(np.float32), header).writeto(job.path / filename)
         digest = hashlib.md5((job.path / filename).read_bytes()).hexdigest()  # dev's checksum column
         rows.append({"dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind,
                      "filename": job.prefix + filename, "checksum": digest, "status": STATUS_GOOD})
     pq.write_table(pa.Table.from_pylist(rows), job.path / "psfs.parquet")
     lap("rows")
-    job.write_manifest([("psfs", "psfs.parquet")], source=source, psf=provenance, timings_s=timings)
-    log.info("psf %s %s sca %d from %s: %s", job.dataset, filter_name, sca, name, timings)
+    job.write_manifest([("psfs", "psfs.parquet")], timings_s=timings, **manifest)
+    log.info("psf %s %s sca %d from %s: %s", job.dataset, filter_name, sca,
+             manifest["psf"].get("epsf") or manifest["psf"].get("source"), timings)
+
+
+def galsim_stamp(filter_name: str, sca: int, size: int) -> tuple[np.ndarray, dict]:
+    """galsim.roman's PSF for ``filter_name`` (galsim's spelling, ``H158``) and ``sca``, ``size x size``
+    at the pixel scale, unit sum, and what it records."""
+    import galsim
+    import galsim.roman as roman
+
+    bandpass = roman.getBandpasses()[filter_name]
+    model = roman.getPSF(sca, filter_name, SCA_pos=galsim.PositionD(*GALSIM_POSITION),
+                         wavelength=bandpass.effective_wavelength)
+    stamp = model.drawImage(nx=size, ny=size, scale=roman.pixel_scale, method="auto").array.astype(np.float64)
+    held = float(stamp.sum())
+    stamp = stamp / held
+    rows, cols = np.indices(stamp.shape)
+    centre = (size - 1) / 2
+    return stamp, {"source": f"galsim.roman {galsim.__version__} getPSF", "galsim": galsim.__version__,
+                   "position": list(GALSIM_POSITION), "wavelength_nm": float(bandpass.effective_wavelength),
+                   "size": size, "flux_held": held,
+                   "centroid_offset": [float((stamp * cols).sum() - centre), float((stamp * rows).sum() - centre)]}
 
 
 def cal_meta(path: Path) -> dict[str, str]:

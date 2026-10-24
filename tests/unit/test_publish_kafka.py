@@ -12,7 +12,7 @@ binds sends its own set, a failure to send it leaves the job exit 0 and the
 set unstamped, and a job that did not bind sends nothing; a set the
 quality gate holds is neither sent nor stamped, by the sweep or by its own
 packet job, and the others are; the producer waits for every replica and
-is not idempotent (the job role may write data, not write it idempotently).
+is idempotent.
 """
 
 from __future__ import annotations
@@ -200,12 +200,12 @@ def test_a_packet_job_that_did_not_bind_sends_nothing(packet_job, outbox, monkey
     assert outbox == []
 
 
-def test_the_producer_waits_for_every_replica_and_is_not_idempotent(monkeypatch):
+def test_the_producer_waits_for_every_replica_and_is_idempotent(monkeypatch):
     built = {}
     monkeypatch.setattr(kafka, "KafkaProducer", lambda **config: built.update(config))
     monkeypatch.setattr(publish_kafka, "client_config", lambda servers: {})
     publish_kafka.producer(["b:9098"], 1 << 20)
-    assert built["acks"] == "all" and built["enable_idempotence"] is False
+    assert built["acks"] == "all" and built["enable_idempotence"] is True
 
 
 def test_a_held_set_is_neither_sent_nor_stamped_by_the_sweep_and_the_others_are(outbox, held):
