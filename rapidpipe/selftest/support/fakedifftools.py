@@ -395,7 +395,8 @@ class FakeReferencePsf:
             raise TooFewStars(self.stars)
         stamp = _gaussian(61, 30, 30, self.sigma)
         return ReferencePsf(stamp=stamp / stamp.sum(), stars=self.stars, detections=2 * self.stars,
-                            passed_cuts=self.stars, sigma_px=self.sigma, centroid_px=(0.0, 0.0))
+                            passed_cuts=self.stars, sigma_px=self.sigma, centroid_px=(0.0, 0.0),
+                            star_sigma_px=self.sigma)
 
 
 def _write_psfcat_parquet(path: Path, peaks) -> None:
