@@ -376,6 +376,9 @@ CREATE TABLE sources (
     roundness1 real NOT NULL,
     roundness2 real NOT NULL,
     peak real NOT NULL,
+    sumrat real,                                     -- dev's pixel columns (rapidpipe.science.difference.columns),
+    nneg smallint,                                   -- on a 5 x 5 stamp after a 64 px local background; null where
+    nbad smallint,                                   -- unmeasurable (stamp off the image) and on rows made before them
     UNIQUE (job, sid)
 );
 

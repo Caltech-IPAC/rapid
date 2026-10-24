@@ -18,7 +18,7 @@ the pipeline imports.
   is no migration machinery until the first change after real data; from
   then on changes are incremental SQL: `schema.sql` carries every change
   for a fresh database, and a dated file beside it
-  (`2026-10-23-runs-layers.sql`, the first; `2026-10-24-job-metrics.sql`, the `job_metrics` view; `2026-10-24-kafka-offsets.sql`, a packet set's acknowledgement coordinates; `2026-10-24-object-catalog.sql`, the object catalog that replaced the set chain; `2026-10-24-job-attempts.sql`, a job's Batch submissions and the per-job numbers `job_metrics` reads from them) brings an existing one to it,
+  (`2026-10-23-runs-layers.sql`, the first; `2026-10-24-job-metrics.sql`, the `job_metrics` view; `2026-10-24-kafka-offsets.sql`, a packet set's acknowledgement coordinates; `2026-10-24-object-catalog.sql`, the object catalog that replaced the set chain; `2026-10-24-job-attempts.sql`, a job's Batch submissions and the per-job numbers `job_metrics` reads from them; `2026-10-24-pixel-columns.sql`, `dev`'s `sumrat`, `nneg` and `nbad` on `sources`) brings an existing one to it,
   applied once.
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven

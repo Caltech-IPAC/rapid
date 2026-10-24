@@ -68,6 +68,12 @@ CATALOG_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: `dev`'s pixel columns (rapidpipe.science.difference.columns), loaded as
+#: ``loadPSFCatIntoDBSourcesTable.py`` loads them: a missing value is null.
+PIXEL_COLUMNS: tuple[tuple[str, Any], ...] = (
+    ("sumrat", np.float64), ("nneg", np.int16), ("nbad", np.int16))
+
+
 def read_joined_catalog(catalog_path, finder_path) -> QTable:
     """`dev`'s read and inner join of a PSF-fit catalog and its finder catalog on ``id``."""
     psfcat_qtable = QTable.read(str(catalog_path), format="ascii", fast_reader=True)
@@ -181,7 +187,8 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     expid, sca, fid}``; every source is positive (``isdiffpos``), as the
     positive catalog is the one read. Returns ``(table, candidates)``, the
     candidates being the sources inside the bounds with a finite ratio,
-    before the cap.
+    before the cap. `dev`'s ``sumrat``, ``nneg`` and ``nbad`` are carried
+    from the catalog, null where it has no value or no such column.
     """
     import pyarrow as pa
 
@@ -200,6 +207,9 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     ra, dec = columns["ra"].astype(float), columns["dec"].astype(float)
     hp6, hp9 = healpix_arrays({"ra": ra, "dec": dec})
     n = len(chosen)
+    for name, kind in PIXEL_COLUMNS:  # NaN, or a catalog made before them: null, as dev loads -999
+        values = column(name)[chosen].astype(float) if name in catalog.column_names else np.full(n, np.nan)
+        columns[name] = pa.array(np.nan_to_num(values).astype(kind), mask=~np.isfinite(values))
     return pa.table({
         "sid": columns["id"].astype(np.int64),
         "dataset": [key["dataset"]] * n, "expid": np.full(n, key["expid"]),

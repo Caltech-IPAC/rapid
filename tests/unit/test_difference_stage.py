@@ -406,6 +406,37 @@ def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fak
 
 
 
+def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, files, fakes,
+                                                                    monkeypatch):
+    """Identical inputs with the columns step and without it (the code before dev-columns): the
+    same source ids in the same order, every other column of every row and catalog, and every
+    published image's pixels; the SFFT catalogs and the source set gain sumrat, nneg and nbad."""
+    (tmp_path / "with").mkdir()
+    (tmp_path / "without").mkdir()
+    after = run_difference(tmp_path / "with", files)
+    monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
+    before = run_difference(tmp_path / "without", files)
+    new = ["sumrat", "nneg", "nbad"]
+    old_sources, new_sources = (pq.read_table(p / "sources.parquet") for p in (before, after))
+    assert new_sources.num_rows and new_sources.column("sid").equals(old_sources.column("sid"))
+    kept = [c for c in old_sources.column_names if c not in new]
+    assert new_sources.select(kept).equals(old_sources.select(kept))
+    assert all(old_sources.column(c).null_count == old_sources.num_rows for c in new)
+    assert all(new_sources.column(c).null_count < new_sources.num_rows for c in new)
+    for path in sorted((before / "diff").iterdir()):
+        twin = after / "diff" / path.name
+        if path.suffix == ".parquet":
+            old, now = pq.read_table(path), pq.read_table(twin)
+            gained = new if path.name.startswith("sfft") else []
+            assert now.column_names == old.column_names + gained, path.name
+            assert now.select(old.column_names).equals(old), path.name
+        else:
+            np.testing.assert_array_equal(fits.getdata(twin), fits.getdata(path), err_msg=path.name)
+    ignore = {"filename", "checksum"}           # the prefix's own URI; the gzip of a DATE card
+    assert [{k: v for k, v in r.items() if k not in ignore} for r in read(before, "diffimages")] == [
+        {k: v for k, v in r.items() if k not in ignore} for r in read(after, "diffimages")]
+
+
 def test_max_sources_caps_the_source_set_and_records_the_count_before_it(tmp_path, files, fakes):
     prefix = run_difference(tmp_path, files, body=settings(max_sources=1))
     recorded = manifest(prefix)["difference"]

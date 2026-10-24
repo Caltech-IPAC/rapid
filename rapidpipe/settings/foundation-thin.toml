@@ -570,6 +570,32 @@ output_naive_psfcat_filename = "naive_diffimage_masked_psfcat.txt"
 output_naive_psfcat_finder_filename = "naive_diffimage_masked_psfcat_finder.txt"
 output_naive_psfcat_residual_filename = "naive_diffimage_masked_psfcat_residual.fits"
 
+[difference.sumrat]
+# [SUMRAT]: ZTF's sumrat, sum(p) / sum(|p|) over a median-filtered stamp on
+# each SFFT PSF-fit source (rapidpipe.science.difference.columns), a column
+# of the catalogs and of `sources`; nothing is cut on it here.
+# The stamp's side [pixels], odd (ZTF negbadlinsz).
+stamp_size = 5
+# The median filter's box [pixels], odd; 1 = no filter.
+filter_size = 3
+# false takes the mean of the two middle values of an even count, so pure
+# noise's sumrat is about 0; true reproduces ZTF (PDL med2d), biased to
+# about -0.32 (dev babd5d16).
+lower_median = false
+
+[difference.extra_catalog_cols]
+# [EXTRA_CATALOG_COLS]: nneg and nbad, the negative and the non-finite
+# pixels of an unfiltered stamp of this side [pixels], odd.
+nneg_nbad_stamp_size = 5
+# sumrat, nneg and nbad are measured after a local background (photutils
+# Background2D, mesh pixel_cols_bkg_box [pixels], median filter
+# pixel_cols_bkg_filter_size [mesh cells]) is subtracted from a copy of the
+# image: dev c32e28f6, sumrat > 0.4 keeps 0.60 of the injected brightening
+# sources at SNR 5-10 on the image itself and 0.95 after a 64 px background
+# (250 SCAs, socsims 20260821).
+pixel_cols_bkg_box = 64
+pixel_cols_bkg_filter_size = 3
+
 [difference.fake_sources]
 # [FAKE_SOURCES]. Fake-source injection is not ported; true is refused
 # (exit 64) until it is.

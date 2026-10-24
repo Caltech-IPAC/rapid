@@ -64,7 +64,9 @@ ruling of 2026-10-22): the SFFT difference image, its uncertainty, its
 mask (the resampled reference coverage map it is masked with), the
 positive and negative PSF-fit catalogs of SFFT and of ZOGY
 (``*_psfcat[_negative].parquet``, uncapped; ZOGY's and the negatives are
-diagnostics, read by no stage), and the packet
+diagnostics, read by no stage; SFFT's two carry `dev`'s ``sumrat``,
+``nneg`` and ``nbad`` on every source, :mod:`rapidpipe.science.difference.columns`,
+each catalog measured on the image its sources are positive in), and the packet
 stage's other reads beside the difference image, the difference PSF
 (``sfftdiffpsf.fits``, forced photometry), the background-subtracted science
 image (forced photometry and the science cutout) and the resampled
@@ -114,7 +116,8 @@ median second-moment sigma of the registration stars on the
 background-subtracted science image, and ``sci_star_psf_sigma_ratio``, it
 over ``sci_psf_sigma_px``; and the
 uncapped catalog's ``n_sources_near_bright_px`` and
-``n_sources_ring_snr_gt20``, defined there; ``n_objects_read``,
+``n_sources_ring_snr_gt20``, defined there; ``pixel_columns_s``, the
+seconds the pixel columns took for both SFFT catalogs; ``n_objects_read``,
 ``n_objects_founded``, ``n_memberships`` and ``n_sources_out_of_field``,
 the accepted sources outside the image's own field, the association's). The
 residual stars' positions sit beside them as ``difference.residual_stars``
@@ -166,6 +169,7 @@ from rapidpipe.products.diffimage import (
 from rapidpipe.science.crossmatch.memory import associate_epoch
 from rapidpipe.science.difference import (
     background,
+    columns,
     gainmatch,
     masking,
     naive,
@@ -462,6 +466,7 @@ class _Catalogs:
     photutils: dict[str, int | None] = field(default_factory=dict)
     parquet: dict[str, str | None] = field(default_factory=dict)
     bits: int = 0
+    pixel_columns_s: float | None = None
 
 
 def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: dict[str, Any],
@@ -759,6 +764,7 @@ def run(job: JobContext) -> None:
         science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
         **common)
     infobits |= sfft_catalogs.bits
+    metrics["pixel_columns_s"] = sfft_catalogs.pixel_columns_s
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         infobits |= _run_naive(reference_psf=REFERENCE_PSF_NAME, **common)
 
@@ -1166,6 +1172,13 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         overrides=sextractor.detection_overrides(
             settings["sextractor_diffimage_sfft"], crossconv_flag, settings["paths"]["cfg_path"]),
         seed=seed)
+    # dev e4a49c97 and c32e28f6: sumrat, nneg and nbad on every SFFT PSF-fit source, before the
+    # cap, each catalog with the image its sources are positive in.
+    start = time.perf_counter()
+    for sign, image in (("positive", diffimage), ("negative", diffimage_negative)):
+        if catalogs.parquet[sign]:
+            columns.add_pixel_columns(w(catalogs.parquet[sign]), w(image), settings)
+    catalogs.pixel_columns_s = round(time.perf_counter() - start, 3)
     return names, catalogs
 
 
