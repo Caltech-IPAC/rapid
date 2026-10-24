@@ -566,3 +566,45 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     if checked is not None:
         counts["batch"] = checked
     return {"run": run, "selection": selection.summary(), **counts}
+
+
+#: The job states ``job wait`` waits for.
+ENDED = ("published", "failed")
+
+
+def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: float,
+         interval: float = 30.0, sleep: Callable[[float], None] = time.sleep,
+         clock: Callable[[], float] = time.monotonic) -> dict:
+    """Block until every job of ``jobs`` is ``published`` or ``failed``, or ``timeout`` seconds pass.
+
+    Each check first reconciles the jobs' runs with Batch (``batch``, a Batch
+    client, or ``None`` for local jobs), so a container that died without its
+    row recording it ends the wait as ``failed``, as a loop pass marks it; a
+    ``failed`` row whose Batch job is still active (Batch's own retry) is not
+    ended. Returns ``{"states": {job: state}, "ended": bool, "seconds"}``;
+    ``LookupError`` names a job that does not exist.
+    """
+    started = clock()
+    while True:
+        with conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, run, state FROM jobs WHERE id = ANY(%s)", (list(jobs),))
+                rows = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+            conn.commit()
+            missing = sorted(set(jobs) - set(rows))
+            if missing:
+                raise LookupError(f"no job {', '.join(map(str, missing))}")
+            retrying = set()
+            if batch is not None:
+                for run in sorted({run for run, state in rows.values() if state != "published"}):
+                    retrying |= set(reconcile(conn, run, batch)["retrying"])
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, run, state FROM jobs WHERE id = ANY(%s)", (list(jobs),))
+                    rows = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+                conn.commit()
+        states = {job: rows[job][1] for job in jobs}
+        ended = all(state in ENDED and job not in retrying for job, state in states.items())
+        seconds = round(clock() - started, 1)
+        if ended or seconds >= timeout:
+            return {"states": states, "ended": ended, "seconds": seconds}
+        sleep(min(interval, max(0.0, timeout - seconds)))
