@@ -39,11 +39,11 @@ def sources_frame():
     # source 1 at truth 0, source 2 at truth 1 (0.05 arcsec away), nothing near truth 2; source 3 a bright star
     return pd.DataFrame([
         {"job": 50, "sid": 1, "expid": 4001, "sca": 8, "ra": 10.0 + 100 * PX, "dec": 100 * PX, "fluxfit": 100.0,
-         "flags": 0},
+         "flags": 0, "in_field": True},
         {"job": 50, "sid": 2, "expid": 4001, "sca": 8, "ra": 10.0 + 300 * PX + 0.05 / 3600, "dec": 200 * PX,
-         "fluxfit": 10.0, "flags": 0},
+         "fluxfit": 10.0, "flags": 0, "in_field": False},
         {"job": 50, "sid": 3, "expid": 4001, "sca": 8, "ra": 11.0, "dec": 0.5, "fluxfit": 5000.0,
-         "flags": completeness.BRIGHT_FOOTPRINT}])
+         "flags": completeness.BRIGHT_FOOTPRINT, "in_field": True}])
 
 
 def packets_frame(sids=(1, 3)):
