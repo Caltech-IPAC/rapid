@@ -7189,6 +7189,76 @@ the 25-frame socsims coadds (155,000 rows). Per-reference results are in
 the brief's `t1/grading/results/`, the full table in
 `t1/grading/summary.md`.
 
+### Step err-transient: transient failures retried, every failure's reason on its row, the checks fail when they should
+
+**The change (PR 420, merged `d4866eab`; rapid_docs PR 108, `feb232df`).**
+The error-handling ledger's fixes 5, 8, 9 and 10. `cli.main.exit_code` is
+the one classification of a failure, for the process and for the failed
+job row (`run_job(..., exit_code=)`): a `CommandExit`'s code, `Refused`
+1, `LookupError` and `ConnectionConfigError` 64, and 75 for
+`ConnectionUnavailable`, `psycopg2.OperationalError` and anything
+`storage.is_transient` names. That rule now includes the `ClientError` codes `Throttling`,
+`ThrottlingException`, `TooManyRequestsException`, `SlowDown` and
+`RequestLimitExceeded`, and HTTP 503. Everything else exits 70. The SSM and Secrets Manager reads raise
+`ConnectionUnavailable` when throttled or unreachable, which was the failure of
+2026-10-23, and `ConnectionConfigError` otherwise. Every failed row's
+`refusal` is `<Class>: <message>`, at most 500 characters, a
+`CommandExit`'s included. A failed recording write logs the job and
+the reason, and the stage's own exception still propagates.
+`launch.submit` marks the row `failed` with the error when the Batch request
+itself raises. `loop` exits 64 when its first pass admits no stem.
+`validate_run.py` fails a run with a failed job (`counts`), with no
+jobs (`counts`), or with no published job (`tables`).
+`check-public-safety.sh` fails with exit 2 when `git grep` exits above 1.
+
+**The checks on earlier runs** under the new `validate_run.py`:
+
+| run | what it is | `check_run.sh` |
+|---|---|---|
+| 87 | err-publish's healthy chain | CLEAN, validate 6/6, reader 1/1, consumer 471/471 |
+| 83 | err-tools' forced SExtractor failure (PR 412) | **FAIL**, `counts: FAIL (1): 1 difference jobs failed` |
+
+Run 83 failed on purpose and now reads not clean, which is right. Nothing was
+changed for it.
+
+**The proof.** Image `rebuild-d4866eab…` (digest `6ea09ed7…`), job
+definition `rapid-rebuild:71`. Run **95** (`r00342-wk-errtrans`, live,
+group 21535) covers HLWAS `001_0001`, SCA 8, F146, passes 1 to 4: three reference frames
+before the bound 61591.4056 and epoch 4040101 differenced and packeted.
+Evidence is in the brief's `t1/`.
+
+```sh
+rp run create ... --revision d4866eab... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+  --survey HLWAS --dataset r00342-wk-errtrans                   # run 95
+rp official change --group live.json ...; rp job local --run 95 --stage import ...   # live; Gaia, job 22883
+rp loop --run 95 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:71 --interval 60
+scripts/check_run.sh --run 95 --inspect <dir>
+rp loop --run 95 --filters F146 --scas 8 --pointings 001_0001 --passes 30 --job-definition rapid-rebuild:71 --interval 60
+```
+
+Check, held:
+
+- **The drain.** 16 passes, 21:07:37 to 21:22:35 UTC, exit 0, with `failed`
+  empty in every pass: psf 22884, intake 22885 to 22888, reference 22889,
+  difference 22890 and packet 22891. Each published on attempt 1 with
+  `refusal` null, and difference 22890 ran image `6ea09ed7…`.
+- **The rows.** 4 l2files, 1 psfs, 1 refimages, 1 diffimages, 500
+  sources, 471 packets, 14 open bindings, matching run 87's counts on the image
+  before.
+- `check_run.sh --inspect`: **CLEAN**, validate 6/6, reader 1/1,
+  consumer 471/471.
+- **The zero-stem guard, live.** The pass-30 loop listed 5,832 F146
+  stems and admitted none. It printed its pass line, submitted nothing and exited
+  **64** with `the first pass found no stem under <source root> for
+  filters F146, SCAs 8, pointings 001_0001, passes 30`. Before this
+  change, the same pass read as drained and exited 0.
+
+The transient exits, the row's reason and the failed submit row stand on their CI
+contracts (`tests/unit/test_job_failure.py`, `test_connection.py`,
+`test_launch.py`, `test_validate_counts.py`, `test_public_safety.py`).
+No transient failure was staged live.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
