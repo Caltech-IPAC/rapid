@@ -472,7 +472,8 @@ def _loop(args: argparse.Namespace) -> int:
     def publish() -> dict:
         with connect_loop() as conn:
             if not publish_kafka.unpublished_sets(conn, args.run):
-                return {"packets": 0, "sets": [], "waiting": publish_kafka.settling_sets(conn, args.run)}
+                return {"packets": 0, "sets": [], "waiting": publish_kafka.settling_sets(conn, args.run),
+                        "late": publish_kafka.late_sets(conn, args.run)}
         endpoint = publish_kafka.endpoint(settings["kafka"])
         producer = publish_kafka.producer(endpoint["bootstrap_servers"], endpoint["max_request_bytes"])
         try:

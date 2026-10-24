@@ -84,6 +84,7 @@ def outbox(tmp_path, monkeypatch):
     monkeypatch.setattr(publish_kafka, "unpublished_sets",
                         lambda conn, run: [7, 9] if run == 3 else [])
     monkeypatch.setattr(publish_kafka, "settling_sets", lambda conn, run: [11] if run == 3 else [])
+    monkeypatch.setattr(publish_kafka, "late_sets", lambda conn, run: 2 if run == 3 else 0)
     monkeypatch.setattr(publish_kafka, "set_index", lambda conn, job: index[job])
     monkeypatch.setattr(publish_kafka, "set_run", lambda conn, job: {"dataset": "r00342-x", "gate": None})
     monkeypatch.setattr(publish_kafka.gate, "decide", lambda conn, job, settings: {
@@ -124,7 +125,7 @@ def test_each_set_is_sent_flushed_and_stamped_before_the_next_on_one_connection(
     assert outbox == [("send", b"7:70"), ("send", b"7:71"), ("send", b"7:72"), ("flush", None),
                       ("stamp", 7, 2, 101, 103), ("send", b"9:90"), ("flush", None), ("stamp", 9, 2, 104, 104)]
     assert connect.opened == 1
-    assert (result["sets"], result["packets"], result["waiting"]) == ([7, 9], 4, [11])
+    assert (result["sets"], result["packets"], result["waiting"], result["late"]) == ([7, 9], 4, [11], 2)
     assert {key for _, key, _, _ in producer.sent} == {b"r00342-x"}
     assert publish_kafka.publish(_connect, 4, producer, "topic")["packets"] == 0
 

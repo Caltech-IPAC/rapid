@@ -5,7 +5,8 @@ Contract: the sets offered are the run's packet jobs with an open
 another run, another stage or a stamped job is not offered; a job that
 ended inside the settle window is not offered but is settling; ``stamp``
 sets the column and the acknowledgement's coordinates, after which the job
-is no longer offered.
+is no longer offered; a set stamped past its job's settle window counts as
+late, one stamped inside it does not.
 """
 
 from __future__ import annotations
@@ -51,8 +52,11 @@ def test_only_unstamped_official_packet_sets_of_the_run_are_offered(connect):
     conn.commit()
     assert publish_kafka.unpublished_sets(conn, runs[0]) == [offered]
     assert publish_kafka.settling_sets(conn, runs[0]) == [settling]
+    assert publish_kafka.late_sets(conn, runs[0]) == 0
     publish_kafka.stamp(conn, offered, 2, 40, 45)
+    publish_kafka.stamp(conn, settling, 2, 46, 47)
     assert publish_kafka.unpublished_sets(conn, runs[0]) == []
+    assert publish_kafka.late_sets(conn, runs[0]) == 1
     with conn.cursor() as cur:
         cur.execute("SELECT kafka_partition, kafka_first_offset, kafka_last_offset FROM jobs"
                     " WHERE id = %s", (offered,))
