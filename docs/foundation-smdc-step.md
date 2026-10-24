@@ -6094,6 +6094,89 @@ a task's step lands when its task does, so the numbers can arrive out of order.
    `finder_nan.py`, `dqbits.py`, `figure.py` and `sca-7-8-9.png`,
    `metrics72.jsonl`, `m18.jsonl`).
 
+7. **The night's operations seen (PRs 389, 394, 395, 398, 399).** Five of
+   the night's Improvements seen, one PR each:
+
+   - `job submit --job` marks a `failed` row `launched` with its new Batch
+     id (PR 389), so a loop restarted at once counts it pending; no schema
+     statement, the CHECK already admits `launched`.
+   - Every pass line carries `sets_late` (PR 395): the run's official
+     packet sets stamped more than `SETTLE_S` after their job ended, i.e.
+     sent by a sweep and not by their own job. It was first read on SMDC's
+     rows: run 57 (every container send failed `ClusterAuthorizationFailed`)
+     3 of 3; runs 68, 69, 72, 73 0.
+   - The CLI logs the `rapidpipe` loggers at INFO and every other library
+     at WARNING (PR 394), so a Batch job's own INFO lines reach CloudWatch.
+   - The gallery's flux stretch is ±3e-3 (it was ±1e-3), and a job that lists no residual stars
+     gets cutouts at its kept sources of highest S/N (PR 398). Run 67
+     (GBTDS) went from a thumbnail alone to eight cutouts per job.
+   - A failed job holds only the work that depends on it: the loop drains
+     the rest, then exits 2 with the failed jobs and their scopes in the
+     last pass's `failed` (PR 399; its unit contract: one chain failed,
+     the other's packet submitted and published over two passes, exit 2).
+
+   Not here, recorded: the difference's memory ask against its 16.5 GB
+   peak (a Spot lever, and Spot is not in this brief); the packet stage's
+   out-of-field count (it duplicates the difference's).
+
+   Proof, run **82** (`r00342-dy-ops`, `c0f5a38e`, image
+   `sha256:9b0e0f01…`, **`rapid-rebuild:64`**; F146, SCAs 8 and 5,
+   pointing `001_0001`, passes 1 to 4; 15:17:48 to 15:27:53 UTC, 11
+   passes, exit 0):
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision c0f5a38e... \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"$SOURCE_ROOT\"" --set reference.selection.before_mjd=61591.4056 \
+     --survey HLWAS --dataset r00342-dy-ops
+   rp official change --group live.json ...                 # run 82 live for HLWAS r00342-dy-ops
+   rp job local --run 82 --stage import ...                 # Gaia under the dataset's key, job 22046
+   rp job local --run 82 --stage psf ...                    # SCA 8's psf, failed on purpose: job 22047
+   rp job submit --job 22047 --job-definition rapid-rebuild:64
+   rp loop --run 82 --filters F146 --scas 8,5 --pointings 001_0001 --passes 1,2,3,4 --job-definition rapid-rebuild:64 --interval 60
+   scripts/check_run.sh --run 82 --inspect <dir>
+   ```
+
+   Check, held:
+
+   - **The resubmission.** The deliberate failure (SCA 8's psf job run
+     locally with HTTPS behind a dead proxy) failed before `job run`
+     recorded `running`: the outputs prefix's attempt listing comes
+     first. So the row stayed `launched` with no Batch id, not `failed`.
+     `job submit --job 22047` gave it a Batch id, and the loop started at
+     once: its first pass counted 22047 under `pending.psf`, submitted SCA
+     5's psf (22053) and did not exit. 22047 then published on Batch. The
+     `failed` → `launched` transition itself is PR 389's database
+     contract; no live failure of that shape offered itself.
+   - **The pass line.** `sets_late` was 0 in all 11 passes; `sets_produced`
+     was empty in every pass; set 22380 sat under `sets_waiting` for one
+     pass while its own job sent it.
+   - **The stream.** Packet job 22380's CloudWatch stream holds `packet
+     set 22380 published and bound; producing it to the topic` (15:26:39.6)
+     and `378 packets, 85415497 bytes acknowledged in partition 0 offsets
+     702..1143; stamped` (15:27:18.2). A difference job's stream (22066)
+     has 134 INFO lines among its 3,511.
+   - **The gallery.** Two jobs, 22066 and 22067, eight residual-star
+     cutouts each at ±3e-3. The core-and-ring pattern and the spikes show,
+     though the brightest cores still clip.
+   - **The drain.** No job failed (17 jobs, each published on its first
+     attempt), so the live loop exited 0; the failed-epoch drain stands on
+     its unit contract.
+   - `check_run.sh --inspect`: **CLEAN**, validate 6/6, reader 2/2,
+     consumer 559/559.
+
+   Seen, not built: a job that dies before `job run` records `running`
+   (here, the attempt listing) leaves its row `launched`. Without a Batch
+   id (a local job) no reconcile ever ends it, and a loop counts it
+   pending for ever. Recording `running` before the first read of the
+   outputs prefix, or marking the row `failed` on any exception, would
+   close it (`rapidpipe/foundation/local.py`, `run_job`).
+
+   Raw evidence in the brief directory's `t7/` (`loop-82.log`,
+   `rows-82.txt`, `stream-packet.txt`, `stream-difference.txt`,
+   `check-82.txt`, `inspect-82/`, `gallery-67/`, `late-first-check.txt`,
+   `failpsf.log`).
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
