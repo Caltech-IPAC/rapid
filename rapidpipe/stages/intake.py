@@ -40,6 +40,11 @@ identifiers, romancal's version and the Gaia fit's summary.
 ``roman_<survey>_<filter>_<pointing>_wfi<sca>``, the file's own filter and
 detector must agree with it, and the ``expid`` is the pointing, the index
 into the survey's observing sequence (one exposure per pointing).
+``rimtimsim`` reads RimTimSim's ``<source_root><stem>.fits.gz``, `dev`'s
+converted ``lite`` files (:mod:`rapidpipe.science.intake_rimtimsim`): the
+stem is ``rimtimsim_WFI_<filter>_SCA<NN>_<exposure>_lite``, the file's own
+filter and SCA must agree with it, and the ``expid`` is the exposure
+number.
 
 ``[intake] dq_mask_bits`` is commissioning #238's DQ mask (0, `dev`'s
 behaviour, masks nothing): the conversion sets ``SCI``, ``ERR`` and
@@ -91,7 +96,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
-from rapidpipe.science import intake_openuniverse
+from rapidpipe.science import intake_openuniverse, intake_rimtimsim
 from rapidpipe.science.astrometry import gaia_offset
 from rapidpipe.science.intake import asdf_to_fits, gzip_file
 from rapidpipe.science.limmag import limiting_magnitude
@@ -236,6 +241,8 @@ READERS = {
                      "source_key": intake_openuniverse.source_key,
                      "convert": intake_openuniverse.simple_model_to_fits,
                      "expid": lambda ids: ids["pointing"]},
+    "rimtimsim": {"parse_stem": intake_rimtimsim.parse_stem, "source_key": intake_rimtimsim.source_key,
+                  "convert": intake_rimtimsim.lite_to_fits, "expid": lambda ids: ids["exposure"]},
 }
 
 
