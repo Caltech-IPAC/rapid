@@ -16,7 +16,7 @@ changes. Against Batch: a container that ended without
 its row recording it is marked failed with Batch's reason; a row marked
 failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone. PSFs: a new stem whose filter and
-SCA lack an official science or reference PSF gets one ``psf`` job for the
+SCA lack an official science PSF gets one ``psf`` job for the
 pair, expecting both keys, and no intake; an official pair admits intakes;
 a psf job of the run pending for the pair submits nothing more.
 """
@@ -71,7 +71,7 @@ class Pages:
 def snap(**kw) -> loop.Snapshot:
     base = dict(dataset=D, survey="HLWAS", settings=SETTINGS, fids={"W146": 8, "F184": 1},
                 published_stems=set(), jobs=[],
-                psfs={(8, 8, "science"): (10, 100), (8, 8, "reference"): (11, 101)},
+                psfs={(8, 8, "science"): (10, 100)},
                 exposures=set(), l2={}, refs={}, diffs={}, sources={}, objects={}, chain={}, packets={},
                 gaia={"key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "job": 12})
     base.update(kw)
@@ -329,6 +329,9 @@ def test_the_bound_differences_only_rows_at_or_after_it():
     l2 = {k1: l2row(7, 1.0, 20), k2: l2row(7, 2.5, 21), k3: l2row(7, 3.0, 22)}
     subs, _ = loop.plan(snap(settings=BOUND, l2=l2, refs={(7, 8): 30}), [], SEL)
     assert sorted(d["scope"]["expid"] for d in stages(subs, "difference")) == [k2[0], k3[0]]
+    # A difference names the science PSF only: it measures the reference's itself.
+    assert {(i["key"]["kind"], i["source_job"]) for d in stages(subs, "difference")
+            for i in d["inputs"] if i["product"] == "psfs"} == {("science", 10)}
 
     # Once those two are associated the chain starts at the bound, not at the reference's rows.
     sources = {k2: 42, k3: 43}
@@ -359,12 +362,12 @@ def test_without_the_bound_the_reference_takes_every_row_and_nothing_is_held():
 def test_a_missing_psf_submits_one_psf_job_and_no_intake_of_that_sca():
     sel = loop.Selection.parse("F146", "8,9", "all")
     stems = [stem(1, 1, 1), stem(2, 1, 1), stem(1, 1, 1, sca=9), stem(2, 1, 1, sca=9)]
-    psfs = {(8, 8, "science"): (10, 100), (8, 9, "science"): (12, 102), (8, 9, "reference"): (13, 103)}
-    subs, _ = loop.plan(snap(psfs=psfs), stems, sel)            # SCA 8 lacks its reference PSF
+    psfs = {(8, 9, "science"): (12, 102)}
+    subs, _ = loop.plan(snap(psfs=psfs), stems, sel)            # SCA 8 lacks its science PSF
     (psf,) = stages(subs, "psf")
     assert psf["scope"] == {"dataset": D, "file": stem(1, 1, 1)}
     assert [(e["product"], e["key"], e["binding"]) for e in psf["expects"]] == [
-        ("psfs", {"dataset": D, "fid": 8, "sca": 8, "kind": kind}, None) for kind in ("science", "reference")]
+        ("psfs", {"dataset": D, "fid": 8, "sca": 8, "kind": "science"}, None)]
     assert sorted(s["scope"]["file"] for s in stages(subs, "intake")) == [stem(1, 1, 1, sca=9),
                                                                           stem(2, 1, 1, sca=9)]
     # Neither SCA has a PSF: a job each, and no stem of either is admitted.
@@ -373,7 +376,7 @@ def test_a_missing_psf_submits_one_psf_job_and_no_intake_of_that_sca():
     assert stages(subs, "intake") == []
 
 
-def test_an_official_psf_pair_admits_intakes_and_submits_no_psf_job():
+def test_an_official_science_psf_admits_intakes_and_submits_no_psf_job():
     subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
     assert stages(subs, "psf") == []
     assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(2, 1, 1)]

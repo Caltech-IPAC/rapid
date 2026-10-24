@@ -3,7 +3,9 @@
 Contracts: ``job local`` records a job, runs a trivial stage and publishes
 it, and the live run's job binds the key it expects; ``job run`` on a job
 whose attempt 1 wrote files but did not publish publishes attempt 2, once;
-``job run`` on a published job stops before touching a file; a job run
+``job run`` on a published job stops before touching a file; a stage that
+stops with a named reason leaves its code and reason on the failed job's
+row, any other exception 70 and no reason; a job run
 under a job definition records its image digest and instance type and reports
 its peak memory.
 """
@@ -18,6 +20,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from rapidpipe.cli import main as cli
+from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation import create_job, local, run_job
 from tests.db.foundation_helpers import DATASET, new_run
 
@@ -76,6 +79,26 @@ def test_job_run_publishes_attempt_two_once_after_an_unpublished_attempt_one(con
     assert (result["attempt"], result["published"]) == (2, True)
     assert exposures_rows(conn, job) == (1, ("published", 2))
     assert (tmp_path / str(run) / "trivial" / str(job) / "1" / "exposures.parquet").is_file()
+
+
+@pytest.mark.parametrize("raised, recorded", [
+    (CommandExit(int(ExitCode.INPUT_REJECTED), "refpsf: 7 stars, 10 needed"),
+     (int(ExitCode.INPUT_REJECTED), "refpsf: 7 stars, 10 needed")),
+    (RuntimeError("unexpected"), (int(ExitCode.STAGE_ERROR), None)),
+])
+def test_a_failed_job_row_records_a_named_reason_and_its_code(connect, tmp_path, raised, recorded):
+    conn = connect()
+    job = create_job(conn, new_run(conn, live=True), "trivial", {})
+
+    def stopping_stage(job):
+        raise raised
+
+    with pytest.raises(type(raised)):
+        run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), stopping_stage)
+    with conn.cursor() as cur:
+        cur.execute("SELECT state, exit_code, refusal FROM jobs WHERE id = %s", (job,))
+        assert cur.fetchone() == ("failed", *recorded)
+    conn.commit()
 
 
 def test_job_run_on_a_published_job_stops_before_touching_a_file(connect, tmp_path):

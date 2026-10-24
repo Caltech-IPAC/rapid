@@ -41,7 +41,7 @@ from urllib.parse import urlparse
 
 from psycopg2.extras import RealDictCursor
 
-from rapidpipe.exitcodes import ExitCode
+from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.prefix import attempts, local_path, put
 from rapidpipe.foundation.publish import publish
 
@@ -123,7 +123,10 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     type (:func:`instance_type`) before the stage, clearing a reason an
     earlier attempt's failure left in ``refusal``,
     ``ended`` and ``exit_code`` after it; a stage or publication that raises
-    leaves the job ``failed`` and the exception propagates.
+    leaves the job ``failed`` and the exception propagates. A stage that
+    stops with a named reason raises :class:`~rapidpipe.exitcodes.CommandExit`:
+    the job row records its code and its message in ``refusal``; any other
+    exception records 70.
     """
     with connect() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -166,10 +169,11 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
         with connect() as conn:
             result = publish(conn, job_id, attempt, context.prefix)
             _record(conn, job_id, "ended = now(), exit_code = 0")
-    except BaseException:
+    except BaseException as exc:
+        named = isinstance(exc, CommandExit)
         with connect() as conn:
-            _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s",
-                    (int(ExitCode.STAGE_ERROR),))
+            _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s, refusal = %s",
+                    (exc.code if named else int(ExitCode.STAGE_ERROR), str(exc) if named else None))
         raise
     peak = {who: resource.getrusage(scope).ru_maxrss for who, scope in
             (("self", resource.RUSAGE_SELF), ("children", resource.RUSAGE_CHILDREN))}

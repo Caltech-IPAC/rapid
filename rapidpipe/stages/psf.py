@@ -1,5 +1,5 @@
 # ported-from: none
-"""``psf``: a filter and SCA's science and reference PSFs from the CRDS ePSF reference its L2 file names.
+"""``psf``: a filter and SCA's science PSF from the CRDS ePSF reference its L2 file names.
 
 New science, not `dev`'s (dev has no code that writes a PSF file from an
 ePSF; its F146 files were compiled offline). Its contract is
@@ -27,13 +27,14 @@ sample (its samples sum to about 1), so the block sum is the pixel's flux.
 The stamp is ``size x size`` at ``OVERSAMP = 1``, its centre on the central
 pixel for odd ``size`` and on the central corner for even.
 
-Two FITS files and two ``psfs`` rows: the science-image PSF
+One FITS file and one ``psfs`` row: the science-image PSF
 (``sciimage_psf_<filter>_sca<NN>.fits``, ``PSFKIND = sciimage_psf``, kind
-``science``) and the reference-image PSF (``refimage_psf_<filter>_sca<NN>.fits``,
-``refimage_psf``, kind ``reference``), the same stamp: a reference is a
-coadd of same-filter, same-SCA frames, and `dev`'s static reference files
-carry no recipe to port. Each header and the manifest carry the reference
-name (``EPSFREF``, the keyword the copied F146 files carry), the file's
+``science``). The reference-image PSF is not this stage's: the difference
+job measures it from the resampled reference it makes, because the PSF
+ZOGY needs is the one after the per-epoch resample (run 17: 15% wider than
+this stamp, which until 2026-10-24 was also written as the ``reference``
+kind; ``rapidpipe.science.difference.refpsf``). The header and the manifest
+carry the reference name (``EPSFREF``, the keyword the copied F146 files carry), the file's
 CRDS context, the position, the oversampling and the block, so the intake
 can compare a file's own ePSF with its bound PSF's.
 """
@@ -70,7 +71,7 @@ POSITION = (2048.0, 2048.0)
 FOCUS, SPECTRAL_TYPE = 0, "G2V"
 
 #: `dev`'s ``PSFKIND`` keyword value, also the file name's stem, for each ``psfs.kind``.
-KINDS = {"science": "sciimage_psf", "reference": "refimage_psf"}
+KINDS = {"science": "sciimage_psf"}
 
 #: Rows of a derived PSF are good: the reduction finished.
 STATUS_GOOD = 1

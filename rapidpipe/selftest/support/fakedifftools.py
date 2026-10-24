@@ -10,11 +10,14 @@ same catalog columns), which is what the stage's own logic needs. Every
 call is recorded for assertions.
 
 ``fake_psf_catalog`` stands in for
-:func:`rapidpipe.science.difference.psfcat.psf_catalog` (photutils).
+:func:`rapidpipe.science.difference.psfcat.psf_catalog` (photutils), and
+:class:`FakeReferencePsf` for
+:func:`rapidpipe.science.difference.refpsf.measure` (the synthetic epoch
+has too few stars for the real measurement).
 
 ``write_epoch`` writes a small synthetic epoch's files -- a gzipped
 two-HDU science image with a SIP WCS, a reference bundle on the same sky
-with its catalog, the science-image and reference-image PSFs -- for the
+with its catalog, the science-image PSF -- for the
 stage's unit and database tests.
 """
 
@@ -30,6 +33,7 @@ import numpy as np
 from astropy.io import fits
 
 from rapidpipe.science.difference.psfcat import PsfCatalogResult
+from rapidpipe.science.difference.refpsf import ReferencePsf, TooFewStars
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 #: The env var an operator can point at an arbitrary cdf/ checkout, read
@@ -136,7 +140,6 @@ EPOCH_FILES = {
     "uncertainty": "ref/awaicgen_output_mosaic_uncert_image.fits",
     "catalog": "ref/awaicgen_output_mosaic_refimsexcat.txt",
     "science_psf": "psf/sciimage_psf_f184_sca07.fits",
-    "reference_psf": "refpsf/refimage_psf_f184_sca07.fits",
 }
 
 
@@ -180,12 +183,9 @@ def write_epoch(directory: Path, *, seed: int = 20260922, magzp: float | None = 
         + "".join(" ".join(_catalog_row(p, int(x), int(y), flux) for p in params) + "\n"
                   for x, y, flux in STARS))
 
-    # PSFs: 9x9 Gaussians, labelled as dev's PSF generator labels them.
+    # The science PSF: a 9x9 Gaussian, labelled as dev's PSF generator labels it.
     fits.PrimaryHDU(data=(3.0 * _gaussian(9, 4, 4)).astype(np.float32),
                     header=fits.Header({"PSFKIND": "sciimage_psf"})).writeto(paths["science_psf"])
-    psf = _gaussian(9, 4, 4)
-    fits.PrimaryHDU(data=(psf / psf.sum()).astype(np.float32),
-                    header=fits.Header({"PSFKIND": "refimage_psf"})).writeto(paths["reference_psf"])
     return paths
 
 
@@ -377,6 +377,27 @@ class FakePsfCatalog:
         return PsfCatalogResult(produced=True, nsources=nsources)
 
 
+@dataclass
+class FakeReferencePsf:
+    """Stands in for ``refpsf.measure``: a 61 x 61 Gaussian of ``sigma``, or ``stars`` too few.
+
+    Records each call's image shape, usable count and science sigma.
+    """
+
+    sigma: float = 1.1
+    stars: int = 40
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    def __call__(self, image, usable, science_sigma_px) -> ReferencePsf:
+        self.calls.append({"shape": image.shape, "usable": int(usable.sum()),
+                           "science_sigma_px": science_sigma_px})
+        if self.stars < 10:
+            raise TooFewStars(self.stars)
+        stamp = _gaussian(61, 30, 30, self.sigma)
+        return ReferencePsf(stamp=stamp / stamp.sum(), stars=self.stars, detections=2 * self.stars,
+                            passed_cuts=self.stars, sigma_px=self.sigma, centroid_px=(0.0, 0.0))
+
+
 def _write_psfcat_parquet(path: Path, peaks) -> None:
     """The joined PSF-fit catalog's columns the source set maps, one row per peak."""
     import pyarrow as pa
@@ -401,4 +422,5 @@ def fake_toolkit():
     """Every external tool faked, for a test to put in place of ``difference.toolkit``."""
     from rapidpipe.stages.difference import Toolkit
 
-    return Toolkit(runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog())
+    return Toolkit(runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog(),
+                   reference_psf=FakeReferencePsf())

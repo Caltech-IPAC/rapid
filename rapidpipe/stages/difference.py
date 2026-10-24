@@ -14,7 +14,8 @@ publishes. The steps run in `dev`'s order, each one a function in
 reformat and simple-model uncertainty -> SExtractor science catalog and
 point-source FWHM -> SIP to PV and three SWarp resamplings of the
 reference bundle -> PSF normalisation -> bkgest on the science image and
-on the resampled reference -> gain matching (``scalefacref``, x/y RMS and
+on the resampled reference -> the reference PSF measured from the
+resampled reference's stars -> gain matching (``scalefacref``, x/y RMS and
 medians) -> NaN replacement and artifact repair -> subpixel offset of the
 reference by the medians -> ZOGY -> coverage mask, NaN restore, negation
 -> difference uncertainty -> SExtractor and Photutils catalogs, positive
@@ -34,10 +35,20 @@ fetched with :func:`rapidpipe.foundation.prefix.get`:
   which). Its coverage and uncertainty maps sit beside the mosaic, and
   its mosaic SExtractor catalog (``refimcatalogs`` cattype 1) gives the
   reference FWHM.
-- ``psfs``: exactly one of each kind, the science-image PSF (key ``kind``
-  ``science``) and the reference-image PSF (``reference``), each of the
-  scope's filter and SCA. The kind is the key's, read from the row; the
-  file's header is not consulted.
+- ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``)
+  of the scope's filter and SCA.
+
+The reference-image PSF is not an input: ZOGY needs the PSF of the image
+it is given, the reference after the per-epoch SWarp resample, so the job
+measures it there (:func:`rapidpipe.science.difference.refpsf.measure`,
+after the reference background subtraction, on pixels finite and covered
+at ``post_zogy_keep_diffimg_lower_cov_map_thresh``) and writes it as
+``refimage_psf.fits``. Too few stars fails the job with exit 65 and the
+reason (``refpsf: N stars, 10 needed``) on the job row; there is no
+fallback. `dev` uses a static offline-compiled reference PSF per detector
+instead, so this is a recorded divergence (rapid_docs ``decisions.md``,
+2026-10-24: the empirical PSF was 15% wider than the science ePSF the
+``psf`` stage had handed ZOGY for both, run 17).
 
 Outputs under ``job.path``. ``[paths] work_subdirectory`` holds what the
 packet stage and a person read, and nothing else (:func:`trim`, Ben's
@@ -47,7 +58,8 @@ positive PSF-fit catalog (``*_psfcat.parquet``, uncapped), and the packet
 stage's other reads beside the difference image, the difference PSF
 (``diffpsf.fits``, forced photometry), the background-subtracted science
 image (forced photometry and the science cutout) and the resampled
-gain-matched reference (the template cutout). Every FITS file is
+gain-matched reference (the template cutout), and the measured reference
+PSF (``refimage_psf.fits``). Every FITS file is
 gzipped (``.fits.gz``, level 1, as the intake's). The rest of `dev`'s
 diagnostic files (SFFT and naive products, negatives, S_corr,
 intermediate images, text catalogs) is not published; a variant is
@@ -58,7 +70,13 @@ table's identity sequence so the sources can carry it; ``infobitssci`` is
 and ``sources`` (the ZOGY positive PSF-fit catalog through
 :func:`rapidpipe.science.load.catalogs.source_set`, capped at ``max_sources``
 as the import caps it). The manifest records `dev`'s gain-matching and
-catalog measurements under ``difference``.
+catalog measurements under ``difference``, the reference PSF's
+measurement under ``difference.refpsf``, and ``metrics``, one flat dict of
+named numbers (``refpsf_sigma_px`` and ``sci_psf_sigma_px``, the two
+stamps' second-moment sigma within 4 px, px; ``refpsf_stars``, the stars
+built from; ``psf_centroid_offset_px``, the reference stamp's centroid
+minus the science stamp's, x and y, px: their relative centring is what
+ZOGY sees).
 
 Determinism: on identical inputs the stage writes identical pixels and
 rows (FITS ``DATE`` cards and the bkgest tables' time stamps aside) when
@@ -96,6 +114,7 @@ import pyarrow.parquet as pq
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.products.diffimage import catalog_outcome_bit
@@ -108,6 +127,7 @@ from rapidpipe.science.difference import (
     psf,
     psfcat,
     reformat,
+    refpsf,
     repair,
     resample,
     sextractor,
@@ -128,8 +148,10 @@ logger = logging.getLogger(__name__)
 REFERENCE_CATALOG_TYPE = 1
 #: The status of a difference image the stage finished.
 STATUS_GOOD = 1
-#: The two ``psfs`` key kinds the job names, one of each.
-PSF_KINDS = ("science", "reference")
+#: The ``psfs`` key kind the job names, one.
+PSF_KINDS = ("science",)
+#: The measured reference PSF's file name in the work directory.
+REFERENCE_PSF_NAME = "refimage_psf.fits"
 #: The gzip level of the published FITS files, the intake's.
 GZIP_LEVEL = 1
 
@@ -150,12 +172,15 @@ class Toolkit:
     ``runner`` runs SExtractor, SWarp, bkgest, py_zogy.py and SFFT;
     ``sip_to_pv`` rewrites a FITS header's SIP distortion as PV in place;
     ``psf_catalog`` makes one Photutils catalog
-    (:func:`rapidpipe.science.difference.psfcat.psf_catalog`'s signature).
+    (:func:`rapidpipe.science.difference.psfcat.psf_catalog`'s signature);
+    ``reference_psf`` measures the reference PSF
+    (:func:`rapidpipe.science.difference.refpsf.measure`'s signature).
     """
 
     runner: Any = field(default_factory=ToolRunner)
     sip_to_pv: Callable = resample._default_sip_to_pv
     psf_catalog: Callable = psfcat.psf_catalog
+    reference_psf: Callable = refpsf.measure
 
 
 def toolkit() -> Toolkit:
@@ -245,7 +270,6 @@ class Inputs:
     reference_uncertainty: Path
     reference_catalog: Path
     science_psf: Path
-    reference_psf: Path
     pid: int
 
 
@@ -268,8 +292,8 @@ def read_inputs(job: JobContext) -> Inputs:
     counts = {p: len(by_product.get(p, [])) for p in ("l2files", "refimages")}
     psf_kinds = sorted((i["key"].get("kind") for i in by_product.get("psfs", [])), key=str)
     if counts != {"l2files": 1, "refimages": 1} or psf_kinds != sorted(PSF_KINDS):
-        raise ValueError(f"job {job.job}: difference names one l2files, one refimages and two "
-                         f"psfs inputs, one of each key kind {PSF_KINDS}, got {counts} and psfs "
+        raise ValueError(f"job {job.job}: difference names one l2files, one refimages and one "
+                         f"psfs input of key kind {PSF_KINDS}, got {counts} and psfs "
                          f"kinds {psf_kinds}")
     (l2_in,), (ref_in,) = by_product["l2files"], by_product["refimages"]
     if l2_in["key"] != key:
@@ -331,7 +355,7 @@ def read_inputs(job: JobContext) -> Inputs:
         reference_uncertainty=_beside(ref_url,
                                       image_name.replace("_image.fits", "_uncert_image.fits")),
         reference_catalog=get(refcat[0]),
-        science_psf=get(psf_urls["science"]), reference_psf=get(psf_urls["reference"]), pid=pid)
+        science_psf=get(psf_urls["science"]), pid=pid)
 
 
 def _stage_input(source: Path, work_dir: Path, taken: set[str]) -> str:
@@ -444,8 +468,7 @@ def run(job: JobContext) -> None:
     staged = {name: _stage_input(path, work_dir, taken) for name, path in (
         ("science", inputs.science_image), ("reference", inputs.reference_image),
         ("coverage", inputs.reference_coverage), ("uncertainty", inputs.reference_uncertainty),
-        ("catalog", inputs.reference_catalog), ("science_psf", inputs.science_psf),
-        ("reference_psf", inputs.reference_psf))}
+        ("catalog", inputs.reference_catalog), ("science_psf", inputs.science_psf))}
     science_image_filename = _unzip_science_image(work_dir, staged["science"])
 
     def w(name: str) -> Path:
@@ -491,7 +514,7 @@ def run(job: JobContext) -> None:
         # SWarp has read the .head symlinks; they would publish as copies.
         w(output.replace(".fits", ".head")).unlink(missing_ok=True)
 
-    # Normalise the science PSF (the reference PSF is already normalised).
+    # Normalise the science PSF (the reference PSF is measured below).
     filename_sciimage_psf_normalized = staged["science_psf"].replace(".fits", "_normalized.fits")
     psf.normalize_image(w(staged["science_psf"]), 0, w(filename_sciimage_psf_normalized))
 
@@ -510,6 +533,11 @@ def run(job: JobContext) -> None:
         background.subtract_reference_background(
             kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
             output_resampled_reference_image, output_resampled_reference_cov_map, bkgest)
+
+    # The reference PSF, measured on the resampled, background-subtracted reference.
+    refpsf_record, metrics = _measure_reference_psf(
+        kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
+        w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME))
 
     # Gain matching, with the reference zero point the reference was built on.
     zero_point, zero_point_source = _resolve_zero_point(settings, w(staged["reference"]))
@@ -587,7 +615,7 @@ def run(job: JobContext) -> None:
     kit.runner.run(zogy.build_zogy_command(
         python_cmd, paths["zogy_code"],
         filename_bkg_subbed_science_image, output_resampled_gainmatched_reference_image,
-        filename_sciimage_psf_normalized, staged["reference_psf"],
+        filename_sciimage_psf_normalized, REFERENCE_PSF_NAME,
         reformatted_science_uncert_image_filename,
         output_resampled_gainmatched_reference_uncert_image,
         zogy_sn, zogy_sr, zogy_astrometric_sigma, zogy_astrometric_sigma,
@@ -647,7 +675,7 @@ def run(job: JobContext) -> None:
             science_image_filename=science_image_filename,
             scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
             refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
-            science_psf=filename_sciimage_psf_normalized, reference_psf=staged["reference_psf"],
+            science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
             **common)
         sfft_note = {"ran": True, "exit_code": exit_code}
         if exit_code == 0:
@@ -656,7 +684,7 @@ def run(job: JobContext) -> None:
             logger.warning("SFFT did not execute successfully (exit %s); continuing with ZOGY "
                            "only, as dev does", exit_code)
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
-        infobits |= _run_naive(reference_psf=staged["reference_psf"], **common)
+        infobits |= _run_naive(reference_psf=REFERENCE_PSF_NAME, **common)
 
     # Rows.
     with fits.open(w(filename_diffimage_masked)) as hdul:
@@ -669,7 +697,8 @@ def run(job: JobContext) -> None:
     published = trim(work_dir, images=[
         filename_diffimage_masked, filename_diffimage_unc_masked,
         output_resampled_reference_cov_map, filename_diffpsf, filename_bkg_subbed_science_image,
-        output_resampled_gainmatched_reference_image], others=[parquet] if parquet else [])
+        output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME],
+        others=[parquet] if parquet else [])
     filename_diffimage_published = filename_diffimage_masked + ".gz"
     centre, corners = image_centre_and_corners(WCS(header), header["NAXIS1"], header["NAXIS2"])
     footprint = {"ra0": centre["ra"], "dec0": centre["dec"]}
@@ -709,7 +738,41 @@ def run(job: JobContext) -> None:
                               "photutils": zogy_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
             "infobits_science_l2": inputs.infobits_science, "sfft": sfft_note,
-            "published": published})
+            "refpsf": refpsf_record, "published": published},
+        metrics=metrics)
+
+
+def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh: float,
+                           science_psf: Path, target: Path) -> tuple[dict, dict]:
+    """Measure the reference PSF into ``target``; return the manifest's record and metrics.
+
+    Too few stars stops the job with exit 65 and the measurement's reason.
+    """
+    start = time.perf_counter()
+    image = fits.getdata(reference, 0)
+    usable = fits.getdata(coverage, 0) >= thresh
+    sci = refpsf.moments(fits.getdata(science_psf, 0).astype(float))
+    try:
+        measured = kit.reference_psf(image, usable, sci[2])
+    except refpsf.TooFewStars as exc:
+        raise CommandExit(int(ExitCode.INPUT_REJECTED), str(exc)) from exc
+    header = fits.Header()
+    header["PSFKIND"] = ("refimage_psf", "measured on the resampled reference")
+    header["OVERSAMP"] = (1, "detector pixels")
+    header["NSTARS"] = (measured.stars, "stars the ePSF was built from")
+    header["PSFSIG"] = (round(measured.sigma_px, 4), "second-moment sigma within 4 px, px")
+    fits.PrimaryHDU(measured.stamp.astype("float32"), header).writeto(target)
+    seconds = round(time.perf_counter() - start, 3)
+    logger.info("reference PSF: %d stars of %d detections, sigma %.3f px (science %.3f), %.1f s",
+                measured.stars, measured.detections, measured.sigma_px, sci[2], seconds)
+    record = {"stars": measured.stars, "detections": measured.detections,
+              "passed_cuts": measured.passed_cuts, "seconds": seconds,
+              "centroid_px": list(measured.centroid_px), "science_centroid_px": [sci[0], sci[1]]}
+    metrics = {"refpsf_sigma_px": measured.sigma_px, "refpsf_stars": measured.stars,
+               "sci_psf_sigma_px": sci[2],
+               "psf_centroid_offset_px": [measured.centroid_px[0] - sci[0],
+                                          measured.centroid_px[1] - sci[1]]}
+    return record, metrics
 
 
 def trim(work_dir: Path, images: list[str], others: list[str]) -> dict[str, Any]:

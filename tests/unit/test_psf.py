@@ -1,7 +1,8 @@
 """The psf stage on a synthetic L2 file and a synthetic ePSF reference whose model is a known Gaussian.
 
-Contracts: the job declares two ``psfs`` rows, kinds ``science`` and
-``reference``, each with its FITS file and ``PSFKIND``; the stamp is
+Contracts: the job declares one ``psfs`` row, kind ``science``, with its
+FITS file and ``PSFKIND`` (the reference PSF is the difference job's
+measurement, not this stage's); the stamp is
 ``size x size``, holds the Gaussian's flux to within 0.5% (the reference
 grid is cut at five sigma and spline-interpolated) and its centroid sits at
 the stamp's centre within 0.01 pixel, for odd and even ``size``; every
@@ -86,18 +87,17 @@ def run_psf(tmp_path: Path, source: Path, monkeypatch, size: int = 15) -> Path:
     return prefix
 
 
-def test_two_rows_and_files_are_declared_with_their_kinds(tmp_path, source, monkeypatch):
+def test_one_science_row_and_file_are_declared(tmp_path, source, monkeypatch):
     prefix = run_psf(tmp_path, source, monkeypatch)
     manifest = json.loads((prefix / "manifest.json").read_text())
     assert [o["table"] for o in manifest["outputs"]] == ["psfs"]
     rows = pq.read_table(prefix / "psfs.parquet").to_pylist()
     assert all(set(row) == schema_columns("psfs") for row in rows)
-    assert sorted((r["kind"], r["dataset"], r["fid"], r["sca"]) for r in rows) == [
-        ("reference", "r00342", 8, 8), ("science", "r00342", 8, 8)]
-    for row in rows:
-        keyword = {"science": "sciimage_psf", "reference": "refimage_psf"}[row["kind"]]
-        assert row["filename"] == prefix.as_uri() + "/" + f"{keyword}_f146_sca08.fits"
-        assert fits.getheader(prefix / f"{keyword}_f146_sca08.fits")["PSFKIND"] == keyword
+    assert [(r["kind"], r["dataset"], r["fid"], r["sca"]) for r in rows] == [
+        ("science", "r00342", 8, 8)]
+    assert rows[0]["filename"] == prefix.as_uri() + "/sciimage_psf_f146_sca08.fits"
+    assert fits.getheader(prefix / "sciimage_psf_f146_sca08.fits")["PSFKIND"] == "sciimage_psf"
+    assert not (prefix / "refimage_psf_f146_sca08.fits").exists()
 
 
 @pytest.mark.parametrize("size", [15, 16])
@@ -114,9 +114,8 @@ def test_the_stamp_holds_the_flux_centred_on_the_stamp(tmp_path, source, monkeyp
 
 def test_the_headers_and_manifest_carry_the_reference_name(tmp_path, source, monkeypatch):
     prefix = run_psf(tmp_path, source, monkeypatch)
-    for name in ("sciimage_psf_f146_sca08.fits", "refimage_psf_f146_sca08.fits"):
-        header = fits.getheader(prefix / name)
-        assert header["EPSFREF"] == EPSF and header["CRDSCTX"] == "roman_0046.pmap"
+    header = fits.getheader(prefix / "sciimage_psf_f146_sca08.fits")
+    assert header["EPSFREF"] == EPSF and header["CRDSCTX"] == "roman_0046.pmap"
     recorded = json.loads((prefix / "manifest.json").read_text())["psf"]
     assert (recorded["epsf"], recorded["context"]) == (EPSF, "roman_0046.pmap")
 
