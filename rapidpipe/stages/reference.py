@@ -40,7 +40,9 @@ copies them) and the SExtractor catalog. Declared tables: ``refimages``
 the child rows can carry it), ``refimimages`` (one row per coadded L2
 row) and ``refimcatalogs`` (the mosaic catalog, ``cattype`` 1, which the
 packet stage reads for reference-star matches). The manifest also records
-`dev`'s refimmeta measurements under ``reference``.
+`dev`'s refimmeta measurements under ``reference`` and ``metrics``, one
+flat dict of named numbers (the compact stars' width, the coverage
+histogram, the extremes; :func:`rapidpipe.science.reference.measure.quality_metrics`).
 
 Departures from `dev` (reference page):
 
@@ -77,6 +79,7 @@ import pyarrow.parquet as pq
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.science.difference.sextractor import parse_ascii_text_sextractor_catalog
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.reference import awaicgen, catalog, header, measure, prep
 from rapidpipe.science.spatial import field_center
@@ -382,6 +385,13 @@ def run(job: JobContext) -> None:
         raise ValueError(f"reference catalog {catalog_name} has no sources with a usable "
                          f"FWHM_IMAGE (the coadd of these frames yields no reference): {exc}") from exc
 
+    metrics = measure.quality_metrics(
+        o(names["image"]), o(names["coverage"]),
+        parse_ascii_text_sextractor_catalog(
+            o(catalog_name), paths["cfg_path"] + "/" + catalog.PARAMS_FILE,
+            ["XWIN_IMAGE", "YWIN_IMAGE", "FLAGS", "CLASS_STAR", "FLUX_AUTO", "FLUXERR_AUTO"]),
+        measurements)
+
     stamp = header.StampValues(
         field=rtid, exposure_filter=unit_filter, cov5percent=measurements.cov5percent,
         nframes=len(prepared), refimage_input_filenames=tuple(f.name for f in coadded),
@@ -417,4 +427,5 @@ def run(job: JobContext) -> None:
                    "zero_point": zprefimg, **measurements.to_dict(),
                    "fwhmmedpix": fwhm.fwhmmedpix, "fwhmminpix": fwhm.fwhmminpix,
                    "fwhmmaxpix": fwhm.fwhmmaxpix, "nsexcatsources": fwhm.nsexcatsources,
-                   "not_coadded": not_coadded})
+                   "not_coadded": not_coadded},
+        metrics=metrics)

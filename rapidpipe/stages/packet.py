@@ -75,6 +75,9 @@ object container, deflate level 1, one record per block), declared tables
 length from ``fastavro.block_reader``), ``forced`` (``forced.parquet``,
 every row the packets carry, measured or reused, so the set is
 self-contained) and ``external`` (``external.parquet``, the Gaia matches).
+The manifest's ``metrics``: ``n_packets``, the set's packets, and
+``n_packets_snr_gt20``, those whose source's fit flux over its error is
+above 20.
 """
 
 from __future__ import annotations
@@ -432,7 +435,9 @@ def run(job: JobContext) -> None:
     summary = write_set(_read(job), job.settings["packet"], job.path, job.prefix, job.dataset,
                         sync_seed=f"{job.job}/{job.attempt}")
     job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
-                        ("external", "external.parquet")], packet=summary)
+                        ("external", "external.parquet")], packet=summary,
+                       metrics={"n_packets": summary["packets"],
+                                "n_packets_snr_gt20": summary["packets_snr_gt20"]})
 
 
 def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
@@ -538,6 +543,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), path / filename)
     return {"avro": f"packets/{name}", "avro_bytes": avro.stat().st_size,
             "flags_zero": read.flags_zero, "packets": len(order),
+            "packets_snr_gt20": sum(1 for source, _ in order
+                                    if source.fluxerr and source.fluxfit / source.fluxerr > 20),
             "window_images": len(window), "forced_rows": len(forced_rows),
             "forced_measured": measured, "forced_reused": len(forced_rows) - measured,
             "gaia_matches": len(external),

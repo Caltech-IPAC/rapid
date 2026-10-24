@@ -104,3 +104,62 @@ def measure_mosaic(image: Path, coverage: Path, uncertainty: Path, *,
         gmin=float(stats_refimage["gdatamin"]),
         gmax=float(stats_refimage["gdatamax"]),
     )
+
+
+#: Compact stars of the mosaic catalog: SExtractor ``FLAGS`` 0, ``CLASS_STAR`` at least this,
+#: ``FLUX_AUTO`` over its error at least this, no other catalog source within this, px.
+STAR_CLASS_MIN, STAR_SNR_MIN, STAR_ISOLATION_PX = 0.9, 50.0, 14.0
+_STAMP_HALF = 15
+
+
+def quality_metrics(image: Path, coverage: Path, catalog_rows: list[list[str]],
+                    measurements: MosaicMeasurements) -> dict:
+    """The reference job's ``metrics``: one flat dict of named numbers.
+
+    ``catalog_rows`` are the mosaic catalog's ``XWIN_IMAGE``, ``YWIN_IMAGE``
+    (1-based), ``FLAGS``, ``CLASS_STAR``, ``FLUX_AUTO`` and ``FLUXERR_AUTO``.
+
+    - ``star_sigma_px``: the median second-moment sigma within 4 px
+      (:func:`rapidpipe.science.difference.refpsf.moments`) of the compact
+      stars, on the mosaic less each stamp's 8 to 12 px annulus median,
+      mosaic px; ``n_sigma_stars`` beside it; both absent without a star.
+    - ``coverage_lt1``, ``coverage_lt2``, ``coverage_lt3``: the share of the
+      mosaic's covered pixels (coverage above 0) whose coverage is below 1,
+      2 and 3 frames.
+    - ``gmin`` and ``gmax``: the mosaic's extremes (`dev`'s, above).
+    """
+    from rapidpipe.science.difference.refpsf import moments
+
+    cov = np.asarray(fits.getdata(coverage, 0), dtype=float)
+    covered = cov[np.isfinite(cov) & (cov > 0)]
+    metrics: dict = {"gmin": measurements.gmin, "gmax": measurements.gmax}
+    if covered.size:
+        for n in (1, 2, 3):
+            metrics[f"coverage_lt{n}"] = float(np.mean(covered < n))
+    if not catalog_rows:
+        return metrics
+    rows = np.array(catalog_rows, dtype=float)
+    x, y = rows[:, 0] - 1, rows[:, 1] - 1
+    compact = ((rows[:, 2] == 0) & (rows[:, 3] >= STAR_CLASS_MIN)
+               & (rows[:, 4] >= STAR_SNR_MIN * rows[:, 5]))
+    from scipy.spatial import cKDTree
+
+    pairs = cKDTree(np.column_stack([x, y])).query_pairs(STAR_ISOLATION_PX, output_type="ndarray")
+    compact[pairs.ravel()] = False
+    data = np.asarray(fits.getdata(image, 0), dtype=float)
+    ny, nx = data.shape
+    h = _STAMP_HALF
+    rr, cc = np.mgrid[-h:h + 1, -h:h + 1]
+    annulus = (np.hypot(rr, cc) >= 8) & (np.hypot(rr, cc) < 12)
+    sigmas = []
+    for xi, yi in zip(np.rint(x[compact]).astype(int), np.rint(y[compact]).astype(int)):
+        if not (h <= xi < nx - h and h <= yi < ny - h):
+            continue
+        stamp = data[yi - h:yi + h + 1, xi - h:xi + h + 1]
+        if not np.isfinite(stamp).all():
+            continue
+        sigmas.append(moments(stamp - np.median(stamp[annulus]))[2])
+    if sigmas:
+        metrics["star_sigma_px"] = float(np.median(sigmas))
+        metrics["n_sigma_stars"] = len(sigmas)
+    return metrics

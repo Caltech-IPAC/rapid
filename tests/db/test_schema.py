@@ -24,7 +24,7 @@ PRODUCT_TABLES = (
     "diffimages", "psfs", "sources", "objects", "memberships", "packets",
     "forced", "external", "catalogs",
 )
-VIEWS = tuple(f"{t}_official" for t in PRODUCT_TABLES) + ("members_official",)
+VIEWS = tuple(f"{t}_official" for t in PRODUCT_TABLES) + ("members_official", "job_metrics")
 
 
 def _admin_connection():
@@ -177,3 +177,19 @@ def test_q3c_is_present_in_ci(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'q3c'")
         assert cur.fetchone() == (1,)
+
+
+def test_job_metrics_exposes_each_numeric_metric_with_the_jobs_scope(conn):
+    with conn.cursor() as cur:
+        run, _ = _run_and_job(cur)
+        cur.execute(
+            "INSERT INTO jobs (run, stage, scope, manifest) VALUES (%s, 'difference', %s, %s)"
+            " RETURNING id",
+            (run, '{"expid": 4040101, "sca": 8, "fid": 8}',
+             '{"metrics": {"n_sources": 500, "core_fraction": 0.03, "note": "x"}}'))
+        job = cur.fetchone()[0]
+        cur.execute("SELECT run, stage, dataset, expid, sca, fid, field, metric, value"
+                    " FROM job_metrics WHERE job = %s ORDER BY metric", (job,))
+        rows = cur.fetchall()
+    assert rows == [(run, "difference", "D", 4040101, 8, 8, None, "core_fraction", 0.03),
+                    (run, "difference", "D", 4040101, 8, 8, None, "n_sources", 500.0)]

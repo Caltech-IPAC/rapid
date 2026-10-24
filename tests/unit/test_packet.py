@@ -193,6 +193,7 @@ def test_forced_rows_a_predecessor_holds_are_reused_not_measured(tmp_path):
     assert set(forced) == {(7, 201), (7, 202), (9, 201), (9, 202)}
     assert forced[(7, 201)]["psf_flux"] == 12345.0 and forced[(7, 201)]["time_proc"] == 61000.0
     assert summary["forced_reused"] == 1 and summary["forced_measured"] == 3
+    assert (summary["packets"], summary["packets_snr_gt20"]) == (2, 2)  # both triggers at S/N 50
     # the measured epoch-2 flux of A is near its injected 500 (unit-sum PSF, unit noise)
     assert abs(forced[(7, 202)]["psf_flux"] - 500.0) < 50.0
     carried = {f["midpointMjd"]: f["psfFlux"] for f in records[1]["prvDiaForcedSources"]}
