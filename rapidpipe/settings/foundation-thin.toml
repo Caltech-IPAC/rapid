@@ -411,6 +411,18 @@ sextractor_interp_type = "ALL"
 # The brightest sources kept per difference image, by fluxfit / fluxerr,
 # as [import] max_sources; 0 keeps every source.
 max_sources = 500
+# The published differencer, dev's [ALERTS] diff_flavor: "zogy" or "sfft".
+# The published rows are this differencer's image, uncertainty, PSF and
+# positive PSF-fit catalog; the other still runs and its PSF-fit catalogs stay
+# under the prefix as diagnostics. dev's value is sfft (since b725007d,
+# 2026-04-20, measured on GBTDS socsims only). The shipped default is zogy
+# (Ben, 2026-10-24 21:19 UTC): on HLWAS the raw SFFT catalog fills the cap
+# with star residuals (core fraction +0.252 against ZOGY's +0.003; injected
+# detection at AB 25 0.99 -> 0.00, false positives per epoch 228 -> 385, run
+# 88 against run 81), and dev never publishes it raw: sumrat, nneg, nbad and
+# the prefilter are what make it usable, and they are not ported yet (queue
+# items dev-columns, dev-prefilter, sfft-core).
+diff_flavor = "zogy"
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
 xy_fit_max_offset = 0.5
