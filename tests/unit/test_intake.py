@@ -12,7 +12,13 @@ manifest names the file's provenance; a file whose own identifiers
 contradict its name fails before a manifest; the file name parses, and the
 expid packs, as the stage's docstring says; a file whose own ePSF
 reference is not the one its science PSF names (``EPSFREF``) fails before
-a manifest, and one whose PSF names the same reference publishes.
+a manifest, and one whose PSF names the same reference publishes; the DQ
+mask (``[intake] dq_mask_bits``, default 0, `dev`'s behaviour: nothing
+masked) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
+bit, leaves ``DQ`` as it was, carries ``DQMASK`` and ``NDQMASK`` on each
+masked HDU and counts the file's own NaN, the masked pixels and their union
+in the manifest; the HLWAS overlay's bits are #238's names without
+SATURATED.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
+import tomllib
 from astropy.io import fits
 from astropy.wcs import WCS
 
@@ -40,7 +47,10 @@ EPSF = "roman_wfi_epsf_0276.asdf"
 SETTINGS = {"intake": {"source_root": None, "unsigned": False, "sip_degree": 5,
                        "sip_max_pix_error": 0.1, "gzip_level": 1, "program_id": -1,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10,
-                       "nominal_zptmag": {"F146": 27.5}}}
+                       "nominal_zptmag": {"F146": 27.5}, "dq_mask_bits": 0}}
+#: Pixels the synthetic file flags, each (y, x, DQ value); (1, 1) is also NaN in the file itself.
+FLAGGED = [(1, 1, 0x1), (2, 3, 0x2000000), (5, 7, 0x2 | 0x400), (9, 9, 0x2), (11, 4, 0x4)]
+NATIVE_NAN = [(1, 1), (20, 20)]
 
 
 def schema_columns(table: str) -> set[str]:
@@ -80,6 +90,11 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
     model.data = rng.normal(1.0, 0.05, (N, N)).astype(np.float32)
     model.err = np.full((N, N), 0.05, dtype=np.float16)
     model.var_poisson = np.full((N, N), 0.0025, dtype=np.float16)
+    model.dq = np.zeros((N, N), dtype=np.uint32)
+    for y, x, bits in FLAGGED:
+        model.dq[y, x] = bits
+    for y, x in NATIVE_NAN:
+        model.data[y, x] = np.nan
     meta = model.meta
     meta.wcs = distorted_gwcs()
     meta.instrument.detector = f"WFI{ids['sca']:02d}"
@@ -134,10 +149,11 @@ def source(tmp_path: Path) -> Path:
 
 
 def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
-               expects_exposure: bool = True) -> Path:
+               expects_exposure: bool = True, dq_mask_bits: int = 0) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
-    settings = {"intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/"}}
+    settings = {"intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
+                           "dq_mask_bits": dq_mask_bits}}
     expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
                 "binding": None}]
     if expects_exposure:
@@ -166,7 +182,7 @@ def test_the_fits_file_has_devs_layout_and_the_keywords_the_difference_stage_rea
         assert keyword in header, keyword
     assert header["FILTER"] == "W146" and header["SCA_NUM"] == 8 and header["BUNIT"] == "DN"
     assert all(f"{p}_{i}_{j}" in header for p in ("A", "B", "AP", "BP") for i in range(6) for j in range(6))
-    assert np.isclose(np.median(data), EXPTIME, rtol=0.01)  # DN/s of about 1 times EXPTIME
+    assert np.isclose(np.nanmedian(data), EXPTIME, rtol=0.01)  # DN/s of about 1 times EXPTIME
 
 
 def test_the_sip_header_reproduces_the_gwcs_within_the_fits_own_bound(tmp_path, source):
@@ -248,3 +264,54 @@ def test_a_psf_from_another_epsf_reference_refuses_the_file_before_a_manifest(tm
     with pytest.raises(ValueError, match="roman_wfi_epsf_0999.asdf"):
         run_intake(tmp_path, source)
     assert not (tmp_path / "outputs" / "manifest.json").exists()
+
+
+def hdus(prefix: Path) -> dict[str, fits.ImageHDU]:
+    with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
+        return {h.name: h.copy() for h in hdul[1:] if h.is_image}
+
+
+def test_dq_mask_bits_defaults_to_devs_behaviour_nothing_masked(tmp_path, source):
+    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
+    assert shipped["intake"]["dq_mask_bits"] == 0
+    prefix = run_intake(tmp_path, source)
+    images = hdus(prefix)
+    assert all("DQMASK" not in h.header for h in images.values())
+    assert np.isnan(images["SCI"].data).sum() == len(NATIVE_NAN)
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["dq"] == {"mask_bits": "0x0", "masked": 0, "nan_input": 2, "nan_output": 2}
+    assert manifest["metrics"] == {"masked_fraction": 0.0}
+
+
+def test_the_mask_sets_sci_err_and_var_nan_keeps_dq_and_counts_the_union(tmp_path, source):
+    bits = 0x1 | 0x400 | 0x2000000  # DO_NOT_USE, DEAD, UNRELIABLE_FLAT
+    prefix = run_intake(tmp_path, source, dq_mask_bits=bits)
+    images = hdus(prefix)
+    masked = {(y, x) for y, x, flags in FLAGGED if flags & bits}
+    assert masked == {(1, 1), (2, 3), (5, 7)}
+    for name in ("SCI", "ERR", "VAR_POISSON"):
+        data, header = images[name].data, images[name].header
+        assert all(np.isnan(data[y, x]) for y, x in masked), name
+        assert header["DQMASK"] == bits and header["NDQMASK"] == len(masked), name
+    assert np.isfinite(images["SCI"].data[9, 9]) and np.isfinite(images["ERR"].data[11, 4])
+    assert "DQMASK" not in images["DQ"].header
+    assert {(y, x, int(images["DQ"].data[y, x])) for y, x, _ in FLAGGED} == set(FLAGGED)
+    union = masked | set(NATIVE_NAN)
+    assert {tuple(p) for p in np.argwhere(np.isnan(images["SCI"].data))} == union
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["dq"] == {"mask_bits": hex(bits), "masked": 3, "nan_input": 2,
+                              "nan_output": len(union)}
+    assert manifest["metrics"]["masked_fraction"] == pytest.approx(3 / N**2)
+
+
+def test_the_hlwas_mask_is_238s_named_bits_without_saturated():
+    from roman_datamodels.dqflags import pixel
+
+    overlay = tomllib.loads((REPO / "rapidpipe/settings/datasets/hlwas-r00342.toml").read_text())
+    names = ("DO_NOT_USE", "DEAD", "HOT", "NONLINEAR", "NO_LIN_CORR", "UNRELIABLE_FLAT")
+    named = 0
+    for name in names:
+        named |= int(pixel[name])
+    assert overlay["intake"]["dq_mask_bits"] == named
+    assert named | int(pixel.SATURATED) == 0x2110C03  # #238's default, dqMaskSubs.py
+    assert not named & int(pixel.SATURATED) and not named & int(pixel.JUMP_DET)

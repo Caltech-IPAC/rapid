@@ -33,6 +33,10 @@ program_id = -1
 limmag_nsigma = 5.0
 limmag_clip_sigma = 3.0
 limmag_maxiters = 10
+# DQ bits whose pixels the conversion sets NaN in SCI, ERR and VAR_*
+# (commissioning #238's DQMASKBITS, pipeline/dqMaskSubs.py). 0 is dev's
+# behaviour: nothing masked, DQ written and never read.
+dq_mask_bits = 0
 
 [intake.nominal_zptmag]
 # dev's nominal WFI AB zeropoints [mag], used only when the file carries no
