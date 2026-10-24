@@ -11,7 +11,10 @@ detection; the detection is **alerted** when ``packets_official`` has a
 row for it (a left join, so a detection without a packet stays detected),
 and **sent** when its packet set carries the topic's acknowledgement
 (``jobs.kafka_published_at``); an alerted set not sent is the quality
-gate's hold (or a send still owed), reported as held.
+gate's hold (or a send still owed), reported as held. ``in_field`` marks a
+detection in its difference image's own field: the association founds and
+joins objects for those (a neighbouring field's source joins only an object
+already within the radius), so a packet needs one.
 
 The truth positions are compared through the corrected intake WCS: the
 intake adds ``[intake] crpix_shift`` ``(sx, sy)`` to CRPIX, so the
@@ -127,11 +130,12 @@ def join(matched: pd.DataFrame, sources: pd.DataFrame, packets: pd.DataFrame) ->
     """Left joins: a truth row's detection, then its packet; ``detected``, ``alerted``, ``sent``,
     ``flux_ratio``, ``flags``."""
     src = sources.rename(columns={"ra": "src_ra", "dec": "src_dec"})[
-        ["job", "sid", "fluxfit", "flags", "src_ra", "src_dec"]]
+        ["job", "sid", "fluxfit", "flags", "in_field", "src_ra", "src_dec"]]
     pk = packets.rename(columns={"job": "packet_job", "source_job": "job"})[
         ["job", "sid", "packet_job", "object_job", "aid", "sent", "trigger_mjd"]]
     out = matched.merge(src, on=["job", "sid"], how="left").merge(pk, on=["job", "sid"], how="left")
     out["detected"] = out["job"].notna()
+    out["in_field"] = out["in_field"].fillna(False).astype(bool) & out["detected"]
     out["alerted"] = out["packet_job"].notna()
     out["sent"] = out["sent"].fillna(False).astype(bool) & out["alerted"]
     out["flux_ratio"] = out["fluxfit"] / out["dnps"]
@@ -146,11 +150,13 @@ def bins(rows: pd.DataFrame, by: list[str] | None = None) -> pd.DataFrame:
     g = rows.groupby(keys)
     table = pd.DataFrame({
         "injected": g.size(), "detected": g["detected"].sum(), "alerted": g["alerted"].sum(),
-        "sent": g["sent"].sum(),
+        "sent": g["sent"].sum(), "in_field": g["in_field"].sum(),
         "median_offset_arcsec": g["offset_arcsec"].median(),
         "median_flux_ratio": g["flux_ratio"].median()}).reset_index()
     for c in ("detected", "alerted", "sent"):
         table[f"f_{c}"] = table[c] / table["injected"]
+    table["f_alerted_in_field"] = g.apply(lambda t: t.loc[t["in_field"], "alerted"].mean(),
+                                          include_groups=False).to_numpy()
     return table
 
 
@@ -276,8 +282,9 @@ def main(argv: list[str] | None = None) -> int:
                 Bucket=bucket, Prefix=prefix).get("Contents", []) if o["Key"].endswith(".parquet")]
         truth = pd.concat([pd.read_parquet(get(f) if f.startswith("s3://") else f) for f in files],
                           ignore_index=True)
-        sources = pd.DataFrame(q("SELECT job, sid, expid, sca, ra, dec, fluxfit, flags FROM sources_official"
-                                 " WHERE run = %s", (a.run,)))
+        sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
+                                 " s.field = d.field AS in_field FROM sources_official s"
+                                 " JOIN diffimages d ON d.pid = s.pid WHERE s.run = %s", (a.run,)))
         packets = pd.DataFrame(q(
             "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
             " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
@@ -296,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
                 read_sets[r["job"]].add(r["source_job"])
 
     if not len(sources):
-        sources = pd.DataFrame(columns=["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags"])
+        sources = pd.DataFrame(columns=["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags", "in_field"])
     if not len(packets):
         packets = pd.DataFrame(columns=["job", "source_job", "sid", "object_job", "aid", "expid", "sca",
                                         "trigger_mjd", "filename", "byte_offset", "byte_length", "sent"])
@@ -348,8 +355,11 @@ def main(argv: list[str] | None = None) -> int:
           f"{' ' + str(held_sets[:10]) if held_sets else ''}")
     print("\ncompleteness per magnitude bin")
     print(table.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
-    tot = rows[["detected", "alerted", "sent"]].sum()
+    tot = rows[["detected", "alerted", "sent", "in_field"]].sum()
+    clean = rows["in_field"] & (rows["flags"] == 0)
     print(f"\nall: injected {len(rows)}, detected {tot['detected']}, alerted {tot['alerted']}, sent {tot['sent']};"
+          f" detected in their image's own field {tot['in_field']}, of them unflagged {int(clean.sum())},"
+          f" alerted {int(rows.loc[clean, 'alerted'].sum())};"
           f" offset median {rows['offset_arcsec'].median():.3f} arcsec,"
           f" flux ratio median {rows['flux_ratio'].median():.3f}")
     if per_sca["sca"].nunique() > 1:
