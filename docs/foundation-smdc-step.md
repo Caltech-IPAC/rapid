@@ -5491,6 +5491,239 @@ does, so the numbers can arrive out of order.
    not. Task 9's twin sets the three `--set`s above with its own backlog
    and runs the loop with `--job-queue rapid-queue-prompt`.
 
+9. **Injection counted: the staged injection brief run as amended, the
+   footprint twice, on-demand and Spot (PRs 383, 384, 385, merged
+   `04762172`, `166ec3ab`, `d5ba665d`; rapid_systems PR 424, the Spot data point, merged `6b7d5dd`).** The staged brief
+   `injection-2026-10-23` (its tasks 1 to 3: inject, footprint, scas) is
+   retired by this step; its part 10 numbering is folded in here. Sources
+   are injected outside the pipeline as a dataset (Ben, 2026-10-22):
+   `scripts/inject_dataset.py` writes, for a selection, every file after
+   the bound with constant sources by `dev`'s
+   `inject_variable_stars_into_l2` as it stands (copied unchanged as
+   `scripts/rapid_l2_injections.py`), every file before it byte for byte,
+   names and `meta` kept, and a truth table under the dataset's
+   `catalog/`; `scripts/completeness.py --run N` joins the run's official
+   sources and packets to the truth. 200 sources per image, AB 21 to 27
+   uniform, seed 20261024, F146, bound 61591.4056 (passes 1 to 3 copied,
+   4 to 6 injected).
+
+   **The datasets.** Three, each its own live run, created from the layers
+   at `43584e9a` (`rapid-rebuild:59`, the pipeline unchanged by PR 383):
+
+   ```sh
+   rp run create ... --revision 43584e9abb041895eb326396f6ffe261121903f9 \
+     --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+     --set "intake.source_root=\"<prefix>/l2/\"" --set intake.unsigned=false \
+     --set reference.selection.before_mjd=61591.4056 \
+     [--set 'batch.spot.queue="rapid-queue-bulk"' --set batch.spot.backlog=20 --set batch.spot.hedge_factor=5.0] \
+     --survey HLWAS --dataset <dataset>
+   rp official change --group live.json ...      # the run live for HLWAS <dataset>
+   rp job local --run <run> --stage import ...   # Gaia under the dataset's key
+   rp loop --run <run> --filters F146 --scas 8 --pointings all --job-definition rapid-rebuild:<rev> \
+     --job-queue rapid-queue-prompt --max-intake 400 --interval 60
+   python scripts/completeness.py --run <run> --truth <truth parquet>
+   scripts/check_run.sh --run <run> --inspect DIR
+   ```
+
+   | dataset | run | source root | selection | Gaia job | queue |
+   |---|---|---|---|---|---|
+   | `r00342-inj0` (the rehearsal) | **71** | scratch `inj/r00342-inj0/` | SCA 8, `001_0001` | 20278 | prompt |
+   | `r00342-inj1` | **72** | inputs bucket `r00342-inj1/` | SCA 8, all 54 pointings; then 18 SCAs of `001_0001` | 20293 | prompt, warm |
+   | `r00342-inj1s` (the Spot twin, same bytes and truth) | **73** | the same `r00342-inj1/` | SCA 8, all 54 pointings | 20294 | `[batch.spot]` backlog 20, hedge 5 |
+
+   **The injection** (on this host, `put-object --if-none-match '*'` per object):
+
+   | selection | injected | copied | skipped | truth rows | workers | wall | per injected file | per copy | peak RSS |
+   |---|---|---|---|---|---|---|---|---|---|
+   | rehearsal, SCA 8 `001_0001` | 3 | 3 | | 600 | 1 | 75 s (second attempt; the first died on CRDS's config read at import, fixed in PR 383) | 19 to 31 s | 6 s | 3.9 GB |
+   | footprint, SCA 8 | 162 | 162 | 0 | 32,400 (`truth-sca8.parquet`) | 8 | 10.1 min | 20.7 s mean | 6.0 s mean | 5.3 GB |
+   | 18 SCAs of `001_0001` | 51 | 51 | 6 (SCA 8's) | 10,200 (`truth-18sca.parquet`) | 6 | 5.5 min | | | 4.5 GB |
+
+   The ePSF each file names (`roman_wfi_epsf_0276.asdf` for SCA 8 under
+   `roman_0046.pmap`) was the one fetched. The topic carries no retention
+   override (`describe_configs` empty), so the cluster's seven days hold.
+
+   **Warm capacity.** `rapid-ce-prompt` `minvCpus` 0 → **512** at 08:56:42
+   UTC (one wave of the footprint's 324 single-vCPU intakes with room for
+   the first differences; the fixes runs recorded no concurrency figure, so
+   the value is the wave's), restored to **0** at 09:52:14, read back
+   `UPDATING 0`. Queue waits, submission to start:
+
+   | stage | run 71, cold (6 epochs) | run 72, warm (SCA 8 footprint) | run 73, Spot lane | run 73, its prompt waves |
+   |---|---|---|---|---|
+   | intake | 194 s | median 65 s, p90 70 s (324) | median 160 s, p90 183 s (304) | 69 s (20) |
+   | reference | 6 s | 12 s, p90 69 s (54) | 20 s (34) | 49 s (20) |
+   | difference | 143 s | 15 s, p90 72 s (168) | 223 s, p90 249 s (122) | 36 s (55) |
+   | packet | 9 s | 15 s, p90 63 s (162) | 200 s (129) | 15 s (33) |
+
+   The warm hosts are billed whether jobs run or not: 512 vCPU for 55.5
+   min is up to about 59 instance-hours (64 r6i.2xlarge, every prompt job
+   ran on that type), against the footprint jobs' own 4.0; the job-hour
+   pricing below does not include it.
+
+   **A failure the footprint earned: the reference ePSF's centring.** At
+   09:14 run 72's difference job 21029 exited 70 on `refpsf: centroid still
+   (0.0000, -0.0269) px off centre after 10 shifts`, and the loop stopped
+   (exit 2) by design; run 73 failed ten such jobs (21168 on Spot, then on
+   its prompt rerun), run 72 six. Reproduced on this host (the stage run
+   in-process from job 21029's inputs, `cfg_path` at the checkout, its
+   ePSF pickled): the evaluated centroid's axes are coupled and over a
+   stretch move 0.03 px per 0.1 px of shift, where the secant stalls; a
+   grid search finds 0.001 px. PR 384: the search when the stepping does
+   not converge. Image `rebuild-166ec3ab…` (`sha256:605a407a…`):
+   **`rapid-rebuild:60`** (production `:51`), the change set exactly its
+   two `Modify`/`False` rows. The 16 failed jobs resubmitted on `:60` with
+   `job submit --job <id>` at 09:27, every one published; the loops resumed
+   on `:60` (run 72 at 09:27:42, run 73 at 09:28:50 once its resubmitted
+   jobs had started). The runs keep their recorded revision `43584e9a`;
+   the jobs after 09:27 ran PR 384's function.
+
+   **A check the footprint earned: `forced` under sets in flight.** The
+   first `check_run.sh` on both runs failed only `forced` (252 and 587
+   pairs): two packet sets in flight at once each measured an (object,
+   image) pair neither could read (sets 21405 and 21440, 09:28:09 to
+   09:29:00), and a later set (21476) recorded both and copied one, value
+   for value; the rows differ only in `time_proc`. PR 385: the pair must
+   equal one recorded predecessor's measurement. Run 72's rows: 11,306
+   forced ids carry two measurements.
+
+   **The loops.**
+
+   | | run 72, on-demand, warm | run 73, Spot twin |
+   |---|---|---|
+   | loop invocations | 09:06:25 to 09:14:40 (exit 2), 09:27:42 to 09:34:44 drained | 09:06:26 to 09:18:29 (exit 2), 09:28:50 to 09:38:53 drained |
+   | first submission to last job end | 28.1 min (09:06:27 to 09:34:32) | 30.2 min (09:06:28 to 09:36:42) |
+   | Batch submissions | 709 prompt | 589 Spot, 129 prompt |
+   | peak jobs running at once | 244 | 255 |
+   | reclaims / hedges | 0 / 0 | 0 / 0 |
+   | lost job-hours (started, not published) | | 0.131 (the centring failures) |
+   | fill time to 1,000 vCPU | never reached | never reached |
+   | job-hours | 17.44 | 13.42 Spot + 3.84 prompt |
+   | instance-hours (job's memory share of its host) | 4.03, all r6i.2xlarge | 3.01 Spot (m7i.4xlarge 247, m6a.2xlarge 186, m6a.4xlarge 117, m7i.2xlarge 23, m7a 16) + 1.15 prompt r6i.2xlarge |
+   | priced at on-demand rates | $2.03 | $1.80 + $0.58 = $2.38 |
+   | priced at Spot rates (mean history over the window, type and zone) | $1.83 | $0.72 + $0.51 = $1.23 |
+   | as billed by lane (Spot at Spot, prompt at on-demand) | $2.03 | **$1.30** |
+   | held sets (the gate) | 1 (21453, ring fraction +0.0162) | 1 (21587, the same epoch, the same value) |
+
+   Both runs lost the same 13 minutes to the centring failure, so the
+   spans compare like for like; the Spot lane's start waits (160 to 223 s
+   median) against the warm prompt lane's (15 to 65 s) are the cost, and
+   the twin finished 2.1 min later. Billed cost is unverified until Cost
+   Explorer.
+
+   **Completeness, the SCA 8 footprint** (run 72; 162 published epochs,
+   none unprocessed; 32,400 injected rows; truth through the corrected
+   intake WCS, `crpix_shift` [0.12, -0.99]: the pipeline's RA/Dec of the
+   rendered pixel (x, y) is the stored WCS at (x - 0.12, y + 0.99); radius
+   0.3 arcsec):
+
+   | AB | injected | detected | alerted | sent | detected in own field | alerted of those | offset | flux ratio |
+   |---|---|---|---|---|---|---|---|---|
+   | 21.0 | 2,595 | 0.958 | 0.398 | 0.397 | 1,086 | 0.951 | 0.009" | 0.946 |
+   | 22.0 | 2,808 | 0.975 | 0.431 | 0.427 | 1,249 | 0.969 | 0.010" | 0.939 |
+   | 23.0 | 2,670 | 0.966 | 0.381 | 0.378 | 1,044 | 0.974 | 0.009" | 0.928 |
+   | 24.0 | 2,910 | 0.968 | 0.415 | 0.413 | 1,231 | 0.981 | 0.009" | 0.918 |
+   | 25.0 | 2,853 | 0.944 | 0.395 | 0.394 | 1,177 | 0.958 | 0.011" | 0.910 |
+   | 25.5 | 2,580 | 0.915 | 0.415 | 0.411 | 1,104 | 0.969 | 0.013" | 0.909 |
+   | 26.0 | 2,721 | 0.754 | 0.298 | 0.296 | 846 | 0.960 | 0.016" | 0.923 |
+   | 26.5 | 2,640 | 0.233 | 0.109 | 0.109 | 296 | 0.976 | 0.021" | 1.038 |
+   | all | 32,400 | 28,625 | 12,097 | 12,027 | 12,541 | 12,069 of the 12,070 unflagged | 0.010" | 0.931 |
+
+   (Every 0.5 mag bin is in `comp-72/bins.parquet`; the rows shown are
+   every other bin.) **Detection is 0.94 to 0.98 to AB 25, 0.75 at 26 and
+   0.23 at 26.5.** **The alerted fraction, 0.40, is the association's
+   field rule, not the difference stage**: a detection outside its
+   difference image's own field joins only an object already within the
+   radius, and none exists, so it is never a trigger (step 7's "next
+   association question"); every unflagged detection inside its image's
+   own field is alerted (12,069 of 12,070). Detections with photutils
+   flags are not alertable by the packet stage's rule. 70 alerted rows sit
+   in the held set. The Spot twin's table is the same to three
+   detections at 26 to 26.5 (28,624 detected, 12,095 alerted).
+
+   **Purity per packet magnitude** (packets on injected sources / on
+   bright-footprint-flagged sources / anything else):
+
+   | packet AB | packets | injected | bright | other | purity |
+   |---|---|---|---|---|---|
+   | below 21 | 91 | 0 | 63 | 28 | 0 |
+   | 21.0 | 978 | 913 | 45 | 20 | 0.93 |
+   | 22.0 | 1,309 | 1,187 | 106 | 16 | 0.91 |
+   | 23.0 | 1,408 | 1,052 | 272 | 84 | 0.75 |
+   | 24.0 | 2,033 | 1,201 | 584 | 248 | 0.59 |
+   | 25.0 | 3,181 | 1,115 | 1,308 | 758 | 0.35 |
+   | 26.0 | 4,776 | 942 | 2,130 | 1,704 | 0.20 |
+   | 26.5 | 2,502 | 334 | 597 | 1,571 | 0.13 |
+
+   Per epoch, the false positives relative to this catalog are a median
+   95 (min 33, max 182): 52 on bright-flagged sources, 38 other; the null
+   test's floor (step 3: about 20 bright-star sources per epoch per SCA
+   above S/N 20) is the bright-flagged share's bright end. Purity at AB 21
+   to 22 is 0.91 to 0.93 and falls to 0.2 at the injection's faint end,
+   where the artefacts and real faint residuals dominate.
+
+   **History**, over every alerted injected source (4,070 sources, 7,823
+   later packets): 11,576 earlier alerted epochs expected in
+   `prvDiaSources`, 11,048 present, 524 late (their sets published after the
+   packet's read: the best-information contract), 4 missing, the 4 packets
+   whose source split over two objects (two in-flight epochs founding
+   apart; step 7's multi-match note); 222 earlier injected epochs never
+   detected.
+
+   **The 18 SCAs of `001_0001`** (run 72, one loop 09:34:59 to 09:52:01,
+   18 passes, drained, on-demand and warm; 51 epochs, 10,200 rows; SCA 8's
+   is the footprint's pointing):
+
+   | SCA | detected | detected, AB < 25 | detected, AB 26 to 27 | alerted | in own field | alerted of in-field | offset | flux ratio |
+   |---|---|---|---|---|---|---|---|---|
+   | 1 | 0.855 | 0.914 | 0.620 | 0.232 | 0.253 | 0.914 | 0.011" | 0.935 |
+   | 2 | 0.907 | 0.985 | 0.525 | 0.278 | 0.337 | 0.827 | 0.009" | 0.943 |
+   | 3 | 0.880 | 0.961 | 0.489 | 0.417 | 0.520 | 0.801 | 0.009" | 0.933 |
+   | **4** | 0.828 | 0.929 | 0.500 | 0.237 | 0.267 | 0.888 | 0.012" | 0.928 |
+   | **5** | 0.830 | 0.893 | 0.510 | 0.282 | 0.312 | 0.904 | 0.010" | 0.940 |
+   | 6 | 0.820 | 0.941 | 0.408 | 0.320 | 0.368 | 0.869 | 0.010" | 0.920 |
+   | 7 | 0.683 | 0.728 | 0.402 | 0.163 | 0.230 | 0.710 | 0.010" | 0.935 |
+   | **8** | 0.903 | 0.992 | 0.550 | 0.417 | 0.442 | | 0.010" | 0.936 |
+   | 9 | 0.647 | 0.669 | 0.598 | 0.308 | 0.408 | 0.755 | 0.010" | 0.939 |
+   | 10 | 0.832 | 0.931 | 0.485 | 0.318 | 0.333 | 0.955 | 0.010" | 0.933 |
+   | 11 | 0.882 | 0.977 | 0.517 | 0.367 | 0.417 | 0.880 | 0.011" | 0.934 |
+   | 12 | 0.888 | 0.962 | 0.522 | 0.325 | 0.340 | 0.956 | 0.008" | 0.926 |
+   | 13 | 0.813 | 0.856 | 0.529 | 0.303 | 0.353 | 0.858 | 0.012" | 0.928 |
+   | 14 | 0.780 | 0.878 | 0.429 | 0.238 | 0.288 | 0.827 | 0.011" | 0.927 |
+   | 15 | 0.902 | 0.985 | 0.521 | 0.338 | 0.343 | 0.985 | 0.009" | 0.928 |
+   | 16 | 0.763 | 0.864 | 0.303 | 0.160 | 0.160 | 1.000 | 0.011" | 0.915 |
+   | 17 | 0.875 | 0.992 | 0.371 | 0.432 | 0.465 | 0.928 | 0.010" | 0.928 |
+   | 18 | 0.770 | 0.902 | 0.222 | 0.240 | 0.350 | 0.686 | 0.009" | 0.908 |
+
+   SCAs 8 and 17 detect best (0.992 below AB 25); SCAs 4 and 5 sit
+   mid-range (0.93, 0.89); SCAs 7 and 9 lowest (0.73, 0.67; SCA 9's nearly
+   flat with magnitude, 0.60 at AB 26 to 27, which reads as area lost
+   rather than depth; read, not diagnosed). "Alerted of in-field" below 1
+   counts flagged detections. Seven sets are held by the gate on
+   `core_fraction` (+0.026 to +0.028 against ±0.025): SCA 14's pass 4 and
+   all three epochs of SCAs 16 and 17, so those two sent nothing (2,574 of
+   2,975 alerted rows sent). Purity
+   by packet magnitude follows SCA 8's (0.94 at AB 21, 0.45 at 24, 0.19 at
+   26); the per-epoch false positives are a median 153 (54 bright, 105
+   other), higher than SCA 8's 95. History: 2,830 expected, 2,406 present,
+   422 late, 2 missing (2 split objects).
+
+   Check, held: `check_run.sh --run 71` CLEAN (validate 6/6, reader 3/3,
+   consumer 533/533); after PR 385, `check_run.sh --run 72` over
+   the enlarged run CLEAN (validate 6/6 in 475 s, reader 213/213, consumer
+   33,650/33,650 in 388 s) and `--run 73` CLEAN (validate 6/6, reader
+   162/162, consumer 27,081/27,081); the first checks' only failure was
+   `forced`, above. Raw evidence in the brief
+   directory's `t9/` (`inject-*.log`, `loop-7*.log`, `comp-7*/`,
+   `lags*.txt`, `price*.txt`, `check-7*.txt`, `repro/`).
+
+   What the next step must know: the injected numbers say the difference
+   stage finds what is there to AB 25 at 0.94 or better and the alert
+   chain loses three fifths of it to the association's field rule;
+   the rule is the next science question, before purity work. The
+   inputs bucket's `r00342-inj1/` holds 426 files and two truth tables
+   (immutable); `r00342-inj1s` reads the same prefix.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
