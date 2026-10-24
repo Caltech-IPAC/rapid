@@ -383,8 +383,8 @@ def _run_job(args: argparse.Namespace) -> int:
 def _send_own_set(connect_job, job_id: int) -> dict:
     """A packet job's last act: its own official set to the topic its run's ``[kafka]`` table names.
 
-    Returns :func:`~rapidpipe.foundation.publish_kafka.deliver`'s result, or
-    ``{"error": ...}``: a set this could not send stays unstamped for the
+    Returns :func:`~rapidpipe.foundation.publish_kafka.deliver`'s result (``held``
+    when the quality gate holds the set: nothing sent), or ``{"error": ...}``: a set this could not send stays unstamped for the
     loop's publish sweep, and the job, published and bound, still exits 0.
     """
     logger = logging.getLogger("rapidpipe.cli")
