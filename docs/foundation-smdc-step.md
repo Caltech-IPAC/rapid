@@ -6625,6 +6625,73 @@ from in brackets):
   checkout carries an untracked `views-after.txt` from an earlier
   session, left in place.
 
+## Part 13: the weekend planner (2026-10-24)
+
+Each step below is one planner-written brief, run in parallel with others; the queue is the state vault's `rapid-queue.md`.
+
+### Step dev-takenow: dev's three reference-side fixes, one reference rebuilt beside run 46's
+
+**The change (PR 406, merged `44052575`).** Three hand ports from `dev`,
+none touching pixels: the reference's `fwhmmedpix` is now the mode of
+`FWHM_IMAGE` over point sources (FLAGS 0, FLUX_AUTO/FLUXERR_AUTO >= 50,
+ELONGATION <= 1.3) through the difference side's `catalog_fwhm_stats`,
+`fwhm_ref` that mode in arcsec (dev 1822789e, 095c45d8, 46fc651a,
+fdc7fa79 reference half); `[reference.sextractor_refimage]`
+`seeing_fwhm` 1.2 -> 0.25 and `deblend_nthresh` 4 -> 32 (dev ce485e8f);
+`photutils>=3.0,<4` (dev 8d766c43). The 7000 px mosaic stays held
+(queue item `dev-refresh`).
+
+**The proof.** Image `rebuild-44052575…` (digest `a66b64da…`), job
+definition `rapid-rebuild:66`. Run **85**, dataset `r00342-dt-f146`,
+live (group 21392), created from the shipped layers, the HLWAS overlay
+and run 46's two sets (source root, `before_mjd = 61591.4056`, the
+bound read from run 46's layers), plus `intake.crpix_shift = [0.0, 0.0]`:
+run 46 predates the overlay's `crpix_shift`, and without the pin the
+coadd's WCS would move. Against run 46's stored body the resolved
+settings then differ only in the two ported keys and in keys run 46's
+code did not have (the gate, `[batch] max_submissions_per_pass`,
+`intake.reader = "soc-l2"`, `rederive_wcs = false`, `psf.epsf_cache`,
+`difference.reference_psf`), none read by intake's pixels or the
+reference stage. The loop over pointing `001_0001`, SCA 8, F146,
+passes 1 to 3 admitted the three frames run 46's reference job 19863
+coadded (expids 1040101, 2040101, 3040101), and ran psf 22751, intake
+22760 to 22762 and reference **22765** (Batch `4f09727c…`, m6a.2xlarge
+as 19863), field 5387158, drained with no failure and no difference
+(nothing after the bound). Evidence in the brief's `t1/`.
+
+```sh
+rp run create --who rusholme --why '…' --revision 44052575b47d2cb82b935917b3ec49068eab914c \
+  --overlay rapidpipe/settings/datasets/hlwas-r00342.toml --set 'intake.source_root="'$SOURCE_ROOT'"' \
+  --set reference.selection.before_mjd=61591.4056 --set 'intake.crpix_shift=[0.0, 0.0]' \
+  --survey HLWAS --dataset r00342-dt-f146
+rp loop --run 85 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3 \
+  --job-definition rapid-rebuild:66 --interval 60
+```
+
+**Measured**, reference job 19863 (run 46) beside 22765 (run 85):
+
+| | run 46 | run 85 |
+|---|---|---|
+| catalog sources (`nsexcatsources`; `refimcatalogs` one row each) | 4,240 | 4,299 |
+| CLASS_STAR > 0.8 (stars) | 411 | 1,059 |
+| CLASS_STAR < 0.2 (galaxies) | 1 | 1,447 |
+| between | 3,828 | 1,793 |
+| `fwhmmedpix` recorded | 2.70 (all-source median) | 2.425 (point-source mode) |
+| `fwhmminpix` / `fwhmmaxpix` | -4.26 / 29.56 | -4.26 / 43.81 |
+| `fwhm_ref` (logged) | 2.70 px | 0.267 arcsec |
+| reference image and uncertainty arrays | — | identical (7000 x 7000, NaN masks equal, max diff 0) |
+| `cov5percent` | 19.566 | 19.566 |
+
+Pixels: identical, as expected; only `CHECKSUM`, `DATE`, `RPJOB` and
+`RPRUN` differ in the headers. CLASS_STAR at seeing 1.2 put 90 per cent
+of the catalog between 0.2 and 0.8; at 0.25 the catalog separates. The
+point-source mode on run 46's own catalog is also 2.425 px, so the
+statistic's change is the method's, not the deblending's. The job's
+`star_sigma_px` reads 1.017 px over 135 stars against run 46's 1.554
+over 228: that is commit 2369769a's metric (after run 46's revision),
+which on run 46's catalog gives 1.016 over 139; the ports move it by
+0.0003 px.
+
 ## Validation
 
 The ten checks a night meets, and their outcome on 2026-10-21. Checks 1 to 6
