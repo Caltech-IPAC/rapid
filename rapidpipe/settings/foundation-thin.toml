@@ -110,6 +110,21 @@ packet = 2048
 # New: the psf stage holds one 178.6 MB ePSF reference and its 42 MB array.
 psf = 2048
 
+[gate]
+# New, not dev's: the quality gate (rapidpipe.foundation.gate) holds a packet
+# set when its difference job's n_sources_snr_gt20 is above this factor times
+# the run's median, or core_fraction or ring_fraction is beyond its absolute
+# bound, once the run has min_epochs published differences. The defaults are
+# part 10's healthy ranges (runbook, Results of part 10) read across runs 46
+# to 54: the worst epoch's count is 2.6 times its run's median (F158, run 50);
+# core 0.0224 at worst (run 46 SCA 5, above part 10's SCA 8 edge of 0.011),
+# F213's known flux-scale residual 0.031 to 0.037 beyond it; ring within
+# 0.015 (F213 0.022 beyond it).
+snr_gt20_factor = 3.0
+core_fraction_max_abs = 0.025
+ring_fraction_max_abs = 0.015
+min_epochs = 5
+
 [kafka]
 # New, not dev's: `rapidpipe publish` produces official packet sets to the
 # topic. The SSM parameter names, never their values: the deployment holds

@@ -27,6 +27,7 @@ names the dataset's official Gaia catalog, and only the PSF without one.
 `--passes` selects the survey's passes in stems and rows alike, all by default.
 `job wait` returns once every named job is published or failed, holds a
 failed row under Batch's retry, gives up at its timeout and names a missing job.
+A pass reports the quality gate's held sets when given the query.
 """
 
 from __future__ import annotations
@@ -492,3 +493,13 @@ def test_job_wait_names_a_job_that_does_not_exist():
         assert "9" in str(exc)
     else:
         raise AssertionError("no LookupError")
+
+
+def test_a_pass_reports_the_gates_held_sets_when_given(monkeypatch):
+    held = [{"job": 5, "metric": "core_fraction", "value": 0.04}]
+    monkeypatch.setattr(loop, "snapshot", lambda conn, run: snap())
+    summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [], lambda item: None, None,
+                            held_sets=lambda: held)
+    assert summary["held_sets"] == held
+    assert "held_sets" not in loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [],
+                                            lambda item: None, None)

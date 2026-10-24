@@ -49,7 +49,9 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   container Batch ended without ``job run`` recording it is resubmitted
   once (its Batch name ending ``-rerun``) and fails the loop only if the
   rerun's container dies too, and a pass submits at most the run's
-  ``[batch] max_submissions_per_pass``;
+  ``[batch] max_submissions_per_pass``; every pass reports ``held_sets``,
+  the run's unsent official packet sets the quality gate holds
+  (``rapidpipe.foundation.gate``), with the metric and value;
 - ``publish --run [--settings FILE]`` produces the run's official packet
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
@@ -84,7 +86,7 @@ from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.cli import stagectl
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
-from rapidpipe.foundation import layers, loop, publish_kafka
+from rapidpipe.foundation import gate, layers, loop, publish_kafka
 from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
 from rapidpipe.selftest import run as run_selftest
@@ -454,11 +456,18 @@ def _loop(args: argparse.Namespace) -> int:
         finally:
             producer.close(timeout=publish_kafka.ACK_TIMEOUT_S)
 
+    def held_sets() -> list[dict]:
+        with connect_loop() as conn:
+            answers = [{"job": job, **gate.decide(conn, job, settings.get("gate"))}
+                       for job in publish_kafka.unpublished_sets(conn, args.run)]
+        return [{k: a[k] for k in ("job", "difference_job", "metric", "value", "bound", "reason")}
+                for a in answers if not a["send"]]
+
     while True:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"], selection)
         summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
-                                args.max_intake, batch, rerun)
+                                args.max_intake, batch, rerun, held_sets)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
