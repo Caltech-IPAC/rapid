@@ -7720,6 +7720,7 @@ Runs 99, 100 and 101, their datasets and the Gaia boxes stay; nothing
 was deleted. The raw evidence is the brief directory's `t1/`
 (`metrics-*.json`, `snr-*.txt`, `gate-answers.txt`, `compat/`,
 `times-check.txt`, `scripts/`).
+
 ### Step gbtds-second: a second GBTDS pointing and SCA through the chain, run 112 CLEAN; every kept source above S/N 20 and the difference 1,036 s
 
 **What.** Measurement only: no code, overlay, image or deploy change. One GBTDS r00340 pointing and SCA other than run 67's ran through intake, reference, difference and packet on Batch under the settings as merged. The sample has run 67's shape at the pointing farthest from it.
