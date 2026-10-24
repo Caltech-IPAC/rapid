@@ -163,12 +163,12 @@ def source(tmp_path: Path) -> Path:
 def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                expects_exposure: bool = True, dq_mask_bits: int = 0,
                crpix_shift: tuple[float, float] = (0.0, 0.0),
-               rederive_wcs: bool = False, gzip_level: int = 1) -> Path:
+               rederive_wcs: bool = False) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
     settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
                                        "dq_mask_bits": dq_mask_bits, "crpix_shift": list(crpix_shift),
-                                       "rederive_wcs": rederive_wcs, "gzip_level": gzip_level}}
+                                       "rederive_wcs": rederive_wcs}}
     expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
                 "binding": None}]
     if expects_exposure:
@@ -411,14 +411,3 @@ def test_the_gbtds_overlay_rederives_the_wcs_and_hlwas_does_not():
     hlwas = tomllib.loads((overlays / "hlwas-r00342.toml").read_text())
     assert gbtds["intake"]["rederive_wcs"] is True
     assert "rederive_wcs" not in hlwas.get("intake", {})
-
-
-def test_gzip_level_zero_publishes_the_plain_fits_and_the_row_names_it(tmp_path, source):
-    gzipped = run_intake(tmp_path / "gz", source)
-    plain = run_intake(tmp_path / "plain", source, gzip_level=0)
-    assert not (plain / f"{STEM}_cal.fits.gz").exists()
-    with fits.open(plain / f"{STEM}_cal.fits") as hdul, gzip.open(gzipped / f"{STEM}_cal.fits.gz") as stream, \
-            fits.open(stream) as other:
-        assert np.array_equal(hdul["SCI"].data, other["SCI"].data, equal_nan=True)
-    (row,) = pq.read_table(plain / "l2files.parquet").to_pylist()
-    assert row["filename"].endswith(f"{STEM}_cal.fits")
