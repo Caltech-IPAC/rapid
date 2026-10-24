@@ -164,7 +164,20 @@ def test_configure_root_defaults_to_warning_and_stderr(monkeypatch):
     assert match.group("message") == "a library warning"
 
 
+def test_configure_root_writes_rapidpipe_info_and_drops_a_librarys(monkeypatch):
+    monkeypatch.delenv("RAPIDPIPE_LOG_LEVEL", raising=False)
+    own = logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME)
+    own.handlers, own.propagate = [], True     # as in a fresh CLI process; the fixture restores it
+    stream = io.StringIO()
+    rapidpipe_log.configure_root(stream=stream)
+    logging.getLogger("rapidpipe.cli").info("producing")
+    logging.getLogger("some_third_party_library").info("chatter")
+    messages = [_LINE_RE.match(line).group("message") for line in stream.getvalue().splitlines()]
+    assert messages == ["producing"]
+
+
 def test_configure_root_level_overridden_by_env(monkeypatch):
     monkeypatch.setenv("RAPIDPIPE_LOG_LEVEL", "ERROR")
     rapidpipe_log.configure_root()
     assert logging.getLogger().level == logging.ERROR
+    assert logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME).level == logging.ERROR
