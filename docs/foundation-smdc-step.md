@@ -7593,6 +7593,133 @@ Check, held: job 23050 published on its first attempt (m6a.2xlarge, 209 s). Its 
 
 Raw evidence is in the brief's `t1/`: `row-{S,X,G,ZOGY}.json`, `stamps-{S,X,G}.png`, `probe-zeros.jsonl`, `config-*.log`, `proof.log`, `check-proof.txt`, `inspect-proof/`.
 
+### Step rimtimsim-reader: RimTimSim's lite FITS read at intake, F213 and F087 each through the chain CLEAN; the 250513 truth does not describe the 260622 images
+
+Brief `rimtimsim-reader`, task 1 (rapid PR 429, merged `479eb163`; this
+step's PR the overlay's PSF-transpose comment). RimTimSim's 2026-06-22
+delivery, dev's field 4682737, SCA 2, read as dev's converted
+`rimtimsim_WFI_<filter>_SCA02_<exposure>_lite.fits.gz` (F087 132, F213
+131) from the inputs bucket's `g0007-rimtimsim/rimtimsim-260622-lite/`,
+under the new overlay `rapidpipe/settings/datasets/rimtimsim-260622.toml`.
+
+**The reader.** Both existing readers are ASDF, so the overlay alone
+could not read a FITS file: PR 429 adds `[intake] reader = "rimtimsim"`
+(`rapidpipe/science/intake_rimtimsim.py`, dev's own header builders onto
+the SOC layout, PRIMARY and SCI, the file's `ZPTMAG`, WCS and NaN), the
+loop's flat listing with the exposure number as pointing and `expid`,
+and `[psf.epsf]`: the file names no ePSF, so the overlay names CRDS's
+answer under `roman_0077` for WFI02 (`roman_wfi_epsf_0280` F213, `0266`
+F087). The overlay also carries dev's rimtimsims block (gain 1, read
+noise 11, saturation 1.1e6 DN, artefact repair off) and `program_id = -3`.
+
+| check on the files | value |
+|---|---|
+| headers, all 263 (ranged reads) | `EXPTIME` 54.72 s; `ZPTMAG` 25.8573 (F213), 26.2982 (F087); rimtimsim_v2.0 |
+| dithers | `CRVAL` within 0.69 x 0.61 arcsec over all 263; rotation 29.098 deg on every file; one tessellation field, 4682737 |
+| WCS against Gaia DR3 (the intake's metric, every intake) | +0.03 to +0.12 / -0.01 to +0.08 px over about 590 stars: no `crpix_shift` |
+| the input catalog's own pixel columns through the lite WCS | scatter 0.001 px, a constant +1.31 px in x; with the axes swapped, scatter 1,200 px: dev's transpose holds |
+
+**The sample and the runs.** Dev's bound, `before_mjd = 61455.3`, takes
+the first 10 frames of each filter for the reference; five epochs after
+it per filter. Gaia DR3 over RA 268.38 to 268.62, Dec -29.32 to -29.09
+(2 x 2 sub-boxes, 62,822 rows), imported per dataset. Image
+`rebuild-479eb163…`: **`rapid-rebuild:75`**.
+
+```sh
+REV=<PR 429's merge, 479eb163…>
+rp run create ... --revision "$REV" \
+  --overlay rapidpipe/settings/datasets/rimtimsim-260622.toml \
+  --set 'intake.source_root="<the lite prefix>"' --set reference.selection.before_mjd=61455.3 \
+  --survey GBTDS --dataset rts260622-f213                     # run 99; rts260622-f087 run 100
+rp loop --run 99 --filters F213 --scas 2 --pointings 411,827,...,6235 --job-definition rapid-rebuild:75 --interval 60
+```
+
+- Run **99** (F213): loop exit 0, every job published on its first
+  attempt; **`Check run 99: CLEAN validate 6/6 reader 5/5 consumer 1499/1499`**.
+- Run **100** (F087): loop exit 0, every job published on its first
+  attempt; **`Check run 100: CLEAN validate 6/6 reader 5/5 consumer 1818/1818`**.
+
+| filter | epoch | MJD | candidates (+ / −, ZOGY uncapped) | S/N > 20 (+ / −) | kept | core | ring | registration px | usable | difference s | packets | gate at send | gate replayed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| F213 | 4571 | 61455.749 | 19,630 / 85,641 | 479 / 11,383 | 500 | −0.069 | −0.034 | (+0.007, +0.020) | 0.9998 | 3,985 | 390 | sent | hold, core |
+| F213 | 4987 | 61456.273 | 29,801 / 107,475 | 1,143 / 12,728 | 500 | −0.073 | −0.039 | (+0.007, +0.023) | 0.9995 | 4,318 | 357 | **held**, core −0.0732 | hold, core |
+| F213 | 5403 | 61456.796 | 15,668 / 72,460 | 530 / 10,837 | 500 | −0.050 | −0.032 | (+0.006, +0.024) | 0.9995 | 3,767 | 349 | sent | hold, core |
+| F213 | 5819 | 61457.321 | 21,127 / 88,415 | 708 / 11,798 | 500 | −0.075 | −0.022 | (+0.009, +0.025) | 0.9995 | 3,984 | 380 | sent | hold, core |
+| F213 | 6235 | 61457.845 | 23,943 / 88,463 | 734 / 10,496 | 500 | −0.061 | −0.018 | (+0.006, +0.024) | 0.9998 | 4,131 | 380 | sent | hold, core |
+| F087 | 4363 | 61455.487 | 22,495 / 71,382 | 1,299 / 6,301 | 500 | −0.005 | +0.007 | (−0.020, +0.010) | 0.9996 | 1,648 | 302 | sent | send |
+| F087 | 4779 | 61456.011 | 35,644 / 68,132 | 529 / 6,845 | 500 | +0.011 | +0.004 | (+0.003, +0.009) | 0.9996 | 1,769 | 415 | sent | send |
+| F087 | 5195 | 61456.534 | 36,717 / 57,194 | 1,580 / 5,582 | 500 | +0.005 | −0.007 | (+0.013, +0.005) | 0.9999 | 1,760 | 377 | sent | send |
+| F087 | 5611 | 61457.059 | 28,084 / 72,371 | 353 / 7,688 | 500 | +0.024 | −0.014 | (+0.014, +0.001) | 0.9999 | 1,773 | 443 | sent | send |
+| F087 | 6027 | 61457.583 | 50,186 / 71,153 | 11,353 / 8,466 | 500 | −0.003 | +0.004 | (−0.006, +0.012) | 0.9996 | 1,892 | 281 | sent | send |
+
+Attempted, published and held: 10 differences attempted and published,
+10 packet sets published, 9 sent, 1 held. The gate is not changed: at
+send time the F213 run had fewer than `min_epochs` (5) published
+differences for its first four sets, so only the fifth was judged and
+held; replayed through `decide` now, all five F213 sets hold on core
+fraction (bound ±0.025) and all five F087 sets send.
+
+| stage | F213 (run 99) | F087 (run 100) |
+|---|---|---|
+| psf | 10 s, 294 MiB | 14 s, 294 MiB |
+| intake (15) | 11 to 15 s, 925 MiB | 13 to 22 s, 935 MiB |
+| reference (10 frames, 9100 px, `cov5percent` 19.2, status 1, infobits 3) | 104 s, 4,488 MiB | 104 s, 4,488 MiB |
+| difference (5) | 3,767 to 4,318 s, 16,427 MiB | 1,648 to 1,892 s, 16,402 MiB |
+| packet (5) | 25 to 50 s, 902 MiB | 22 to 57 s, 900 MiB |
+
+The difference is 4.6 to 5.3 (F213) and 2.0 to 2.3 (F087) times GBTDS's 820 s and
+stays on one vCPU: ZOGY's negative PSF-fit catalog alone (85,641 sources)
+took 12 min, then SFFT's and the naive subtraction's catalogs, as in
+dev's RimTimSim runs (dev's naive catalog took 19 min).
+
+**The science PSF's transpose (dev's rule, 2025-05-30), measured.** Run
+**101** (dataset `rts260622-f213-psft`) imported run 99's F213 stamp
+transposed and ran the same ten frames and epoch 4571 (`Check run 101:
+CLEAN`): core −0.0694 → −0.0688, ring −0.0339 → −0.0385, ring sources
+above S/N 20 36 → 44. The stamp is within 0.0017 of its own transpose
+(rms over peak) and the stars of the field fit it as is to 0.0236 and
+transposed to 0.0223 of their peak; the transpose does not earn a
+setting, and the overlay's comment says so.
+
+**Truth compatibility, checked on three counts.**
+
+| count | result | numbers |
+|---|---|---|
+| times | **agrees** | `gbtds_timestamps_field03.txt` has all 263 lite exposures, `TSTART` equal to `OBS_TIME_JD` to 0.000 s, filters equal; every F087 and F213 time series has exactly the lite files' exposure numbers as columns (132 and 131) |
+| positions | **agrees** | the input catalog's stars through the reference's WCS: of the reference catalog's detections ranked 2,000 to 6,000 by flux, 0.568 sit within 0.1 arcsec of a catalog star brighter than F213 20 (chance, the catalog moved 30 arcsec: 0.019), median offset (−0.024, −0.021) arcsec; the targets themselves match the reference catalog at 0.022 against 0.002 chance, because the 15,512 reference detections cannot resolve the 170,603 catalog stars brighter than 20 on the frame |
+| injected signal | **disagrees** | per target-epoch, the time series' change against the mean of the 10 reference frames, times the catalog magnitude's flux at `ZPTMAG`, over the epoch's point-source sigma (`limmag`'s 5-sigma flux / 5: 7.1 DN/s F087, 24.1 F213); found = a source of the predicted sign in the uncapped ZOGY catalog (S/N ≥ 5) within 0.1 arcsec. F087 brightening at predicted S/N 30 to 100: 3 of 45 found (0.067), above 100: 1 of 14, quiet stars of the same magnitudes 0.007; fading at S/N 10 to 30: 0.313 against quiet stars' 0.175. With the sign flipped: 0 of 34 and the quiet-star rate. F213: 19 brightening target-epochs above predicted S/N 5, none found |
+
+The flux scale agrees (the reference catalog's isolated stars at F213 17
+to 18 read the catalog magnitude minus `MAG_AUTO` 24.93 against the
+mosaic's `MAGZP` 25.145, a Kron aperture's shortfall), so the missing
+signal is not a scale error: the 250513 time series do not describe the
+260622 images' variables, as the delivery's "greater variety of injected
+transients" suggested. One table of the truth is also wrong in itself:
+the `dim_EB` time series carry the `blended_EB` series' 5,000 ids and
+none of the 4,750 dim-EB stars, and were left out. **Completeness unmet:
+truth incompatible**; the counting rule was defined (a target-epoch
+eligible when its predicted brightening is at least the epoch's 5-sigma
+point-source flux, magnitude the catalog's, matched to the published
+`sources` within 0.1 arcsec) and not run.
+
+**The quirks met:**
+
+| quirk | disposition |
+|---|---|
+| A FITS file, not ASDF; image in DN at gain 1, no ERR or DQ, NaN present (3,992 on the first file) | a reader, `[intake] reader = "rimtimsim"` (PR 429) |
+| The file names no ePSF reference | `[psf.epsf]` on the overlay: CRDS's `roman_0077` answer for WFI02 per filter |
+| Dev's artefact repair (10,000 DN/s) sits below the stars' cores (99.99th percentile 14,600 DN/s) | the overlay: off, as dev's rimtimsims block |
+| The reference mosaic's `MAGZP` is 25.145 against the frames' 25.857 | recorded; gain matching scales the reference by 2.06 (F087) and 2.12 (F213) |
+| F213's differences over-subtract star cores (core −0.050 to −0.075; 72k to 107k negative candidates, 10k to 13k above S/N 20); the stars are 1.04 times the science PSF's sigma, the measured reference PSF 1.39 px against the science 1.30 | recorded, with the gate's holds; the next measurement for this dataset (F087's cores are −0.005 to +0.024) |
+| Every epoch fills the 500 cap (15k to 50k positive candidates) | recorded; it censors any count on the published set |
+| The difference takes 28 to 72 min on one vCPU, the PSF-fit catalogs of three differencers | recorded |
+| Dev's science-PSF transpose | measured on one epoch (run 101): no gain; not built |
+| The 250513 truth's signal does not match the 260622 images; its dim-EB series carry the blended-EB ids | recorded; completeness unmet |
+
+Runs 99, 100 and 101, their datasets and the Gaia boxes stay; nothing
+was deleted. The raw evidence is the brief directory's `t1/`
+(`metrics-*.json`, `snr-*.txt`, `gate-answers.txt`, `compat/`,
+`times-check.txt`, `scripts/`).
 ### Step gbtds-second: a second GBTDS pointing and SCA through the chain, run 112 CLEAN; every kept source above S/N 20 and the difference 1,036 s
 
 **What.** Measurement only: no code, overlay, image or deploy change. One GBTDS r00340 pointing and SCA other than run 67's ran through intake, reference, difference and packet on Batch under the settings as merged. The sample has run 67's shape at the pointing farthest from it.
