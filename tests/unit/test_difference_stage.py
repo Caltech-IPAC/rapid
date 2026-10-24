@@ -241,8 +241,10 @@ def test_the_manifest_records_the_reference_psf_metrics(tmp_path, files, fakes, 
     recorded = manifest(run_difference(tmp_path, files))
     metrics = recorded["metrics"]
     assert set(metrics) == {"refpsf_sigma_px", "refpsf_stars", "sci_psf_sigma_px",
-                            "psf_centroid_offset_px"}
+                            "psf_centroid_offset_px", "ref_sigma_px", "noise_correlation"}
     assert (metrics["refpsf_sigma_px"], metrics["refpsf_stars"]) == (refpsf.sigma, refpsf.stars)
+    assert metrics["ref_sigma_px"] == refpsf.sigma
+    assert metrics["noise_correlation"] > 0
     # The science PSF is the fixture's 9 x 9 Gaussian of sigma 1.2, centred.
     assert refpsf.calls[0]["science_psf_shape"] == (9, 9)
     assert 1.0 < metrics["sci_psf_sigma_px"] < 1.2

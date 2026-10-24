@@ -29,6 +29,10 @@ re-centred on the central pixel, with what it measured:
   stamps, evaluated at the pixel centres of the output stamp (an effective
   PSF evaluated at a pixel centre is that pixel's value), shifted until its
   centroid is within :data:`CENTRING_TOLERANCE_PX` of the central pixel;
+- the stars' own width: the median of the chosen stars' :func:`moments`
+  sigma on the image, the fixes ledger's reference-star sigma (1.10 px
+  under SWarp BILINEAR, 1.02 under LANCZOS3, run 17 pass 4), which does not
+  depend on the builder;
 - the wings: the science PSF's beyond :data:`WING_RADII_PX`, cosine-tapered
   into the measured core between the two radii, the stamp normalised to
   unit sum. The ePSF is built on :data:`STAMP_PX` stamps, so it holds
@@ -114,6 +118,7 @@ class ReferencePsf:
     passed_cuts: int
     sigma_px: float
     centroid_px: tuple[float, float]
+    star_sigma_px: float
 
 
 def moments(stamp: np.ndarray, radius: float = MOMENT_RADIUS_PX) -> tuple[float, float, float]:
@@ -174,10 +179,11 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
     keep &= _isolated(x, y, ISOLATION_PX)
     keep &= _stamp_usable(usable, x, y, STAMP_PX)
     half = STAMP_PX // 2
+    width = np.full(len(x), np.nan)
     for i in np.flatnonzero(keep):
         xi, yi = int(round(x[i])), int(round(y[i]))
-        width = moments(data[yi - half:yi + half + 1, xi - half:xi + half + 1])[2]
-        keep[i] = science_sigma_px <= width <= science_sigma_px + WIDTH_EXCESS_MAX_PX
+        width[i] = moments(data[yi - half:yi + half + 1, xi - half:xi + half + 1])[2]
+        keep[i] = science_sigma_px <= width[i] <= science_sigma_px + WIDTH_EXCESS_MAX_PX
     passed = int(keep.sum())
     if passed < MIN_STARS:
         raise TooFewStars(passed)
@@ -189,7 +195,8 @@ def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> R
     stamp = _with_wings(_evaluate_centred(built.epsf, SIZE), science_psf)
     dx, dy, sigma = moments(stamp)
     return ReferencePsf(stamp=stamp, stars=len(chosen), detections=len(found), passed_cuts=passed,
-                        sigma_px=sigma, centroid_px=(dx, dy))
+                        sigma_px=sigma, centroid_px=(dx, dy),
+                        star_sigma_px=float(np.median(width[chosen])))
 
 
 def _with_wings(core: np.ndarray, science_psf: np.ndarray) -> np.ndarray:

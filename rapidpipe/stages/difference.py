@@ -76,7 +76,12 @@ named numbers (``refpsf_sigma_px`` and ``sci_psf_sigma_px``, the two
 stamps' second-moment sigma within 4 px, px; ``refpsf_stars``, the stars
 built from; ``psf_centroid_offset_px``, the reference stamp's centroid
 minus the science stamp's, x and y, px: their relative centring is what
-ZOGY sees).
+ZOGY sees; ``ref_sigma_px``, the median second-moment sigma of the stars
+the reference PSF was built from, on the resampled reference, px;
+``noise_correlation``, the masked ZOGY difference's 4 x 4 block-mean
+sigma times 4 over its pixel sigma, both clipped, 1 for white noise,
+absent when the image has too few full blocks,
+:func:`rapidpipe.science.difference.noise.noise_correlation`).
 
 Determinism: on identical inputs the stage writes identical pixels and
 rows (FITS ``DATE`` cards and the bkgest tables' time stamps aside) when
@@ -123,6 +128,7 @@ from rapidpipe.science.difference import (
     gainmatch,
     masking,
     naive,
+    noise,
     offsets,
     psf,
     psfcat,
@@ -630,6 +636,9 @@ def run(job: JobContext) -> None:
             w(source), w(output_resampled_reference_cov_map), w(target), thresh)
     for target in (filename_diffimage_masked, filename_scorrimage_masked):
         _restore_nans(w(target), nan_indices_sciimage, nan_indices_refimage)
+    correlation = noise.noise_correlation(fits.getdata(w(filename_diffimage_masked), 0))
+    if correlation is not None:
+        metrics["noise_correlation"] = correlation
 
     filename_diffimage_masked_negative = filename_diffimage_masked.replace(".fits", "_negative.fits")
     scale_image_data(w(filename_diffimage_masked), -1.0, w(filename_diffimage_masked_negative))
@@ -770,7 +779,7 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
               "passed_cuts": measured.passed_cuts, "seconds": seconds,
               "centroid_px": list(measured.centroid_px), "science_centroid_px": [sci[0], sci[1]]}
     metrics = {"refpsf_sigma_px": measured.sigma_px, "refpsf_stars": measured.stars,
-               "sci_psf_sigma_px": sci[2],
+               "ref_sigma_px": measured.star_sigma_px, "sci_psf_sigma_px": sci[2],
                "psf_centroid_offset_px": [measured.centroid_px[0] - sci[0],
                                           measured.centroid_px[1] - sci[1]]}
     return record, metrics

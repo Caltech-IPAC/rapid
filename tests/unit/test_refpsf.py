@@ -3,7 +3,7 @@
 Contracts: on a field of pixel-integrated Gaussian stars mixed with
 single-pixel defects and wider galaxies, the stamp is ``SIZE x SIZE``, unit
 sum, centred within the tolerance, with the stars' second-moment sigma to
-0.02 px, built from the stars alone (the defects are narrower than the
+0.02 px, and the stars' own median width the same, built from the stars alone (the defects are narrower than the
 science PSF, the galaxies wider than the width cut); beyond the outer
 wing radius the stamp is the science PSF's, renormalised, so ZOGY sees no
 edge where the measured ePSF ends; pixels outside ``usable`` are never
@@ -62,6 +62,7 @@ def test_the_stamp_has_the_stars_width_and_rejects_defects_and_galaxies():
     assert measured.stamp.shape == (refpsf.SIZE, refpsf.SIZE)
     assert measured.stamp.sum() == pytest.approx(1.0, abs=1e-9)
     assert measured.sigma_px == pytest.approx(truth[2], abs=0.02)
+    assert measured.star_sigma_px == pytest.approx(truth[2], abs=0.02)
     assert max(map(abs, measured.centroid_px)) < refpsf.CENTRING_TOLERANCE_PX
     assert measured.stars == 40 and measured.detections >= 40 + 6
 
