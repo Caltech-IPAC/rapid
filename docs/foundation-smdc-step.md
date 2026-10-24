@@ -4621,6 +4621,192 @@ Brief `night-2026-10-24` (plan v9 Part 7, the second iteration's list):
 one step per task, numbered by task; a task's step lands when its task
 does, so the numbers can arrive out of order.
 
+1. **GBTDS first contact: the data, the WCS re-derived at intake, one
+   pointing through the chain (PRs 361 and 370, merged `43805b70` and
+   `bda41dd6`).** STScI's SOC
+   GBTDS simulation, r00340, under the dataset `r00340-gb1` with its own
+   overlay, `rapidpipe/settings/datasets/gbtds-r00340.toml`.
+
+   **The data.** Read from the notebook's `gbtds_manifest.ecsv` (88,038
+   rows, one per L2 file; fetched with `gh api
+   repos/spacetelescope/roman_notebooks/contents/notebooks/ccs_simulations/gbtds_manifest.ecsv`)
+   and one pointing's files under
+   `s3://stpubdata/roman/nexus/soc_simulations/r00340/l2/` (unsigned):
+
+   | what | r00340 |
+   |---|---|
+   | key grammar | HLWAS's, `r00340 01 PPP 001 OOO VVV_EEEE_wfiNN_fNNN`; beside each `_cal.asdf` (203 MB) a `_wcs.asdf` (49 KB), `_preview.png` (1.9 MB) and `_thumb.png` (125 KB); L1 `_uncal.asdf` 1.06 GB under `l1/` |
+   | span | 2027-10-01 00:00 to 2027-10-08 18:21 UTC, 7.8 days |
+   | pointings | 6, at PA 90.46 throughout: (266.71, -28.93), (267.60, -29.92), (267.84, -29.57), (268.07, -29.23), (268.31, -28.88), (268.54, -28.54) |
+   | passes | 5, segment 1 always: pass 1 (2 h) the colour filters once, passes 2 to 4 (2.2 days each) F146 with F087 and F213 interleaved, pass 5 (one day) the same, partial |
+   | observations | 1 to 36 per pass; an observation is one filter |
+   | visits | 1 to 72 per observation; **the pointing is the visit modulo 6** (268.54 -28.54 is visits 5, 11, ..., 71), exposure 1 for F146, 1 to 4 for F062 |
+   | exposure | 66.41 s, MA table SCI1002, 5 resultants, every file |
+   | files per filter | F146 80,082; F213 3,348; F087 3,330; F062 432; F129, F158, F184 216 each; F106 198 |
+   | epochs per pointing and SCA | F146 738 to 744 (every 13.7 min, gaps at most 41 min); F087 and F213 31; F062 4; F106, F129, F158, F184 2 |
+   | GBTDS's L2 | romancal 0.22.0, CRDS context `roman_0046.pmap`, ePSF `roman_wfi_epsf_0276`, distortion `roman_wfi_distortion_0003`; `tweakreg` COMPLETE with tens of thousands of "matches" |
+
+   The input catalog sits beside HLWAS's under
+   `soc_simulations/input_catalogs/`, but its tiles are GBTDS's: the six
+   nside-512 (Galactic, nested) tiles over the sample frame
+   (`cat-1113941`, `1113943`, `1113949`, `1157632`, `1157634`, `1157640`)
+   are 673 to 734 MB each, 7.7 million rows, every row type `PSF`
+   (Synthpop stars), 12 columns (`source_id, ra, dec, F062 ... F213,
+   type`; no `n`, `half_light_radius`, `pa` or `ba`), fluxes as maggies.
+
+   **The WCS, the first quirk.** The notebook's `fix_gbtds_wcs.py`
+   (`gh api .../ccs_simulations/fix_gbtds_wcs.py`) copies `ra_ref`,
+   `dec_ref` and `roll_ref` from the L1 header into the L2 model and runs
+   romancal's `AssignWcsStep`. Read on the data, three things differ from
+   that recipe, and PR 361 ports what holds into the intake behind
+   `[intake] rederive_wcs` (false by default, true on the GBTDS overlay):
+
+   - The L2 files carry the L1 values unchanged: 12 of 12 sampled files
+     (pointings, passes 2 to 5, SCAs, F146, F087 and F213) have L1 and L2
+     `wcsinfo` equal bit for bit, so tweakreg moved only the gWCS and the
+     L1 read is not needed.
+   - `AssignWcsStep.call` asks CRDS for the best distortion reference;
+     today's context (`roman_0077.pmap`) answers `roman_wfi_distortion_0076`,
+     which puts the frame about 1,770 px off (grid median (-343, +1735)
+     px). The file names `roman_wfi_distortion_0003`; the intake fetches
+     that one by name from `[psf] crds_server` and calls the step's body,
+     `romancal.assign_wcs.assign_wcs.load_wcs`, because the step contacts
+     the CRDS server even with `override_distortion` (it failed with none
+     reachable).
+   - The `_wcs.asdf` sidecar's `wcs_l1` is the L2 gWCS shifted by the 4 px
+     reference border (to 0.003 px), not an L1 WCS.
+
+   The input catalog through each WCS against measured centroids, file
+   `r0034001002001001005_0001_wfi08_f146` (the WCS ledger's method:
+   isolated catalog stars brighter than F146 19, no catalog star within 2
+   mag inside 6 px; DAOStarFinder at 20 sigma; Gaussian-weighted centroids;
+   zero-based pixels; measured minus predicted; matched within 3 px):
+
+   | WCS | matched | median dx, dy px | MAD-sigma px |
+   |---|---|---|---|
+   | L2 gWCS (tweakreg, "54,059 matches", claimed shift (-3.80, -0.37)) | 1,018 | chance | 1.79, 1.80 |
+   | control, L2 gWCS moved 40 px | 1,071 | chance | 1.92, 1.84 |
+   | **re-derived, the file's `distortion_0003`** | **9,993** | **+0.030, -0.032** | **0.046, 0.042** |
+   | control, re-derived moved 40 px | 1,105 | chance | 1.78, 1.84 |
+   | re-derived, CRDS's current `distortion_0076` | 1,126 | chance | 1.89, 1.80 |
+
+   The L2 gWCS sits (-28.79, +21.58) px from the re-derived one on this
+   file (0.7 px range across the frame). The intake's FITS SIP header
+   reproduces the re-derived gWCS within 1e-4 px over a 33 x 33 grid.
+
+   Image `rebuild-43805b70…` (`sha256:4b3ff7b0…`, build 22 s):
+   **`rapid-rebuild:53`**. On all nine sampled epochs the intake's
+   `metrics` read it back: the fix moved the WCS (-28.8, +21.6), (+38.7,
+   -24.3), (-13.5, +42.4), (-22.9, -8.9), (+35.4, +21.6), (+16.0, +2.1),
+   (+8.1, -49.1), (-3.5, -46.2), (+8.1, -49.1) px (tweakreg's error is
+   different on every epoch, 9 to 50 px), and task 4's Gaia-offset metric
+   through the re-derived WCS is `gaia_dx_px` +0.04 to +0.18, `gaia_dy_px`
+   -0.08 to +0.05, over 1,397 to 1,451 Gaia stars per frame. The
+   re-derivation adds 1.4 to 2.2 s per intake (the reference fetch) to a
+   37 to 41 s container.
+
+   **The sample and the run.** The loop's pointing (`VVV_EEEE`) is not a
+   sky position here: the six pointings repeat as visit modulo 6 in every
+   observation of every pass, so `--pointings` cannot bound the epochs
+   (744 F146 epochs per SCA at one pointing). The sample is a source root
+   of its own: nine F146 SCA 8 files of the 268.54 -28.54 pointing,
+   copied unchanged to `$RAPIDPIPE_OUTPUTS_ROOT/samples/r00340-gb1/l2/`
+   (one `aws s3 cp` each, 203 MB): pass 2's first seven epochs (13.7 min
+   apart, 02:13 to 03:35 UTC on 2027-10-01), one a day later and one six
+   days later. The reference is the first **N = 6** (`before_mjd` 61679.1449,
+   between the sixth and seventh); three epochs are differenced. Gaia DR3
+   over RA 267.95 to 268.45, Dec -28.65 to -28.10: the ESA archive returns
+   at most 50,000 rows per job (the first fetch came back with exactly
+   50,000), so the box comes as 4 x 4 sub-boxes after a `COUNT`, the sum
+   checked: **256,209 rows**, 98 MB, 125 s (`gbtds/scripts/gaia_fetch.py`
+   in the run directory).
+
+   ```sh
+   rp run create --who "$USER" --why "..." --revision 43805b704d02cf5ff84f2d8b112eea7aa12836ac \
+     --overlay rapidpipe/settings/datasets/gbtds-r00340.toml \
+     --set 'intake.source_root="<the sample root>"' --set intake.unsigned=false \
+     --set reference.selection.before_mjd=61679.1449 --survey GBTDS --dataset r00340-gb1
+   rp official change --group live.json ...   # run 62 live, group 18776
+   rp job local --run 62 --stage import --scope '{"source_dir": "<copy>", "gaia": {"name": "gaia-r00340-gb1", "version": "DR3", "path": "gaia-dr3-gbtds-r00340-gb1-box.parquet"}}' \
+     --expects '[{"product": "catalogs", "key": {"dataset": "r00340-gb1", "name": "gaia-r00340-gb1", "version": "DR3"}, "binding": null}]'
+   timeout 5400 rp loop --run 62 --filters F146 --scas 8 --pointings all --job-definition rapid-rebuild:53 --interval 60
+   ```
+
+   Run **62**: the psf job, nine intakes and the six-frame reference
+   published (05:30 to 05:36 UTC); **all three differences failed**
+   `refpsf: 0 stars, 10 needed`, exit 65, and the loop exited 2. The bulge
+   is confusion-limited: on the reference mosaic the clipped deviation is
+   14.8 DN/s (crowding, not noise; 32,516 detections at 20 sigma on one
+   66 s frame), so the peak floor of 400 deviations (5,901 DN/s) is above
+   the ceiling (3,500) and none of 81,239 detections passes; with the
+   floor at 20 to 200 the stars pass, but the ePSF builder cannot centre
+   the crowded stamps (0.12 to 0.40 px off after 10 shifts). PR 370
+   (`bda41dd6`) adds `[difference] reference_psf` (`"measured"`, the
+   default and today's behaviour; `"science"`, ZOGY gets the science PSF
+   for both images, as run 17 did), `"science"` on the GBTDS overlay.
+   **`rapid-rebuild:56`**; run **67** made live in place of run 62 (group
+   18833, closing binding 27533), the same loop at `rapid-rebuild:56`: it
+   reused the dataset's official psf, intakes and reference and drained in
+   **26.1 min** (05:50:11 to 06:16:17 UTC), exit 0, no job failed.
+
+   - 3 differences (20211 to 20213), 3 associates (one chain, field
+     4641773), 3 packet sets, **515 packets** (173, 173, 169) produced and
+     stamped.
+   - `scripts/check_run.sh --run 67 --inspect <dir>`: **`Check run 67:
+     CLEAN validate 6/6 9 s reader 3/3 4 s consumer 515/515 6 s`**.
+
+   | epoch | when | candidates | kept | S/N > 20 | packets | packets S/N > 20 | noise correlation | bright-footprint fraction |
+   |---|---|---|---|---|---|---|---|---|
+   | 2014101 | pass 2, +1.4 h after the reference | 9,618 | 500 | 367 | 173 | 133 | 1.63 | 0.003 |
+   | 2171101 | pass 2, +1 day | 9,343 | 500 | 418 | 173 | 147 | 1.63 | 0.000 |
+   | 4254101 | pass 4, +6 days | 8,784 | 500 | 346 | 169 | 118 | 1.67 | 0.003 |
+
+   **The science, reported and not repaired**: HLWAS F146 SCA 8 leaves
+   about 19 sources above S/N 20 per epoch (part 10); GBTDS leaves 346 to
+   418, every bright one a positive core in a negative ring at a star (the
+   gallery: `gbtds/gallery-20211.png` in the run directory, the eight of
+   highest S/N, S/N 393 to 563 on reference peaks of 2,400 to 3,100). Of
+   job 20211's 367 above S/N 20, 331 sit on reference pixels above 1,000
+   (gain-matched DN) and 36 at 200 to 1,000. That is the core-and-ring
+   residual of a reference PSF narrower than the reference, the one part
+   10 step 3's measured PSF removed on HLWAS; with `"science"` it is back
+   by construction. Core, ring, registration and on-reference-star
+   metrics are absent: each needs the reference's measured stars.
+
+   Measurements (Batch created to started is the queue wait; peak RSS is
+   the job's `peak_rss_kib`):
+
+   | stage | jobs | queue wait s min / median / max | container s min / median / max | peak RSS MiB (max) | HLWAS (part 9) container median |
+   |---|---|---|---|---|---|
+   | psf | 1 | 16 | 12 | 294 | 10.9 |
+   | intake | 9 | 9 / 19 / 21 | 37 / 39 / 41 | 1,047 | 37.6 |
+   | reference | 1 (6 frames) | 39 | 82 | 2,847 | 45.7 (3 frames) |
+   | difference | 3 | 98 / 224 / 224 | **790 / 820 / 828** | 16,221 | 232.6 |
+   | associate | 3 | 9 / 10 / 14 | 3 / 3 / 3 | 215 | 2.8 |
+   | packet | 3 | 5 / 6 / 9 | 27 / 35 / 42 | 860 | 30.2 |
+
+   The difference is 3.5 times HLWAS's, the crowded field's 9,000
+   candidates per epoch through the PSF-fit catalogs.
+
+   **The quirks met, each with its disposition:**
+
+   | quirk | disposition |
+   |---|---|
+   | The L2 gWCS is tweakreg's spurious crowded-field match, 9 to 50 px off and different every epoch | fixed in a reader step: `[intake] rederive_wcs` (PR 361), on in the overlay |
+   | `AssignWcsStep` under today's CRDS context takes `distortion_0076`, 1,770 px off | fixed in the reader step: the file's own `distortion_0003`, by name, through `load_wcs` |
+   | The notebook's L1 read is a no-op (L2 `wcsinfo` equals L1's in 12 of 12) | recorded; the L1 file is not read |
+   | The `_wcs.asdf` sidecar's `wcs_l1` is the L2 gWCS moved by the 4 px border | recorded |
+   | A pointing is visit modulo 6, so `--pointings` does not bound the epochs; 744 F146 epochs per SCA per pointing at 13.7 min | recorded; sampled by a source root of chosen stems, the reference the first N = 6 |
+   | The DQ flags are HLWAS's (0.077% under its mask, all 9 isolated pixels above 1000 DN/s flagged); SATURATED on 0.51% | fixed on the overlay: HLWAS's mask |
+   | The bulge is confusion-limited: the reference PSF cannot be measured (0 stars) | fixed on the overlay: `[difference] reference_psf = "science"` (PR 370) |
+   | The science PSF on the reference leaves 346 to 418 core-and-ring residuals per epoch above S/N 20 | recorded, the gallery; the next measurement for this dataset |
+   | The difference job takes 820 s, 3.5 times HLWAS's | recorded |
+   | The input-catalog tiles over GBTDS are Synthpop's: 700 MB, 7.7 million rows, stars only, 12 columns | recorded |
+   | The Gaia archive caps a job at 50,000 rows silently | recorded; fetched in sub-boxes with the count checked |
+   | GBTDS is romancal 0.22.0, context `roman_0046`, HLWAS 0.23.0.dev3; the ePSF reference is the same (`roman_wfi_epsf_0276`) | recorded |
+
+   Runs 62 and 67 and the sample root stay; nothing was deleted.
+
 2. **OpenUniverse TDS read, and one image through a second intake reader
    (PR 365, merged `0e5459da`).** The record is
    `LEDGER-openuniverse.md` beside the brief. The brief said FITS: STScI's
