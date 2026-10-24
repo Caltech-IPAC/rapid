@@ -122,19 +122,19 @@ Date              Software modification
                     7x7 Gaussian filter with FWHM 2.0 pixels, ``DETECT_MINAREA = 2``, ``DETECT_THRESH = ANALYSIS_THRESH = 2.5`` (ZOGY unchanged; SFFT section not applied with ``--crossconv``) (PR #247).
                   * Reference-image background now subtracted with the same ``bkgest`` command as the science image (``[BKGEST] subtract_from_reference = True``),
                     instead of by SWarp (``[SWARP] swarp_SUBTRACT_BACK = N`` for the reference image) (PR #256).
-                  * SExtractor ``SEEING_FWHM`` changed from 1.2 to 0.25 arcsec (science-image, reference-image, difference-image and gain-matching catalogs), and ``DEBLEND_NTHRESH`` from 4 to 32 (science-image, reference-image and gain-matching catalogs);
+                  * SExtractor ``SEEING_FWHM`` changed from 1.2 to 0.25 arcsec (science-image, reference-image, difference-image and gain-matching catalogs), and ``DEBLEND_NTHRESH``
+                    from 4 to 32 (science-image, reference-image and gain-matching catalogs);
                     ``[GAINMATCH] min_class_star_thresh`` changed from 0.5 to 0.0 (the ``CLASS_STAR`` cut had left gain matching on its MAGZP-based fallback) (PR #257).
                   * PhotUtils-style columns in the SExtractor difference-image catalogs now use a 5x5 PSF-fit box (``[EXTRA_CATALOG_COLS] photutils_cols_fit_shape``), instead of 17x17 (PR #258).
                   * ``sumrat``, ``nneg`` and ``nbad`` now measured after subtracting a local background (``[EXTRA_CATALOG_COLS] pixel_cols_bkg_box = 64``, ``pixel_cols_bkg_filter_size = 3``) (PR #258).
                   * XSources database prefilter adds an SNR cut, ``FLUX_APER_1 / FLUXERR_APER_1 > 5.0`` (``[DATABASE_PREFILTER] snr_prefilter_threshold``),
                     and the XSources loader rejects sources within 2 pixels of the image edge (PR #258).
-10/23/2026        Changes made to complete 10/21/2026 socsims test:
-                  * Select the not-best [x]sids on the database server in ``pruneNotBest[X]Merges.py``, instead of client-side selection,
+10/23/2026        * Change #1 made to complete 10/21/2026 socsims test: Select the not-best [x]sids on the database server in ``pruneNotBest[X]Merges.py``, instead of client-side selection,
                     in order to eliminate queries larger than 1 GB (PostgreSQL has a 1 GB limit).
-                  * Optimized container run command::
-                    docker run -it --entrypoint bash --name russ-test-jobsubmit  --shm-size=64g -e TMPDIR=/dev/shm \
-                    -v /home/ubuntu/work/test_20261021:/work -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 \
-                    -e NUMEXPR_NUM_THREADS=1 public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+                  * Change #2 made to complete 10/21/2026 socsims test: Optimized container run command
+                    ``docker run -it --entrypoint bash --name russ-test-jobsubmit  --shm-size=64g -e TMPDIR=/dev/shm
+                    -v /home/ubuntu/work/test_20261021:/work -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1
+                    -e NUMEXPR_NUM_THREADS=1 public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest``
 ===============   ===============================================================================================================================================================================================================================
 
 
