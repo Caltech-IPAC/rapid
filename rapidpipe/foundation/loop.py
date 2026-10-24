@@ -44,7 +44,8 @@ One pass, in order:
   run exists, and whose filter and SCA have official PSFs, at most
   ``max_intake``; it names the science PSF of its filter and SCA, and
   expects the ``exposures`` key only when nothing holds or claims it (the
-  18 SCAs of an exposure share it).
+  18 SCAs of an exposure share it); with the dataset's Gaia ``catalogs``
+  official, it names that too, for the intake's WCS offset metric.
 - ``reference``: a job per (field, filter, SCA) with at least
   ``[reference.selection] min_frames`` official L2 rows, no official
   reference and none pending or failed, while no intake of the run is
@@ -402,8 +403,11 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
             expects.insert(0, {"product": "exposures", "key": {"dataset": d, "expid": expid},
                                "binding": None})
             claimed.add(expid)
+        inputs = [psf(fid, a["sca"], "science")]
+        if snap.gaia is not None:              # the intake measures the WCS against it
+            inputs.append({"product": "catalogs", "key": snap.gaia["key"], "source_job": snap.gaia["job"]})
         out.append({"stage": "intake", "scope": {"dataset": d, "file": stem},
-                    "inputs": [psf(fid, a["sca"], "science")], "expects": expects})
+                    "inputs": inputs, "expects": expects})
 
     selected = {k: v for k, v in snap.l2.items() if selection.admits_row(*k, set(fids.values()))}
     intake_pending = bool(pending["intake"])
