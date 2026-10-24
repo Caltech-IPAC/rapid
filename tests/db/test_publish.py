@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from rapidpipe.foundation import PublishError, apply, job_show, publish
+from rapidpipe.foundation.prefix import local_path
 from tests.db.foundation_helpers import (
     DATASET, FIELD_KEY, SURVEY, memberships_rows, new_job, new_run, objects_rows, open_bindings,
     wait_until_blocked, write_attempt,
@@ -92,6 +93,41 @@ def test_a_job_whose_run_is_not_live_is_published_unbound_with_the_refusal_recor
     assert job_show(conn, job)["refusal"] == result["refusal"] and "not live" in result["refusal"]
     assert _count(conn, "objects", job) == 3
     assert open_bindings(conn, product="objects") == []
+
+
+def _empty_ok(prefix, tables):
+    manifest = local_path(prefix) / "manifest.json"
+    manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "empty_ok": tables}))
+
+
+@pytest.mark.parametrize("output", ["empty", "undeclared"])
+def test_an_expected_product_that_loaded_no_rows_is_published_unbound_with_the_refusal(
+        connect, tmp_path, output):
+    conn = connect()
+    job = new_job(conn, new_run(conn, live=True),
+                  expects=[{"product": "objects", "key": FIELD_KEY, "binding": None},
+                           {"product": "sources", "key": FIELD_KEY, "binding": None}])
+    tables = {"objects": objects_rows()} | ({"sources": []} if output == "empty" else {})
+    result = publish(conn, job, 1, write_attempt(tmp_path / "attempt", tables))
+
+    assert result["published"] and result["group"] is None and result["live"] is True
+    assert "sources" in result["refusal"] and job_show(conn, job)["refusal"] == result["refusal"]
+    assert job_show(conn, job)["state"] == "published" and _count(conn, "objects", job) == 3
+    assert open_bindings(conn, product="objects") == [] == open_bindings(conn, product="sources")
+
+
+def test_an_expected_product_its_stage_declared_empty_ok_binds_with_no_rows(connect, tmp_path):
+    conn = connect()
+    job = new_job(conn, new_run(conn, live=True),
+                  expects=[{"product": "objects", "key": FIELD_KEY, "binding": None},
+                           {"product": "sources", "key": FIELD_KEY, "binding": None}])
+    prefix = write_attempt(tmp_path / "attempt", {"objects": objects_rows(), "sources": []})
+    _empty_ok(prefix, ["sources"])
+
+    result = publish(conn, job, 1, prefix)
+
+    assert result["group"] is not None and result["refusal"] is None
+    assert [r[3] for r in open_bindings(conn, product="sources")] == [job]
 
 
 def test_publication_racing_a_cutover_publishes_unbound(connect, tmp_path):

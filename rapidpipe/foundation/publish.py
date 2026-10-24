@@ -23,6 +23,13 @@ field that gained an object or a membership and its neighbours) against
 the objects founded in them since its read before they load (:mod:`rapidpipe.foundation.catalog`),
 the outcome recorded in the stored manifest as ``reconcile``.
 
+A third, ``empty_ok``, lists the tables a stage declares may validly load
+zero rows (a difference's ``sources`` when nothing passes the cut). The
+automatic binding is refused for a job that expects a product whose table
+loaded no rows, a table its manifest does not declare included, unless
+``empty_ok`` names it: the rows stay published and unbound, the refusal on
+the job, as for any refused binding.
+
 The prefix is a URL, ``file://`` or ``s3://``; each file is read through
 :func:`rapidpipe.foundation.prefix.get`.
 """
@@ -101,7 +108,9 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             cur.execute("UPDATE jobs SET state = 'published', published_attempt = %s,"
                         " manifest = %s WHERE id = %s",
                         (attempt, Json({"prefix": prefix, **manifest}), job_id))
-            group, refusal, live = _bind(cur, job_id, run)
+            loaded = {table: len(r) for table, r in rows.items()}
+            group, refusal, live = _bind(cur, job_id, run, loaded,
+                                         set(manifest.get("empty_ok", [])))
         conn.commit()
     except BaseException:
         conn.rollback()
@@ -166,8 +175,13 @@ def _reconcile(cur, job_id: int, run: int, catalog: dict, reads: list[dict],
     return outcome
 
 
-def _bind(cur, job_id: int, run: int) -> tuple[int | None, str | None, bool | None]:
-    """The automatic binding, inside a savepoint; returns (group id, refusal, run live)."""
+def _bind(cur, job_id: int, run: int, loaded: dict[str, int],
+          empty_ok: set[str]) -> tuple[int | None, str | None, bool | None]:
+    """The automatic binding, inside a savepoint; returns (group id, refusal, run live).
+
+    ``loaded`` is the rows each table loaded; an expected product with none,
+    not in ``empty_ok``, refuses the binding.
+    """
     cur.execute("SELECT product, key, binding FROM job_inputs"
                 " WHERE job = %s AND kind = 'expects' ORDER BY product", (job_id,))
     expects = cur.fetchall()
@@ -179,6 +193,11 @@ def _bind(cur, job_id: int, run: int) -> tuple[int | None, str | None, bool | No
                 " WHERE o.run = %s AND o.closed_at IS NULL", (run,))
     live = cur.fetchone() is not None
     try:
+        empty = sorted({product for product, _, _ in expects
+                        if not loaded.get(product) and product not in empty_ok})
+        if empty:
+            raise Refused(f"job {job_id} loaded no {', '.join(empty)} rows and its stage"
+                          " did not declare them empty_ok")
         if not live:
             raise Refused(f"run {run} is not live for its survey and dataset")
         group = [{"close": binding, "open": {"product": product, "key": key, "job": job_id}}
