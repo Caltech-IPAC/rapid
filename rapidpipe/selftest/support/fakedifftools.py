@@ -381,16 +381,16 @@ class FakePsfCatalog:
 class FakeReferencePsf:
     """Stands in for ``refpsf.measure``: a 61 x 61 Gaussian of ``sigma``, or ``stars`` too few.
 
-    Records each call's image shape, usable count and science sigma.
+    Records each call's image shape, usable count and science PSF shape.
     """
 
     sigma: float = 1.1
     stars: int = 40
     calls: list[dict[str, Any]] = field(default_factory=list)
 
-    def __call__(self, image, usable, science_sigma_px) -> ReferencePsf:
+    def __call__(self, image, usable, science_psf) -> ReferencePsf:
         self.calls.append({"shape": image.shape, "usable": int(usable.sum()),
-                           "science_sigma_px": science_sigma_px})
+                           "science_psf_shape": science_psf.shape})
         if self.stars < 10:
             raise TooFewStars(self.stars)
         stamp = _gaussian(61, 30, 30, self.sigma)

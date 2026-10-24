@@ -751,9 +751,10 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
     start = time.perf_counter()
     image = fits.getdata(reference, 0)
     usable = fits.getdata(coverage, 0) >= thresh
-    sci = refpsf.moments(fits.getdata(science_psf, 0).astype(float))
+    science = fits.getdata(science_psf, 0).astype(float)
+    sci = refpsf.moments(science / science.sum())
     try:
-        measured = kit.reference_psf(image, usable, sci[2])
+        measured = kit.reference_psf(image, usable, science)
     except refpsf.TooFewStars as exc:
         raise CommandExit(int(ExitCode.INPUT_REJECTED), str(exc)) from exc
     header = fits.Header()

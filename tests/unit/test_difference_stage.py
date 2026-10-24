@@ -244,7 +244,7 @@ def test_the_manifest_records_the_reference_psf_metrics(tmp_path, files, fakes, 
                             "psf_centroid_offset_px"}
     assert (metrics["refpsf_sigma_px"], metrics["refpsf_stars"]) == (refpsf.sigma, refpsf.stars)
     # The science PSF is the fixture's 9 x 9 Gaussian of sigma 1.2, centred.
-    assert metrics["sci_psf_sigma_px"] == pytest.approx(refpsf.calls[0]["science_sigma_px"])
+    assert refpsf.calls[0]["science_psf_shape"] == (9, 9)
     assert 1.0 < metrics["sci_psf_sigma_px"] < 1.2
     assert metrics["psf_centroid_offset_px"] == pytest.approx([0.0, 0.0], abs=1e-6)
     assert recorded["difference"]["refpsf"]["stars"] == refpsf.stars

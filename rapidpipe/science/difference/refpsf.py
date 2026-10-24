@@ -28,8 +28,18 @@ re-centred on the central pixel, with what it measured:
 - the ePSF: ``EPSFBuilder`` at :data:`OVERSAMPLE` on :data:`STAMP_PX`
   stamps, evaluated at the pixel centres of the output stamp (an effective
   PSF evaluated at a pixel centre is that pixel's value), shifted until its
-  centroid is within :data:`CENTRING_TOLERANCE_PX` of the central pixel,
-  normalised to unit sum.
+  centroid is within :data:`CENTRING_TOLERANCE_PX` of the central pixel;
+- the wings: the science PSF's beyond :data:`WING_RADII_PX`, cosine-tapered
+  into the measured core between the two radii, the stamp normalised to
+  unit sum. The ePSF is built on :data:`STAMP_PX` stamps, so it holds
+  nothing beyond 15 px, where the science PSF still holds 3.3% of its flux
+  (F146 SCA 8); ZOGY, given the truncated stamp alone, left a ring 10 to
+  20 px out at every bright star (run 42 pass 4: 190 of 449 sources above
+  S/N 20 there, against 3 of 80 before). A sub-pixel resampling kernel
+  leaves the wings unchanged (6 to 10 px: science 0.047 of the flux, the
+  measured stamp 0.050) and 38 stars do not measure them at the 1e-4
+  level, so the science PSF's are the better estimate there. The window of
+  :func:`moments` lies inside the measured core.
 
 The values are constants, not settings: no measured case has needed a
 different one (foundation plan Part 1). Their measurement, on run 17's
@@ -82,6 +92,8 @@ SIZE = 61
 CENTRING_TOLERANCE_PX = 0.01
 #: The window of :func:`moments`, px.
 MOMENT_RADIUS_PX = 4.0
+#: Measured core within the first radius, the science PSF's wings beyond the second, px.
+WING_RADII_PX = (6.0, 10.0)
 
 
 class TooFewStars(ValueError):
@@ -122,12 +134,17 @@ def moments(stamp: np.ndarray, radius: float = MOMENT_RADIUS_PX) -> tuple[float,
     return x - cx, y - cy, sigma
 
 
-def measure(image: np.ndarray, usable: np.ndarray, science_sigma_px: float) -> ReferencePsf:
+def measure(image: np.ndarray, usable: np.ndarray, science_psf: np.ndarray) -> ReferencePsf:
     """The reference PSF of ``image`` from its stars.
 
-    ``usable`` marks the pixels it may read; ``science_sigma_px`` is the
-    science PSF's :func:`moments` sigma, the floor of a star's width.
+    ``usable`` marks the pixels it may read; ``science_psf`` is the science
+    PSF's ``SIZE x SIZE`` stamp: its :func:`moments` sigma is the floor of a
+    star's width and its wings are the stamp's.
     """
+    if science_psf.shape != (SIZE, SIZE):
+        raise ValueError(f"refpsf: the science PSF is {science_psf.shape}, not {SIZE} x {SIZE}")
+    science_psf = science_psf / science_psf.sum()
+    science_sigma_px = moments(science_psf)[2]
     from astropy.nddata import NDData
     from astropy.stats import sigma_clipped_stats
     from astropy.table import Table
@@ -169,10 +186,22 @@ def measure(image: np.ndarray, usable: np.ndarray, science_sigma_px: float) -> R
     stars = extract_stars(NDData(data), Table({"x": x[chosen], "y": y[chosen]}),
                           size=(STAMP_PX, STAMP_PX))
     built = EPSFBuilder(oversampling=OVERSAMPLE, progress_bar=False)(stars)
-    stamp = _evaluate_centred(built.epsf, SIZE)
+    stamp = _with_wings(_evaluate_centred(built.epsf, SIZE), science_psf)
     dx, dy, sigma = moments(stamp)
     return ReferencePsf(stamp=stamp, stars=len(chosen), detections=len(found), passed_cuts=passed,
                         sigma_px=sigma, centroid_px=(dx, dy))
+
+
+def _with_wings(core: np.ndarray, science_psf: np.ndarray) -> np.ndarray:
+    """``core`` within the first of :data:`WING_RADII_PX`, ``science_psf`` beyond the second, unit sum."""
+    inner, outer = WING_RADII_PX
+    centre = (core.shape[0] - 1) / 2
+    rows, cols = np.indices(core.shape, dtype=float)
+    r = np.hypot(cols - centre, rows - centre)
+    w = np.clip((r - inner) / (outer - inner), 0.0, 1.0)
+    taper = 0.5 * (1 + np.cos(np.pi * w))
+    stamp = taper * core + (1 - taper) * science_psf
+    return stamp / stamp.sum()
 
 
 def _isolated(x: np.ndarray, y: np.ndarray, radius: float) -> np.ndarray:
