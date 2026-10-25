@@ -24,7 +24,11 @@ carries the WCS ledger's measured translation; ``[intake] rederive_wcs``
 (default false, `dev`'s behaviour) fetches nothing and keeps the file's
 gWCS, and on fetches the distortion reference the file names and writes
 the SIP fit of the re-derived gWCS, the manifest naming the reference and
-the shift at the centre; the GBTDS overlay turns it on and HLWAS's does not.
+the shift at the centre; the GBTDS overlay turns it on and HLWAS's does not;
+``[intake] gaia_proper_motion`` on, a Gaia star that moved by its proper
+motion from the copy's ``ref_epoch`` to the frame's mid-exposure reads
+offset zero, and off (the shipped value; flight's overlay turns it on) the
+offset is the copy's positions' as they are.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import tomllib
@@ -411,3 +416,70 @@ def test_the_gbtds_overlay_rederives_the_wcs_and_hlwas_does_not():
     hlwas = tomllib.loads((overlays / "hlwas-r00342.toml").read_text())
     assert gbtds["intake"]["rederive_wcs"] is True
     assert "rederive_wcs" not in hlwas.get("intake", {})
+
+
+PM_MAS_YR = (-15.0, 12.0)      # (pmra, pmdec): about 1.4 and 1.1 px over ten years
+
+
+def gaia_frame(tmp_path: Path, proper_motion: bool):
+    """A frame at 2026.0 whose stars sit on its WCS, and a 2016.0 copy that moved by ``PM_MAS_YR``."""
+    from rapidpipe.science.alerts.crossmatch import propagate_positions
+    from tests.unit.test_astrometry import frame, grid, tan_wcs
+
+    w, stars = tan_wcs(), grid()
+    ra, dec = w.all_pix2world(stars[:, 0], stars[:, 1], 0)
+    pmra, pmdec = (np.full(len(stars), v) for v in PM_MAS_YR)
+    ra16, dec16 = propagate_positions(ra, dec, -pmra, -pmdec, 10.0)
+    path = tmp_path / "gaia.parquet"
+    pq.write_table(pa.table({"ra": ra16, "dec": dec16, "pmra": pmra, "pmdec": pmdec,
+                             "ref_epoch": np.full(len(stars), 2016.0)}), path)
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, statement, params):
+            assert "FROM catalogs" in statement
+
+        def fetchone(self):
+            return (path.as_uri(),)
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    job = types.SimpleNamespace(
+        settings={"intake": {"gaia_proper_motion": proper_motion}},
+        inputs=[{"kind": "input", "product": "catalogs", "source_job": 3,
+                 "key": {"dataset": "flight", "name": "gaia", "version": 1}}],
+        connect=lambda: contextlib.nullcontext(Connection()))
+    mid = 51544.5 + 26.0 * 365.25                                 # 2026.0
+    header = fits.Header({"MJD-OBS": mid - 30.0 / 86400.0, "EXPTIME": 60.0})
+    return job, frame(stars), w, header, (ra16, dec16)
+
+
+def test_with_proper_motion_a_star_moved_by_it_reads_offset_zero(tmp_path):
+    job, image, w, header, _ = gaia_frame(tmp_path, proper_motion=True)
+    measured = intake._gaia_metrics(job, image, w, header)
+    assert measured["n_gaia_stars"] > 0
+    assert measured["gaia_dx_px"] == pytest.approx(0.0, abs=0.03)
+    assert measured["gaia_dy_px"] == pytest.approx(0.0, abs=0.03)
+
+
+def test_without_proper_motion_the_offset_is_the_copys_positions_as_they_are(tmp_path):
+    from rapidpipe.science.astrometry import gaia_offset
+
+    job, image, w, header, (ra16, dec16) = gaia_frame(tmp_path, proper_motion=False)
+    measured = intake._gaia_metrics(job, image, w, header)
+    assert measured == gaia_offset(image, w, ra16, dec16)
+    assert abs(measured["gaia_dy_px"]) > 0.5
+
+
+def test_the_shipped_setting_reads_the_copy_as_it_is_and_flight_propagates():
+    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
+    flight = tomllib.loads((REPO / "rapidpipe/settings/datasets/flight-1049.toml").read_text())
+    assert shipped["intake"]["gaia_proper_motion"] is False
+    assert flight["intake"]["gaia_proper_motion"] is True

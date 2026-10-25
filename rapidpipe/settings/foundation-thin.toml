@@ -52,6 +52,12 @@ crpix_shift = [0.0, 0.0]
 # the GBTDS WCS fix (STScI roman_notebooks fix_gbtds_wcs.py). false is dev's
 # behaviour: the file's gWCS.
 rederive_wcs = false
+# New, not dev's (dev has no Gaia offset metric): carry each Gaia star of the
+# intake's offset metric (gaia_dx_px / gaia_dy_px) by its proper motion from
+# the copy's ref_epoch to the frame's mid-exposure before measuring. false:
+# the copy's positions as they are, right for the SOC simulations, which
+# place their stars at Gaia DR3's 2016.0; a sky that moves (flight) sets it.
+gaia_proper_motion = false
 
 [intake.nominal_zptmag]
 # dev's nominal WFI AB zeropoints [mag], used only when the file carries no

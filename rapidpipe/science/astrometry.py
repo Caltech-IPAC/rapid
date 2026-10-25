@@ -14,8 +14,10 @@ predicted, in 0-based pixels, x along columns. On HLWAS F146 SCA 8 pass 4
 (``001_0001``) the ledger measured (+0.116, -0.989) over 30 stars; this
 reads (+0.127, -0.986) over 34.
 
-Positions are the copy's own (Gaia DR3 at epoch 2016.0, as the SOC
-simulations place their stars): no proper motion is applied. The
+Positions are the caller's: the intake passes the copy's own (Gaia DR3
+at epoch 2016.0, as the SOC simulations place their stars), or, under
+``[intake] gaia_proper_motion``, the copy carried by its proper motions to
+the frame's epoch (:mod:`rapidpipe.stages.intake`). The
 constants are the ledger's, not settings. This module may import leaf
 modules only.
 """

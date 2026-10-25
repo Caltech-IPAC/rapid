@@ -63,6 +63,9 @@ Gaia ``catalogs`` product as an input (the loop does once one is official),
 ``metrics`` records ``gaia_dx_px``, ``gaia_dy_px`` and ``n_gaia_stars``,
 the median offset of the frame's stars from the copy through the shifted
 WCS, measured minus predicted (:mod:`rapidpipe.science.astrometry`).
+``[intake] gaia_proper_motion`` (false: the copy's positions as they are)
+first carries each star by its proper motion from the copy's ``ref_epoch``
+to the frame's mid-exposure, for a sky that moves (flight).
 
 ``[intake] rederive_wcs`` (false, `dev`'s behaviour: the file's gWCS) is
 the GBTDS WCS fix: the stage fetches the distortion reference the file
@@ -97,6 +100,7 @@ from astropy.wcs import WCS
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.science import intake_openuniverse, intake_rimtimsim
+from rapidpipe.science.alerts.crossmatch import epoch_offset_years, propagate_positions
 from rapidpipe.science.astrometry import gaia_offset
 from rapidpipe.science.intake import asdf_to_fits, gzip_file
 from rapidpipe.science.limmag import limiting_magnitude
@@ -184,7 +188,7 @@ def run(job: JobContext) -> None:
             primary, header = hdul[0].header.copy(), hdul[1].header.copy()
             n_pixels = int(hdul[1].data.size)
             nan_output = int(np.count_nonzero(np.isnan(hdul[1].data)))
-            gaia = _gaia_metrics(job, hdul[1].data, WCS(header))
+            gaia = _gaia_metrics(job, hdul[1].data, WCS(header), header)
         if reader == "soc-l2":
             _check_key(stem, ids, header)  # the openuniverse reader checks its file's own in the conversion
         fid = FIDS[header["FILTER"]]
@@ -298,8 +302,13 @@ def _shift_crpix(path: Path, shift: list[float]) -> None:
                     hdu.header[f"CRPIX{axis}"] += delta
 
 
-def _gaia_metrics(job: JobContext, image, wcs) -> dict | None:
-    """The Gaia offset metrics, when the job names a ``catalogs`` input; else ``None``."""
+def _gaia_metrics(job: JobContext, image, wcs, header) -> dict | None:
+    """The Gaia offset metrics, when the job names a ``catalogs`` input; else ``None``.
+
+    Under ``[intake] gaia_proper_motion`` each star is first carried from
+    the copy's ``ref_epoch`` to the frame's mid-exposure by its proper
+    motion (the packet stage's propagation).
+    """
     named = [i for i in job.inputs if i["kind"] == "input" and i["product"] == "catalogs"]
     if not named:
         return None
@@ -311,8 +320,15 @@ def _gaia_metrics(job: JobContext, image, wcs) -> dict | None:
         row = cur.fetchone()
     if row is None:
         raise ValueError(f"no catalogs row for {key} in job {named[0]['source_job']}")
-    gaia = pq.read_table(get(row[0]), columns=["ra", "dec"])
-    return gaia_offset(np.asarray(image, float), wcs, gaia["ra"].to_numpy(), gaia["dec"].to_numpy())
+    if not job.settings["intake"]["gaia_proper_motion"]:
+        gaia = pq.read_table(get(row[0]), columns=["ra", "dec"])
+        return gaia_offset(np.asarray(image, float), wcs, gaia["ra"].to_numpy(), gaia["dec"].to_numpy())
+    gaia = pq.read_table(get(row[0]), columns=["ra", "dec", "pmra", "pmdec", "ref_epoch"])
+    mjd = float(header["MJD-OBS"]) + float(header["EXPTIME"]) / 2 / 86400.0
+    dt = epoch_offset_years(mjd, gaia["ref_epoch"].to_numpy(zero_copy_only=False))
+    ra, dec = propagate_positions(*(gaia[c].to_numpy(zero_copy_only=False)
+                                    for c in ("ra", "dec", "pmra", "pmdec")), dt)
+    return gaia_offset(np.asarray(image, float), wcs, ra, dec)
 
 
 def _science_psf(job: JobContext, fid: int, sca: int) -> Path:
