@@ -8669,6 +8669,45 @@ t1/proof2.sh 9f4c54f68ede2c92715f40a69f5d4a04563d443e rapid-rebuild:87   # run c
 
 Raw evidence: the brief directory's `t1/` (`proof/` for run 140, `proof-138/` for run 138, `proof/job-*.json`).
 
+### Step gate-sci-psf: under `reference_psf = "science"` the core, ring and registration stars come from the reference catalog; GBTDS gb3 records all three on every epoch (run 139 CLEAN), and the gate replayed at `min_epochs` holds each on the core
+
+Brief `gate-sci-psf`, task 1. The code is rapid PR 465 (`7f436c63`), plus its regression fix PR 468 (`9f4c54f6`). The docs are rapid_docs PR 130. This step's PR carries the evidence only.
+
+**What.** Under `[difference] reference_psf = "science"` the star rows the quality metrics read come from the reference mosaic's SExtractor catalog (`reference_sky` through `_reference_on_grid` on the science image's header, kept on the image, flux `FLUX_AUTO`): `found`, and the registration stars, which are `quality.residual_stars`' choice on the resampled reference (`_catalog_stars`). The catalog parse moved ahead of registration. Under `measured` the rows stay the refpsf measurement's. No setting changed.
+
+**The regression, and the first proof.** PR 465 renamed `_quality_metrics`' star parameter to `found`, but the body still rebound `found` to `quality.residuals`' dict and passed it to `ring_count`: `KeyError: (slice(None, None, None), 2)`, exit 70, on every difference with residual stars, under either mode. That covers `rapid-rebuild:85` (this brief's deploy of `7f436c63`) and `:86` (dead-trim's `3cbd4f44`). The unit test missed it because the stage fixture's 64 px image sits inside `MARGIN_PX` 40, so `residuals` returned `{}`. Run **137** (`r00340-gsp`, `:85`): difference jobs 23264 to 23266 failed after 15 min, loop exit 1, `check_run.sh` FAIL (no packet set). PR 468 fixed it and extended the unit test through `_quality_metrics`, which fails without the fix. Run 137 stays live under `r00340-gsp`, so the proof is a second dataset, **`r00340-gsp2`**.
+
+- **The image.** `rapid-rebuild:87` = `9f4c54f6`, digest `sha256:8ae845df…`, this session's deploy. The run's `--revision` is `9f4c54f6`.
+- **The layers.** Run 112's: the GBTDS overlay, `intake.source_root` the `r00340-gb3` sample root, `intake.unsigned=false`, `reference.selection.before_mjd=61679.1465`, survey GBTDS. Gaia: run 112's box file, `gaia-dr3-gbtds-r00340-gb3-box.parquet`, imported as `gaia-r00340-gsp2` (job 23273).
+
+```sh
+t1/scripts/setup.sh 9f4c54f68ede2c92715f40a69f5d4a04563d443e r00340-gsp2   # run 139, live group 21958, Gaia import job 23273
+t1/scripts/loop.sh 139 rapid-rebuild:87      # rp loop --run 139 --filters F146 --scas 2 --pointings all --interval 60, then check_run.sh
+t1/scripts/collect.py 139                    # per-epoch metrics beside run 112's, gate.judge at min_epochs
+```
+
+Check, held: the loop drained in **26.0 min** (03:57:58 to 04:23:58 UTC) with exit 0. **`Check run 139: CLEAN validate 6/6 12 s reader 3/3 5 s consumer 1196/1196 13 s`.**
+
+**Per epoch, beside run 112** (`:77`, same nine files and layers):
+
+| run | epoch | core | ring | registration dx, dy px | registration / residual stars | S/N > 20 | usable | ring count | difference s | packets | `judge` at `min_epochs` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 112 | 2014201 | — | — | — | — | 497 | 0.99859 | — | 1,038 | 428 | send |
+| 112 | 2171201 | — | — | — | — | 500 | 0.99883 | — | 1,054 | 429 | send |
+| 112 | 4254201 | — | — | — | — | 500 | 0.99867 | — | 1,033 | 421 | send |
+| **139** | 2014201 | **−0.0485** | **−0.0386** | +0.002, +0.010 | 29 / 29 | 500 | 0.99859 | 2 | 891 | 400 | **hold, core −0.0485 beyond ±0.025** |
+| 139 | 2171201 | −0.0434 | −0.0379 | −0.003, +0.005 | 29 / 29 | 500 | 0.99883 | 3 | 920 | 404 | hold, core −0.0434 |
+| 139 | 4254201 | −0.0362 | −0.0385 | −0.012, +0.015 | 29 / 29 | 500 | 0.99867 | 2 | 879 | 392 | hold, core −0.0362 |
+
+- **The metrics.** All three are present on every epoch. They are GBTDS's first, so no healthy range exists to compare. The manifest lists 30 `residual_stars` per epoch, and 29 of them carry a positive flux and a finite centroid. `sci_star_sigma_px` reads 1.03 to 1.07 px.
+- **The gate.** The run has 3 published differences, below `min_epochs` 5, so the live gate sent all three sets. `rapidpipe.foundation.gate.judge` on each epoch's recorded metrics, with `epochs = min_epochs` and the run's own `n_sources_snr_gt20` median 500, **holds every epoch on `core_fraction`**. The ring (−0.038 against ±0.015) would hold them too, since it is checked after the core. Registration (at most 0.019 px) and usable fraction pass. This is a finding, not a failure: the residuals are the plan's known GBTDS mismatch (the frames' stars are 1.31 times the ePSF's width, so the science half of ZOGY is mismatched). No gate bound changed.
+- **Not this change.** Difference seconds 879 to 920 against 1,033 to 1,054 come from diff-trim (PR 446), not this change. Packets are 1,196 against run 112's 1,278. Kept sources and S/N > 20 are equal (500), and the change touches no source or packet row, so the drop comes from the PRs between `:77` and `:87`. It is not read here.
+- **`measured` unchanged.** dead-trim's run 140 on `:87` (HLWAS `001_0001` SCA 8) reads core −0.0010314 and ring +0.0017105, against run 136's −0.0010316 and +0.0017106 on `:84`. Its step above gives Intel against AMD as the cause of the difference.
+
+**Note.** This session's first `loop.sh` call named run 138 (dead-trim's) instead of 139, a typing slip. It was stopped within seconds of starting (03:57:26 UTC). It wrote no log line, and run 138 has no job of its selection (SCA 2). Reference job 23274 (SCA 8) is in dead-trim's own loop log, submitted at 03:57:23, before it.
+
+Left in place, nothing deleted: datasets `r00340-gsp` (run 137 live, failed differences, its intakes and reference) and `r00340-gsp2` (run 139 live, 1,196 packets on the alerts topic). Raw evidence is in the brief's `t1/`: `collect.json`, `run139.json`, `jobs/`, `loop.log`, `check.log`, `inspect/`, `run137/` (with the failed jobs' records) and `scripts/`.
+
 ## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
