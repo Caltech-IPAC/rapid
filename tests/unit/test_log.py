@@ -22,9 +22,9 @@ _LINE_RE = re.compile(
 
 @pytest.fixture(autouse=True)
 def _reset_rapidpipe_logger():
-    # configure()/configure_root() are idempotent (they replace the
-    # handler set), but a test that leaves the "rapidpipe" logger's level
-    # changed could leak into another; restore both after every test.
+    # configure_root() is idempotent (it replaces its handler), but a test
+    # that leaves the "rapidpipe" logger's level changed could leak into
+    # another; restore both after every test.
     root = logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME)
     real_root = logging.getLogger()
     saved = (list(root.handlers), root.level, root.propagate,
@@ -40,53 +40,6 @@ def _reset_rapidpipe_logger():
             handler.close()
     root.handlers, root.level, root.propagate = saved[0], saved[1], saved[2]
     real_root.handlers, real_root.level = saved[3], saved[4]
-
-
-def test_configure_default_stream_is_stderr_not_stdout():
-    out = io.StringIO()
-    err = io.StringIO()
-    # configure()'s own default is sys.stderr; pass explicit streams here
-    # only to assert the *un*passed one gets nothing, not to override it.
-    logger = rapidpipe_log.configure(run_id="R1", attempt_id="A1", stage="difference", unit_id="U1")
-    handler = logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME).handlers[0]
-    assert handler.stream is __import__("sys").stderr
-
-    # Rewire the handler's stream to prove nothing an emitted line reaches
-    # goes to a stdout-like stream by construction.
-    handler.stream = err
-    logger.info("hello")
-    assert "hello" in err.getvalue()
-    assert out.getvalue() == ""
-
-
-def test_line_shape_has_run_attempt_stage_unit():
-    stream = io.StringIO()
-    logger = rapidpipe_log.configure(
-        run_id="R1", attempt_id="A1", stage="difference", unit_id="e1/SCA07")
-    logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME).handlers[0].stream = stream
-    logger.info("stage=difference start")
-
-    line = stream.getvalue().strip()
-    match = _LINE_RE.match(line)
-    assert match is not None, line
-    assert match.group("run") == "R1"
-    assert match.group("attempt") == "A1"
-    assert match.group("stage") == "difference"
-    assert match.group("unit") == "e1/SCA07"
-    assert match.group("message") == "stage=difference start"
-
-
-def test_identity_filter_defaults_are_dashes_for_a_plain_logger():
-    stream = io.StringIO()
-    rapidpipe_log.configure(stream=stream)  # run/attempt/stage/unit all default "-"
-    plain = logging.getLogger("rapidpipe.some.library")
-    plain.info("a plain message")
-
-    line = stream.getvalue().strip()
-    match = _LINE_RE.match(line)
-    assert match is not None, line
-    assert (match.group("run"), match.group("attempt"),
-            match.group("stage"), match.group("unit")) == ("-", "-", "-", "-")
 
 
 def test_resolve_level_env_var_overrides_default(monkeypatch):
@@ -113,8 +66,7 @@ def test_configure_root_defaults_to_warning_and_stderr(monkeypatch):
     real_root = logging.getLogger()
     assert real_root.level == logging.WARNING
 
-    # A third-party library's own logger, never touching rapidpipe.log's
-    # adapter, still gets the formatted line via configure_root's handler
+    # A third-party library's own logger still gets the formatted line via configure_root's handler
     # on the real root logger.
     library_logger = logging.getLogger("some_third_party_library")
     library_logger.warning("a library warning")

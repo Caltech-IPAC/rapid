@@ -266,10 +266,9 @@ class RefMatch:
 class NedMatch:
     """One NED object near a detection, as a candidate host galaxy.
 
-    Built by match_nedcat() from a NED sky slice (see the NED cross-match
-    section below); becomes one entry of the alert's nedMatches array.
-    Only objects passing select_host_candidates() are matched, but each
-    match keeps its own ptype so consumers can re-cut.
+    One entry of the alert's nedMatches array, which the packet stage
+    leaves null (no NED match runs); each match keeps its own ptype so
+    consumers can re-cut.
 
     NED has no stable numeric object id in this product, so `prefname` is
     the identifier. It is NED's *preferred* name, which can in principle
@@ -285,7 +284,7 @@ class NedMatch:
     ptype: str | None = None    # NED preferred type; None = unclassified
     z: float | None = None      # preferred redshift (frame as published)
     zunc: float | None = None   # None when NED gives no uncertainty
-    zflag: str | None = None    # e.g. "SLS"; see select_host_candidates
+    zflag: str | None = None    # e.g. "SLS"
 
 
 @dataclass

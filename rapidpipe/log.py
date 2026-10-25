@@ -1,7 +1,7 @@
 """Logging for rapidpipe: UTC formatter, run/attempt/stage/unit on every line.
 
 Ported from ``origin/smdc:pipeline/runtime/logging_setup.py`` -- the UTC
-formatter and identifiers on every line via an adapter are kept; the old
+formatter and identifiers on every line are kept; the old
 attempt schema this module imported (``job_id`` naming a Batch job) is
 dropped.
 
@@ -10,9 +10,7 @@ module's line shape, for ``rapidpipe.cli.main``, so a library's bare
 ``logging.getLogger(__name__).warning(...)`` gets it instead of Python's
 last-resort handler (no timestamp, no run context). The console handler
 writes to stderr (a command whose stdout carries data logs to stderr, the
-project's Unix convention). :func:`configure` does the same for the
-``rapidpipe`` logger alone and returns a :class:`RuntimeLogger` bound to
-a run, attempt, stage and unit.
+project's Unix convention).
 """
 
 from __future__ import annotations
@@ -37,10 +35,9 @@ LOG_FORMAT = (
 DEFAULT_LEVEL = logging.INFO
 
 #: The environment variable a caller may set to override the default log
-#: level: ``configure`` defaults to ``DEFAULT_LEVEL``
-#: (INFO) when unset; ``configure_root`` (the CLI) defaults to INFO for
-#: rapidpipe's own loggers and WARNING for every other library's.
-#: Either way this variable, when set, wins for all of them.
+#: level: ``configure_root`` (the CLI) defaults to INFO for rapidpipe's own
+#: loggers and WARNING for every other library's; this variable, when set,
+#: wins for all of them.
 LEVEL_ENV_VAR = "RAPIDPIPE_LOG_LEVEL"
 
 #: The root logger name for rapidpipe. Every module's
@@ -58,10 +55,8 @@ class _UTCFormatter(logging.Formatter):
 class _IdentityFilter(logging.Filter):
     """Guarantees `run_id`/`attempt_id`/`stage`/`unit` exist on every record.
 
-    The adapter supplies them for code that logs through it. This filter is
-    the backstop for everything else -- a library logging through a plain
-    `logging.getLogger(__name__)` -- because the format string names those
-    fields and a record lacking them would raise inside `logging` and be
+    Every caller logs through a plain `logging.getLogger(__name__)`, and
+    the format string names those fields: a record lacking them would raise inside `logging` and be
     swallowed by its error handling, which would silently drop log lines.
     """
 
@@ -83,21 +78,6 @@ class _IdentityFilter(logging.Filter):
         if not hasattr(record, "unit"):
             record.unit = self.unit_id
         return True
-
-
-class RuntimeLogger(logging.LoggerAdapter):
-    """A logger carrying this attempt's identifiers on every line."""
-
-    def process(self, msg: Any, kwargs: Any):
-        extra = dict(self.extra or {})
-        extra.update(kwargs.get("extra") or {})
-        kwargs["extra"] = extra
-        return msg, kwargs
-
-    def bind(self, **fields: Any) -> "RuntimeLogger":
-        extra = dict(self.extra or {})
-        extra.update(fields)
-        return RuntimeLogger(self.logger, extra)
 
 
 def _coerce_level(level: int | str) -> int:
@@ -134,56 +114,17 @@ def _make_handler(*, stream: Any, level: int, run_id: str, attempt_id: str,
     return handler
 
 
-def configure(run_id: str = "-", attempt_id: Any = "-", stage: str = "-",
-              unit_id: Any = "-", level: int | str | None = None,
-              stream: Any = None) -> RuntimeLogger:
-    """Configure rapidpipe's logging and return its adapter.
-
-    Idempotent: calling it twice replaces the handler set rather than
-    adding a second one, so a re-entrant startup path cannot produce
-    doubled lines. The console handler defaults to ``sys.stderr`` (a
-    command whose stdout carries data logs to stderr; stdout contracts
-    and exit codes are unaffected). ``level`` defaults to
-    ``RAPIDPIPE_LOG_LEVEL`` if set, else :data:`DEFAULT_LEVEL` (INFO).
-    """
-    resolved_level = resolve_level(level, DEFAULT_LEVEL)
-
-    root = logging.getLogger(ROOT_LOGGER_NAME)
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
-        if getattr(handler, "_rapidpipe_owned", False):
-            handler.close()
-
-    root.setLevel(resolved_level)
-    # Do NOT propagate to the real root logger: a caller that has also
-    # called `logging.basicConfig` would otherwise see every line twice.
-    root.propagate = False
-
-    handler = _make_handler(
-        stream=stream if stream is not None else sys.stderr,
-        level=resolved_level, run_id=run_id, attempt_id=attempt_id,
-        stage=stage, unit_id=unit_id)
-    root.addHandler(handler)
-
-    return RuntimeLogger(root, {
-        "run_id": str(run_id), "attempt_id": str(attempt_id),
-        "stage": str(stage), "unit": str(unit_id),
-    })
-
-
 def configure_root(level: int | str | None = None, stream: Any = None) -> None:
     """Configure Python's real root logger with the same UTC line shape.
 
     For ``rapidpipe.cli.main``: without this, a third-party library's
-    plain ``logging.getLogger(__name__).warning(...)`` (never routed
-    through :func:`configure`, which only touches the ``rapidpipe`` logger
-    and does not propagate to the real root) falls through to Python's
-    last-resort handler -- one line to stderr with no timestamp and no
+    plain ``logging.getLogger(__name__).warning(...)`` falls through to
+    Python's last-resort handler -- one line to stderr with no timestamp and no
     run context. ``level`` defaults to ``RAPIDPIPE_LOG_LEVEL`` if set,
     else ``logging.WARNING`` for the root and ``DEFAULT_LEVEL`` (INFO) for
     the ``rapidpipe`` logger, so a Batch job's ``job run`` writes its own
     INFO lines (a packet set produced, acknowledged) to CloudWatch and a
-    library's INFO chatter stays out. Idempotent, like :func:`configure`.
+    library's INFO chatter stays out. Idempotent.
     """
     resolved_level = resolve_level(level, logging.WARNING)
     own_level = resolve_level(level, DEFAULT_LEVEL)
@@ -200,16 +141,3 @@ def configure_root(level: int | str | None = None, stream: Any = None) -> None:
         stream=stream if stream is not None else sys.stderr,
         level=min(resolved_level, own_level), run_id="-", attempt_id="-", stage="-", unit_id="-")
     root.addHandler(handler)
-
-
-def get_logger(name: str, adapter: RuntimeLogger | None = None) -> Any:
-    """Get a module logger under the rapidpipe root.
-
-    With an adapter, returns a child adapter carrying the same identifiers.
-    Without one, returns the plain logger, which still gets identifiers
-    from the handler's filter (as `-` if nothing bound them).
-    """
-    logger = logging.getLogger(f"{ROOT_LOGGER_NAME}.{name}")
-    if adapter is None:
-        return logger
-    return RuntimeLogger(logger, dict(adapter.extra or {}))

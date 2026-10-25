@@ -1,10 +1,8 @@
 numpy>=1.25
 astropy>=6.0
-# The alerts NED cross-match (providers.AstroqueryNedReader, on by default)
-# queries the NED web service through astroquery. The import is deferred to
-# query time, so without it every chip logs a warning and emits a null
-# nedMatches instead of failing -- but whatever environment runs alert
-# production must carry it for the match to actually run.
+# Nothing in rapidpipe imports astroquery since its uncalled NED reader was
+# deleted; it stays a direct entry of the environment (rapid_docs
+# decision-python-astroquery).
 astroquery>=0.4.7
 # rapidpipe.db and rapidpipe.foundation import psycopg2 unconditionally;
 # psycopg2-binary is the wheel-distributed build.

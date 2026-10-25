@@ -110,8 +110,8 @@ def test_parse_failures_exit_64_through_the_cli(argv, capsys):
 
 @pytest.fixture()
 def fresh_logging(monkeypatch):
-    """Undo any earlier in-process stage run's ``rapidpipe.log.configure``
-    (a handler bound to an earlier test's stderr, propagate off), so the
+    """Undo any earlier in-process test's handler on the ``rapidpipe`` logger
+    (one bound to an earlier test's stderr, propagate off), so the
     boundary's log line reaches this test's captured stderr."""
     logger = logging.getLogger("rapidpipe")
     monkeypatch.setattr(logger, "handlers", [])
