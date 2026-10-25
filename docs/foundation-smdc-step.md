@@ -8301,6 +8301,113 @@ The brief reads run 116's "214 (233)" as a median and a highest. They are the me
 
 Raw evidence is in the brief's `t1/`: `proof.sh`, `flight/`, `hlwas/` (`loop.log`, `check.txt`, `comp.txt`, `comp/`), `e4-metrics.tsv`, `build.log`, `deploy.log`.
 
+### Step forced-growth: a packet set's `forced` rows are its objects times its window images; on the HLWAS breadth runs a field's rows grow quadratically in epoch over 1 to 26 epochs, and over half of each deep set's rows are copies
+
+Brief `forced-growth`, task 1. Read-only queries on SMDC, with no code, schema or settings change. This step's PR carries the evidence only.
+
+**What was read.** Every statement ran in a read-only transaction (`transaction_read_only = on` heads every output) as the pipeline's role, the credential the parameter tree resolves. The brief named runs 81 and 80. The table showed that the live HLWAS breadth runs 36, 37 and 38 (F106, F129, F158) hold 3.91 M of its 4.83 M rows, at 10 to 26 epochs per field against run 81's 3. So they are the depth, and run 38 is read in full beside 81 and 80, with 36 and 37 as its repeats.
+
+- **Field**: the packet job's `refimages` input key. **Epoch index**: the set's order in its field by its trigger's L2 `mjdobs`, then job id.
+- **Packets**: the set's `packets` rows. **Objects**: their distinct (`object_job`, `aid`).
+- **Window images**: the job's `job_inputs` `diffimages` input rows, the manifest's reads. They equal the manifest's `window_images` on every set.
+- **Eligible pairs**: (object, window image) pairs whose footprint (the `diffimages` corners, `contains_positions`) holds the object's founding position.
+  - Runs 80 and 81 take that position from `objects.ra0, dec0`.
+  - Runs 36 to 38's `packets.object_job` names an associate job's set from before 2026-10-24, with no `objects` row, so the position comes from the set's own `forced` rows, and an object with no row is missed.
+- **Copied**: the job's manifest `forced_reused`, the rows it took from the official sets it read. The reconstruction brackets it on every one of the 2,738 sets. The lower bound is the rows whose `forced_id` a set of the same dataset held while its `packets` binding was open at the job's start; the upper bound is the same at the job's end. **New** is the rows less the copied.
+- Identity is `forced_id`, never (`aid`, `pid`).
+
+```sh
+python measure.py 81 80 38 37 36     # one sets-<run>.tsv per run, one row per set
+python summarize.py 81 80 38 37 36   # totals, checks, by-epoch quantiles
+```
+
+Check, held on every set of the five runs:
+- The rows equal the manifest's `forced_rows`.
+- The copied lie inside the bracket.
+- The window images equal the manifest's.
+- The rows are at most the eligible pairs. Rows / eligible is at least 0.984 on run 81, 0.996 on 36 to 38 and 1.000 on 80; the shortfall is the pixel margin's rejections.
+
+| run | dataset | sets | fields × depth | span of a field's epochs | packets | rows | copied (share) | distinct `forced_id` |
+|---|---|---|---|---|---|---|---|---|
+| 81 | `r00342-dy-field` | 162 | 54 × 3 | 2.4 d | 63,612 | 129,715 | 25,102 (0.19) | 91,596 |
+| 80 | `ou-tds2` | 10 | 1 × 10 | 1,375 d | 677 | 1,065 | 6 (0.01) | 1,054 |
+| **38** | `r00342-f158` | 903 | 5 × 11, 28 × 12, 18 × 13, 18 × 14, 1 × 26 | 5.6 to 9.1 d | 184,163 | 1,464,148 | 840,813 (0.57) | 643,141 |
+| 37 | `r00342-f129` | 829 | 6 × 10, 28 × 11, 18 × 12, 17 × 13, 1 × 24 | 5.7 to 9.4 d | 164,008 | 1,235,327 | 671,483 (0.54) | 582,960 |
+| 36 | `r00342-f106` | 834 | 2 × 10, 30 × 11, 21 × 12, 16 × 13, 1 × 24 | 5.8 to 9.6 d | 161,856 | 1,213,481 | 650,958 (0.54) | 580,342 |
+
+**Run 38 by epoch index** (medians; the rows with p10 and p90). Epochs 1 to 14 cover every field that deep. Past 14 only field 5390959 remains, given at its own epochs.
+
+| epoch | sets | packets | window images | eligible pairs | rows [p10, p90] | copied | new | copied share | cumulative rows per field |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 70 | 216 | 2 | 463 | 463 [168, 711] | 116 | 352 | 0.31 | 463 |
+| 2 | 70 | 213 | 3 | 699 | 699 [353, 930] | 269 | 424 | 0.41 | 1,161 |
+| 3 | 70 | 213 | 4 | 918 | 918 [485, 1,205] | 421 | 485 | 0.47 | 2,093 |
+| 4 | 70 | 213 | 5 | 1,137 | 1,137 [677, 1,417] | 567 | 541 | 0.52 | 3,206 |
+| 5 | 70 | 214 | 6 | 1,371 | 1,371 [852, 1,605] | 743 | 601 | 0.56 | 4,636 |
+| 6 | 70 | 216 | 7 | 1,534 | 1,534 [1,017, 1,920] | 910 | 647 | 0.58 | 6,158 |
+| 7 | 70 | 216 | 8 | 1,758 | 1,758 [1,210, 2,110] | 1,083 | 692 | 0.61 | 7,958 |
+| 8 | 70 | 210 | 9 | 2,005 | 2,005 [1,296, 2,301] | 1,283 | 734 | 0.63 | 10,027 |
+| 9 | 70 | 211 | 10 | 2,145 | 2,145 [1,518, 2,515] | 1,411 | 743 | 0.66 | 12,214 |
+| 10 | 70 | 210 | 11 | 2,383 | 2,383 [1,539, 2,748] | 1,536 | 792 | 0.65 | 14,624 |
+| 11 | 70 | 200 | 12 | 2,436 | 2,436 [1,819, 2,849] | 1,326 | 981 | 0.57 | 16,928 |
+| 12 | 65 | 180 | 13 | 2,460 | 2,460 [1,762, 2,850] | 1,258 | 1,126 | 0.55 | 19,042 |
+| 13 | 37 | 180 | 13 | 2,492 | 2,492 [1,591, 2,745] | 1,239 | 1,175 | 0.51 | 19,400 |
+| 14 | 19 | 173 | 14 | 2,408 | 2,408 [1,570, 3,066] | 1,178 | 1,001 | 0.54 | 18,535 |
+| field 5390959, 1 / 10 / 20 / 26 | 1 | 293 / 258 / 265 / 200 | 1 / 6 / 11 / 14 | = rows | 293 / 1,536 / 2,882 / 2,800 | 0 / 845 / 1,755 / 1,296 | 293 / 691 / 1,127 / 1,504 | | 293 / 10,523 / 34,724 / **53,833** |
+
+Field 5390959's two exposures per visit see the same window, so its rows step up every second epoch: 600, 1,176, 1,704, 2,360, 3,256 and 3,920 at epochs 2, 5, 9, 13, 19 and 25. Runs 36 and 37 repeat the table within a few percent (`summary.txt`).
+
+**Run 81 by epoch index**: window images 2, 4, 6; rows 381, 822, 1,179; copied 0, 210, 255; cumulative per field 381, 1,211, 2,394. Its packets are flat at 378 to 400. Its window images include neighbouring fields' images that half overlap the trigger's, so its exposure is the eligible pairs (383, 824, 1,182), not objects × images (median ratio 0.53).
+
+**Run 80** has ten epochs at offsets 0, 10, 20, 185, 195, 205, 370, 385, 1,365 and 1,375 days. Its 30-day window therefore holds 1 or 2 images, never the six EVIDENCE expected. Rows per set are 27 to 241 and copied 0 to 3, and its cumulative 1,065 rows grow with packets alone (106 rows per epoch).
+
+**Reconciliation** (one transaction, 01:29:58 UTC; parallel briefs wrote 346 rows during the session):
+
+| `forced` rows | rows | sets |
+|---|---|---|
+| runs 36, 37, 38, 80, 81, every set official now | 4,043,736 | 2,738 |
+| other live runs, official sets | 459,320 | 1,213 |
+| runs not live, sets still bound (runs 10 and 24 to 28) | 156,593 | 495 |
+| live runs, sets no longer official | 87,998 | 69 |
+| runs not live, sets no longer official | 83,107 | 161 |
+| **the whole table, `count(*)`** | **4,830,754** | 4,676 |
+
+The residual beyond the five runs, 787,018 rows (16 %), is the other runs' proofs and superseded sets.
+
+**Storage** at the same snapshot:
+- `pg_total_relation_size('forced')` is 1,020,518,400 bytes: heap 761,036,800, indexes 259,252,224 (`forced_job_forced_id_key` 205 MB, `forced_aid_idx` 54 MB), TOAST and maps 0.2 MB.
+- That is **211.3 bytes per row** (157.5 heap, 53.7 index).
+- Bytes per field per epoch are allocated by rows at that table average, not measured per field:
+  - run 38 at epoch 14, 2,408 rows a set, 509 kB;
+  - run 38 over its depth, a median 1,668 rows per field per epoch, 352 kB;
+  - field 5390959 after 26 epochs, 53,833 rows, 11.4 MB;
+  - run 81, 798 rows per field per epoch, 169 kB;
+  - run 80, 106 rows per epoch, 22 kB.
+- The plan's "about 400 MB after about 5,000 epochs" is superseded. Runs 36 to 38 alone hold 81 % of the rows.
+
+**Copies cross runs.** A packet job reuses the rows of any open `packets` binding on its window's images (`REUSE_SQL`), whichever run made them. Runs 27 and 33 have dataset `r00342-f158` like run 38, are not live, and their bindings are open, so run 38's sets copied from them.
+- 212,758 of run 38's rows carry a `forced_id` a run 27 or 33 set holds.
+- That is why run 38's epoch 1 already copies 116 rows (median).
+
+**The reading.** The increments show it, over the measured range only:
+- **Rows per set are the set's objects times its window images.** The median ratio is 1.000 on runs 36 to 38 and 80; on 81 the rows match the eligible pairs. Packets per set stay flat or fall with depth (run 38: 216 at epoch 1, 210 at 10, 173 to 180 at 12 to 14). **The rise is therefore window exposure.**
+- On the HLWAS breadth runs every field's epochs fall within 9.6 days, so the 30-day window never closes. A set's window holds about one more image per epoch index, 2 at epoch 1 and 14 at epoch 14. Rows per set rise by about 210 per epoch index: 463, 1,371 and 2,383 at epochs 1, 5 and 10, and 293 to 3,920 over 26 epochs on the deep field.
+- **The cumulative rows per field therefore grow quadratically in epoch index over epochs 1 to 26:** 463, 4,636 and 14,624 at epochs 1, 5 and 10, and 53,833 at 26 on the one field that deep. The increments of the cumulative, the rows per set, rise linearly over that range.
+- **The copied share rises with depth**, 0.31 at epoch 1 to 0.66 at epoch 9, and holds at 0.51 to 0.57 over epochs 11 to 14. It is 0.57 over the whole of run 38 and 0.19 over run 81's three epochs.
+- **The new rows also rise with the window**, 352 at epoch 1 to 792 at epoch 10 and about 1,000 to 1,175 at epochs 11 to 14, because a newly triggered object is measured on every window image. So the copy is about half of a deep set's rows, not all of its growth.
+- Where the window does not fill (run 80, at most 2 images), the cumulative grows linearly with packets.
+- **Not measured**:
+  - Whether rows per set level off once a dense field's epochs span more than 30 days. No field on SMDC does.
+  - The exact moment of each job's binding read; the start-to-end bracket holds every set's own count instead.
+  - Physical bytes per field.
+
+**Improvements seen.** Storing a set's new pairs and a reference to the official rows it read, instead of copies, would remove 57 % of run 38's rows (840,813). It is recorded, not built: the planner's ruling on this number is a later item.
+
+Raw evidence is in the brief's `t1/`:
+- the scripts: `q.py` (the read-only runner), `measure.py`, `summarize.py`, `extra.py`, `table.py`;
+- the queries `q0` to `q9`, each `.sql` with its `.out`; `measure.out`;
+- the results: `sets-{81,80,38,37,36}.tsv`, `summary.txt`, `extra.txt`, `tables.md`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
