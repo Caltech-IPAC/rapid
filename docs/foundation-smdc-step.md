@@ -7906,6 +7906,158 @@ Check, held:
 
 Raw evidence is in the brief's `t1/`: `probe/`, `before-sca7/`, `after-sca7/`, `after-sca8/`, `comp-*/`, `m-*.json`, `pairing.diff` and `masks/`.
 
+### Step flight-first: the first flight data through the chain, program 1049's four F158 WFI02 epochs, run 118 CLEAN; the loop's reference rule meets a dither
+
+Brief `flight-first`, task 1. The overlay is rapid PR 443, merged as `22eba336`. This step's PR carries the evidence only.
+
+**What.** Program 1049 ('RAPID CAR-198 Implementation'), observation 2 visit 1: four dithered F158 WFI02 epochs, 2026-10-24 10:56 to 11:02 UTC, 60 s each, COSMOS (150.27, +2.40). They ran through intake, psf, reference, difference and packet on Batch. The files were read from `flight-1049/` in the inputs bucket, where flight-pull copied them, signed.
+
+- **The reader.** `soc-l2`, unchanged. The files are romancal 1.0.2 `wfi_image-2.0.0` and carry the SOC's stem grammar, meta tree and roman_datamodels pixel flags. `meta.photometry` is present, so ZPTMAG is 25.801. They add a few nodes the conversion carries as more HDUs: `chisq`, `dumo`, `amp33` and the border reference pixels. They have no `var_rnoise` or `var_flat`.
+- **The overlay.** `rapidpipe/settings/datasets/flight-1049.toml` sets `program_id = 1049` and HLWAS's mask `dq_mask_bits = 0x2110C01`, since the flags mean the same. The WCS is not changed.
+- **The ePSF per file: met.** Every file names `roman_wfi_epsf_0239.asdf` (CRDS `roman_0077.pmap`). The psf job (23125) reduced that file from CRDS by name. It is stpsf 2.0.0's simulation for WFI02 F158, pedigree SIMULATION, with no jitter modelled. Each of the four intakes passed the stage's check that the file's own `meta.ref_file.epsf` is the science PSF's `EPSFREF`.
+- **The pair.** Image `rapid-rebuild:78` = `1e2af61a`. The run's `--revision` is `22eba336`, which differs from `1e2af61a` only by docs and this overlay. The overlay is read at `run create` and its sha256 is in the run's layers.
+
+```sh
+rp run create --who "$USER" --why "..." --revision 22eba336... \
+  --overlay rapidpipe/settings/datasets/flight-1049.toml \
+  --set 'intake.source_root="<the inputs bucket>/flight-1049/"' \
+  --set reference.selection.before_mjd=61337.4594 --survey CAR198 --dataset flight-1049    # run 118
+rp official change --group live.json ...      # run 118 live, group 21799
+rp job local --run 118 --stage import --scope '{"source_dir": "<dir>", "gaia": {"name": "gaia-flight-1049", "version": "DR3", "path": "gaia-dr3-flight-1049-box.parquet"}}' ...   # job 23124
+rp loop --run 118 --filters F158 --scas 2 --pointings all --job-definition rapid-rebuild:78 --interval 60
+rp job submit --run 118 --stage reference --scope '{"field": 3010224, "fid": 2, "sca": 2}' \
+  --inputs '<l2files 1020101, 1020102, 1020103>' --expects '<refimages 3010224 fid 2>' --job-definition rapid-rebuild:78   # job 23131
+scripts/check_run.sh --run 118 --inspect <dir>
+```
+
+**Gaia DR3.** RA 150.06 to 150.44, Dec 2.24 to 2.61: the three fields' 9100 px mosaics with margin. 592 rows, 2 x 2 sub-boxes, count checked.
+
+**The reference and the dither.** The four centres fall in three tessellation fields: e1 in 3014319, e2 and e3 in 3014320, e4 in 3010224. The loop builds a field's reference only from rows whose own field is that field. dev's launcher instead takes every L2 file whose `overlapfields` lists the field. So with `min_frames` 2, no later epoch shares its field with two earlier frames.
+
+- The bound `before_mjd = 61337.4594` falls between e3 and e4.
+- The loop built field 3014320's reference from e2 and e3 (job 23130). It held 3014319 ("1 official L2 rows before before_mjd") and, on that pass, 3010224 ("0 official L2 rows").
+- e4's field reference (job 23131) was submitted by hand with dev's selection: e1, e2 and e3, each of which lists 3010224 in its `overlapfields`.
+- The loop, still running, then differenced e4 against job 23131 and packeted it.
+- No code changed. The divergence is recorded in rapid_docs `decisions.md` (`decision-reference-by-field`).
+
+| L2 epoch (`…_000N_wfi02_f158`) | expid | MJD | field | role | covered by the reference's frames |
+|---|---|---|---|---|---|
+| 0001 | 1020101 | 61337.45606 | 3014319 | reference (23131) | |
+| 0002 | 1020102 | 61337.45734 | 3014320 | reference (23130, 23131) | |
+| 0003 | 1020103 | 61337.45873 | 3014320 | reference (23130, 23131) | |
+| 0004 | 1020104 | 61337.46001 | 3010224 | differenced | e1 0.529, e2 0.289, e3 0.539; union **0.784**, two or more 0.289 |
+
+Check, held: loop exit 0 and drained, 00:10:10 to 00:28:11 UTC, the hand reference between passes. Every job published on its first attempt: psf 23125, intakes 23126 to 23129, references 23130 and 23131, difference 23132, packet 23135. **`Check run 118: CLEAN validate 6/6 6 s reader 1/1 4 s consumer 328/328 10 s`.** Per epoch: four attempted and published at intake; one differenced and published; one packet set published and sent (partition 0, offsets 6686 to 7013); none held.
+
+**Metrics, the dataset's first row** (difference 23132, ZOGY, `reference_psf` measured).
+
+| metric | e4 (1020104) |
+|---|---|
+| candidates, ZOGY uncapped, + / − | 1,497 / 1,576 |
+| S/N > 20, + / − | 228 / 150 (kept sources above S/N 20: 227 of 500, before the cap 1,492) |
+| core / ring fraction | +0.0013 / −0.0050 |
+| registration offset px | (−0.018, −0.013), residual rms (0.21, 0.24) over 23 stars |
+| usable fraction | **0.781** (the reference covers 78% of the frame) |
+| reference PSF | measured from 24 stars, σ 1.18 px; science PSF σ 1.02, its stars 1.05 times it; reference over science 1.18 |
+| noise correlation / bright-footprint fraction | 1.53 / 0.075 |
+| gain match `scalefacref` | 1.136 |
+| objects founded / packets | 327 / 328 (148 above S/N 20, 26 in a bright footprint, 8 Gaia matches) |
+| gate at send | **sent, unjudged**: 1 published difference, below `min_epochs` 5 |
+| gate, judged (`judge` with `min_epochs` reached) | **hold: usable_fraction 0.7811 below 0.9** |
+
+| stage | jobs | queue wait s | container s min / median / max | peak RSS MiB | ask MiB | margin |
+|---|---|---|---|---|---|---|
+| psf | 1 | 117 | 9 | 309 | 2,048 | 85% |
+| intake | 4 | 182 to 183 | 23 / 25 / 25 | 961 | 2,048 | 53% |
+| reference (2 and 3 frames, 9100 px) | 2 | 8 to 13 | 43 / 48 / 53 | 4,490 | 6,144 | 27% |
+| difference | 1 | 206 | 223 | 16,190 | 24,576 | 34% |
+| packet | 1 | 7 | 22 | 844 | 2,048 | 59% |
+
+- **The difference.** 223 s, HLWAS's speed (232.6 s), on a sparse high-latitude field.
+- **The references.** Job 23131: `cov5percent` 10.8, `infobits` 1, 4,162 SExtractor sources. Job 23130: `cov5percent` 7.7, 3,308 sources.
+
+**DQ, per file** (fraction of the 4088² pixels).
+
+| | 0001 | 0002 | 0003 | 0004 |
+|---|---|---|---|---|
+| masked by 0x2110C01 (the intake's `masked_fraction`) | 0.2310% | 0.2310% | 0.2310% | 0.2312% |
+| any flag | 1.362% | 1.363% | 1.355% | 1.361% |
+| the file's own NaN | 142 | 132 | 128 | 175 |
+| JUMP_DET / SATURATED | 0.112% / 0.0014% | 0.115% / 0.0011% | 0.107% / 0.0010% | 0.112% / 0.0018% |
+
+The static bits are the same on every file:
+
+| bit | fraction |
+|---|---|
+| DO_NOT_USE | 0.039% |
+| GW_AFFECTED_DATA | 0.370% |
+| PERSISTENCE | 0.020% |
+| DEAD | 0.097% |
+| HOT | 0.100% |
+| WARM | 0.105% |
+| LOW_QE | 0.178% |
+| NONLINEAR | 0.105% |
+| NO_FLAT_FIELD | 0.097% |
+| NO_GAIN_VALUE | 0.045% |
+| NO_LIN_CORR | 0.116% |
+| UNRELIABLE_SLOPE | 0.362% |
+| UNRELIABLE_FLAT | 0.011% |
+| UNRELIABLE_RESET | 0.0005% |
+| OTHER_BAD_PIXEL | 0.274% |
+
+**The WCS.** Through the file's gWCS, tweakreg's Gaia fit (31 to 39 matches, rmse 0.013 to 0.015 px), the intake's metric reads Gaia DR3 at epoch 2016.0. Propagated by its proper motions to 2026.81, it reads (−0.09 to −0.04, −0.06 to −0.04) px.
+
+| epoch | intake `gaia_dx_px` / `gaia_dy_px` (2016.0) | propagated dx / dy | stars |
+|---|---|---|---|
+| 0001 | −0.076 / −0.441 | −0.089 / −0.056 | 32 / 34 |
+| 0002 | +0.024 / −0.468 | −0.070 / −0.046 | 37 / 40 |
+| 0003 | −0.031 / −0.350 | −0.045 / −0.038 | 36 / 38 |
+| 0004 | +0.157 / −0.559 | −0.091 / −0.060 | 33 / 35 |
+
+The −0.45 px in y is the field's median proper motion, (−4.2, −3.7) mas/yr, over 10.8 years, so there is no `crpix_shift`. The intake's metric reads proper motion as WCS on flight data.
+
+**Hot pixels, measured not fixed.** The test is above 10 sigma of the local background (15 x 15 median, the noise 1.4826 x the 15 x 15 MAD), at the same detector position, on the unmasked L2 frames. A pixel that recurs at one detector position is a hot pixel, since the sky moved by the dithers.
+
+| frames hot at one detector position | pixels |
+|---|---|
+| 1 (stars, cosmic rays) | 24,442 |
+| 2 | 923 |
+| 3 | 671 |
+| **all 4 (hot pixels)** | **3,116** |
+
+| of the 3,116 | pixels |
+|---|---|
+| with a DQ flag in any frame | 2,775 (in every frame 2,761) |
+| with no flag | **341** |
+| masked by 0x2110C01 | 2,644 |
+| not masked | **472**: 341 unflagged; of the 131 others WARM 72, LOW_QE 36, JUMP_DET 33, UNRELIABLE_SLOPE 20, PERSISTENCE 4, OTHER_BAD_PIXEL 1 |
+| flagged HOT (0x800) in every frame | 2,302; HOT flags 16,781 pixels, 13.7% of them hot here |
+| flagged JUMP_DET in every frame | 1,235: the ramp's jump detection fires on the same hot pixels every exposure |
+
+No single mask value removes the 472 (the largest one more bit removes is WARM's 72), so the overlay keeps HLWAS's mask.
+
+**Pointing oscillation: unmet, not observable in four 60 s frames.**
+
+The measured signature, per frame:
+
+- The method: Gaia DR3 stars with RUWE < 1.4, propagated, isolated by 15 px, unsaturated, peak above 50 sigma.
+- Each star's 11 x 11 core is fitted with a pixel-integrated elliptical Gaussian. HSM moments collapse on these undersampled stars.
+- The ePSF `0239` is evaluated at the star's own sub-pixel position and fitted the same way.
+
+| epoch | stars | FWHM px (ePSF) | σ star / ePSF | e star (ePSF) | PA star / ePSF ° | excess e1, e2 (star − ePSF) | excess e, PA ° | Gaia offset (propagated) px |
+|---|---|---|---|---|---|---|---|---|
+| 0001 | 14 | 1.44 (1.18) | 1.197 | 0.034 (0.075) | −40 / −58 | +0.038 ± 0.040, +0.021 ± 0.015 | 0.043, +14 | −0.089, −0.056 |
+| 0002 | 18 | 1.46 (1.21) | 1.197 | 0.039 (0.057) | −79 / −62 | +0.005 ± 0.011, +0.034 ± 0.011 | 0.034, +41 | −0.070, −0.046 |
+| 0003 | 19 | 1.52 (1.24) | 1.204 | 0.043 (0.074) | −81 / −66 | −0.002 ± 0.014, +0.029 ± 0.011 | 0.029, +47 | −0.045, −0.038 |
+| 0004 | 18 | 1.48 (1.22) | 1.192 | 0.056 (0.076) | −73 / −67 | +0.016 ± 0.012, +0.019 ± 0.009 | 0.025, +25 | −0.091, −0.060 |
+
+- **The broadening.** The stars are 1.19 to 1.20 times the ePSF's width on every frame, nearly isotropically. In quadrature that is about 0.34 px (37 mas) rms beyond the model.
+- **The elongation.** The stars are rounder than the ePSF. Against it they carry a small common elongation, e 0.025 to 0.043 at PA +14 to +47°, e2 positive on all four at 1.8 to 3.1 sigma.
+- **Why this does not establish oscillation.** Jitter, charge diffusion and the pre-flight model's error all broaden stars, and an integrated 60 s frame cannot tell them apart. A common elongation alone does not name a cause.
+- **What would show it.** The guide window's time series (the guide star N6SS000013 window, `meta.guide_star`, WIM-TRACK; not in L2), or a run of short exposures whose star positions move together within a visit. Nothing tuned.
+
+Left in place, nothing deleted: dataset `flight-1049` with run 118 live, its two references, the difference, its 328 packets on the alerts topic and the Gaia box. Raw evidence is in the brief's `t1/`: `dq_fractions.json`, `conv/wcs_check.json`, `wcs_pm.json`, `hot_pixels.json`, `star_shapes.json`, `overlap.txt`, `overlapfields.txt`, `snr.txt`, `gate-answers.txt`, `loop1.log`, `check.log`, `stages.md`, `jobs/`, `inspect/` and `scripts/`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
