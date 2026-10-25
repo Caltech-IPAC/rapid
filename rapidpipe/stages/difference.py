@@ -137,7 +137,11 @@ Departures from `dev` (difference page): only the published differencer's
 files are rows (a run has one differencer; `dev` publishes SFFT's), the
 other differencer's PSF-fit catalogs are kept under the prefix as
 diagnostics and naive's files are not (the trim above; all three still
-run, for the outcome bits and the diagnostics); a missing PSF-fit catalog
+run, for the outcome bits and the diagnostics); the naive subtraction's
+Photutils PSF-fit catalogs are not made (its image, uncertainty and
+SExtractor catalogs are, as `dev` makes them), so its two outcome bits
+are never set (decisions page, 28 to 72 min of a RimTimSim F213
+difference went to PSF-fit catalogs, PR 437); a missing PSF-fit catalog
 of the published differencer publishes an empty source set with its outcome bit set, where
 `dev`'s loader skips the job.
 
@@ -490,6 +494,21 @@ class _Catalogs:
     pixel_columns_s: float | None = None
 
 
+def _sextractor_catalogs(*, kit: Toolkit, work_dir: Path, settings: dict[str, Any],
+                         positive: dict[str, str], negative: dict[str, str], weight_image: str,
+                         override_weight_type_and_filter: bool,
+                         overrides: dict[str, str] | None) -> dict[str, int]:
+    """`dev`'s SExtractor block, positive then negative; the source count per sign."""
+    paths = settings["paths"]
+    return {sign: sextractor.difference_image_catalog(
+        kit.runner, work_dir, settings["sextractor_diffimage"], paths["cfg_path"],
+        detection_image=names["detection"], input_image=names["input"],
+        weight_image=weight_image, catalog_name=names["catalog"],
+        override_weight_type_and_filter=override_weight_type_and_filter,
+        overrides=overrides, executable=paths["sextractor"])
+        for sign, names in (("positive", positive), ("negative", negative))}
+
+
 def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: dict[str, Any],
                   positive: dict[str, str], negative: dict[str, str], weight_image: str,
                   psf_image: str, sky_coords_image: str, psfcat_names: dict[str, str],
@@ -501,15 +520,10 @@ def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: d
     to file names. ``psfcat_names`` holds the configured positive
     Photutils names; the negative ones are derived as `dev` derives them.
     """
-    paths = settings["paths"]
-    result = _Catalogs()
-    for sign, names in (("positive", positive), ("negative", negative)):
-        result.sextractor[sign] = sextractor.difference_image_catalog(
-            kit.runner, work_dir, settings["sextractor_diffimage"], paths["cfg_path"],
-            detection_image=names["detection"], input_image=names["input"],
-            weight_image=weight_image, catalog_name=names["catalog"],
-            override_weight_type_and_filter=override_weight_type_and_filter,
-            overrides=overrides, executable=paths["sextractor"])
+    result = _Catalogs(sextractor=_sextractor_catalogs(
+        kit=kit, work_dir=work_dir, settings=settings, positive=positive, negative=negative,
+        weight_image=weight_image, override_weight_type_and_filter=override_weight_type_and_filter,
+        overrides=overrides))
 
     psfcat_settings = psfcat.PsfCatalogSettings.from_table(settings["psfcat_diffimage"])
     for sign, names in (("positive", positive), ("negative", negative)):
@@ -787,7 +801,7 @@ def run(job: JobContext) -> None:
     infobits |= sfft_catalogs.bits
     metrics["pixel_columns_s"] = sfft_catalogs.pixel_columns_s
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
-        infobits |= _run_naive(reference_psf=REFERENCE_PSF_NAME, **common)
+        _run_naive(**common)
 
     # Rows: the published differencer's image and positive PSF-fit catalog ([difference] diff_flavor).
     flavor = settings.get("diff_flavor", "zogy")
@@ -1215,9 +1229,13 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
 
 
 def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_image,
-               gainmatched_reference, resampled_cov_map, nan_indices, reference_psf,
-               reformatted_science_image, gain_times_exptime, thresh) -> int:
-    """`dev`'s naive block; returns the catalog-outcome bits it set."""
+               gainmatched_reference, resampled_cov_map, nan_indices,
+               reformatted_science_image, gain_times_exptime, thresh) -> None:
+    """`dev`'s naive block but its Photutils PSF-fit catalogs, which are not made.
+
+    ``reformatted_science_image`` (the PSF-fit catalogs' sky coordinates) is
+    taken with the other differencers' common arguments and not read.
+    """
     def w(name: str) -> Path:
         return work_dir / name
 
@@ -1238,22 +1256,12 @@ def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_ima
         gain_times_exptime, w(filename_bkg_subbed_science_image), w(gainmatched_reference),
         w(resampled_cov_map), thresh, w(masked), w(unc), seed=seed)
 
-    psfcat_table = settings["psfcat_diffimage"]
-    catalogs = _run_catalogs(
-        differencer="naive", kit=kit, work_dir=work_dir, settings=settings,
+    _sextractor_catalogs(
+        kit=kit, work_dir=work_dir, settings=settings,
         positive={"detection": masked, "input": masked,
                   "catalog": masked.replace(".fits", ".txt")},
         negative={"detection": masked_negative, "input": masked_negative,
                   "catalog": masked_negative.replace(".fits", ".txt")},
-        weight_image=unc,
-        # dev: the reference PSF ("TODO" in dev).
-        psf_image=reference_psf,
-        sky_coords_image=reformatted_science_image,
-        psfcat_names={"catalog": psfcat_table["output_naive_psfcat_filename"],
-                      "finder": psfcat_table["output_naive_psfcat_finder_filename"],
-                      "residual": psfcat_table["output_naive_psfcat_residual_filename"]},
-        override_weight_type_and_filter=False, write_parquet=False,
+        weight_image=unc, override_weight_type_and_filter=False,
         overrides=sextractor.detection_overrides(
-            settings["sextractor_diffimage_naive"], False, settings["paths"]["cfg_path"]),
-        seed=seed)
-    return catalogs.bits
+            settings["sextractor_diffimage_naive"], False, settings["paths"]["cfg_path"]))

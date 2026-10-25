@@ -18,13 +18,14 @@ caps the source set (its choice is ``source_set``'s, tested with the load
 science); the reference
 zero point is the reference's ``MAGZP`` unless overridden; the reference
 PSF is measured on the resampled, background-subtracted reference over the
-covered pixels and is the one ZOGY and naive get, published and
+covered pixels and is the one ZOGY gets, published and
 recorded in the manifest's ``metrics``; too few stars stops the job with
 exit 65 and the reason, before a manifest; ``[difference] reference_psf =
 "science"`` measures nothing and gives ZOGY the science PSF for both
 images, the manifest saying so; a reference ``psfs`` input
 fails; SFFT and naive catalogs take their detection
-overrides and the SFFT image is coverage-masked; every bad input fails the
+overrides; the naive subtraction makes no PSF-fit catalog and so sets no
+naive catalog-outcome bit; the SFFT image is coverage-masked; every bad input fails the
 job before a manifest is written; the shipped ``[difference]`` table is
 valid.
 """
@@ -46,6 +47,7 @@ from astropy.io import fits
 
 import rapidpipe.stages.difference as difference
 from rapidpipe.exitcodes import CommandExit
+from rapidpipe.products.diffimage import catalog_outcome_bit
 from rapidpipe.science.alerts import forced
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES
 from rapidpipe.science.difference.tools import ToolFailed
@@ -379,14 +381,12 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
         "awaicgen_output_mosaic_image_resampled_bkgest_input.fits")
 
 
-def test_every_differencer_gets_the_reference_psf_measured_on_the_resampled_reference(
+def test_zogy_gets_the_reference_psf_measured_on_the_resampled_reference(
         tmp_path, files, fakes, refpsf):
-    runner, catalog = fakes
+    runner, _ = fakes
     prefix = run_difference(tmp_path, files)
     zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
     assert zogy[4:6] == ["sciimage_psf_f184_sca07_normalized.fits", "refimage_psf.fits"]
-    naive = next(c for c in catalog.calls if c["label"] == "positive naive difference image")
-    assert naive["psf"].endswith("/refimage_psf.fits")
     (call,) = refpsf.calls
     # The 65 x 65 resampled reference less its uncovered 3-column strip (coverage 0).
     assert call["shape"] == (65, 65) and call["usable"] == 65 * 62
@@ -434,6 +434,18 @@ def test_sfft_and_naive_catalogs_take_their_detection_overrides(tmp_path, files,
         assert option(call, "-FILTER_NAME") == f"{cdf_dir()}/rapidSexDiffImageSfftFilter.conv"
     # dev 8f8ea43f: the negative SFFT catalog is named after its detection image.
     assert option(sfft_runs[1], "-CATALOG_NAME") == "sfftdiffimage_masked_negative.txt"
+
+
+def test_the_naive_subtraction_makes_no_psf_fit_catalog_and_sets_no_naive_bit(
+        tmp_path, files, fakes):
+    _, catalog = fakes
+    labels = ("positive naive difference image", "negative naive difference image")
+    catalog.fail = labels
+    prefix = run_difference(tmp_path, files)
+    assert not [c for c in catalog.calls if c["label"] in labels]
+    (row,) = read(prefix, "diffimages")
+    naive_bits = catalog_outcome_bit("naive", "positive") | catalog_outcome_bit("naive", "negative")
+    assert row["infobitssci"] & naive_bits == 0
 
 
 def test_the_sfft_image_is_masked_by_the_reference_coverage(tmp_path, files, fakes, monkeypatch):
