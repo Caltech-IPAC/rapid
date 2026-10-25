@@ -37,3 +37,22 @@ F146 = 27.7072
 F158 = 26.5113
 F184 = 26.0591
 F213 = 26.0164
+
+[reference.awaicgen]
+# The reference coadd on the science's own zero point, the [intake.nominal_zptmag]
+# table above (dev's galsim_roman_ab_zeropoints, which dev's ini names for
+# "that data set at unity"). The shipped values are the socsim medians, 0.86 mag
+# below these: on run 80 (H158 SCA 10) every reference frame was scaled by
+# 10^(0.4 (25.6549 - 26.5113)) = 0.4544 and gain matching scaled it back,
+# scalefacref 2.165 to 2.273 against the zero points' 2.2006; on epoch 28737's
+# products 124 isolated stars give science / reference 2.214 (scalefacref 2.234).
+# Measured on H158 only; the other filters by the same identity (a frame's scale
+# is 10^(0.4 (zprefimg - ZPTMAG)) and the reader writes these as ZPTMAG).
+zprefimg_r062 = 26.7339
+zprefimg_z087 = 26.4014
+zprefimg_y106 = 26.4607
+zprefimg_j129 = 26.4767
+zprefimg_h158 = 26.5113
+zprefimg_f184 = 26.0591
+zprefimg_k213 = 26.0164
+zprefimg_w146 = 27.7072
