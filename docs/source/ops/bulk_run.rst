@@ -81,6 +81,8 @@ to the operations database.  The registration scripts (stages 3, 6 and 9) record
 those jobs in the database afterwards.
 
 
+.. _bulk-run-setup:
+
 Setting up
 ********************************************
 
