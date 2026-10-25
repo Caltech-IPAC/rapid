@@ -1,11 +1,10 @@
 # Runs scripts/science-drift.sh against origin/dev on every push and
-# pull request to `rebuild`, plus on demand. This never fails the build
-# (`continue-on-error: true` on the job, `|| true` on the script step,
-# and the script itself always exits 0): it is a report, not a gate.
-# The report is written to the job summary and uploaded as an artifact;
-# if the script step still left science-drift.md missing or empty, the
-# summary gets a one-line placeholder instead of silently carrying
-# nothing.
+# pull request to `rebuild`, plus on demand. It is a report, not a gate:
+# the script exits 0 whenever it wrote science-drift.md, whatever the
+# report says, and non-zero only when it wrote none (a crash or a syntax
+# error), which fails the job. The report is written to the job summary
+# and uploaded as an artifact; a missing one leaves a one-line
+# placeholder in the summary.
 #
 # No schedule trigger: GitHub only runs a workflow's `schedule` trigger
 # from the repository's default branch, which is `main` here (never
@@ -37,7 +36,6 @@ jobs:
   report:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
     steps:
       - name: check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
@@ -48,7 +46,7 @@ jobs:
         run: git fetch --no-tags origin dev:refs/remotes/origin/dev || true
 
       - name: run science-drift.sh
-        run: scripts/science-drift.sh --out science-drift.md || true
+        run: scripts/science-drift.sh --out science-drift.md
 
       - name: append report to the job summary
         if: always()

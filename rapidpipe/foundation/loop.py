@@ -139,6 +139,7 @@ from typing import Any, Callable, Iterable
 import psycopg2.extras
 
 from rapidpipe.foundation import attempts
+from rapidpipe.foundation.official import NotFound
 from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
 
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
@@ -349,7 +350,7 @@ def snapshot(conn, run: int) -> Snapshot:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         meta = _rows(cur, "SELECT dataset, survey, settings FROM runs WHERE id = %s", (run,))
         if not meta:
-            raise LookupError(f"run {run} does not exist")
+            raise NotFound(f"run {run} does not exist")
         d = meta[0]["dataset"]
         fids = {r["filter"]: r["fid"] for r in _rows(cur, "SELECT fid, filter FROM filters")}
         stems = {r["file"] for r in _rows(
@@ -369,7 +370,7 @@ def snapshot(conn, run: int) -> Snapshot:
         by[b["product"]].append(b)
     gaia = [{"key": b["key"], "job": b["job"]} for b in by["catalogs"]]
     if len(gaia) > 1:
-        raise LookupError(f"dataset {d} has {len(gaia)} official catalogs; the loop names one Gaia catalog")
+        raise NotFound(f"dataset {d} has {len(gaia)} official catalogs; the loop names one Gaia catalog")
     return Snapshot(
         dataset=d, survey=meta[0]["survey"], settings=meta[0]["settings"], fids=fids,
         published_stems=stems, jobs=jobs,
@@ -515,7 +516,7 @@ def _fid(band: str, fids: dict[str, int]) -> int:
     for name, fid in fids.items():
         if name[1:] == band[1:]:
             return fid
-    raise LookupError(f"no filters row for {band}")
+    raise NotFound(f"no filters row for {band}")
 
 
 def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
@@ -547,7 +548,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
 
     def psf(fid, sca, kind):
         if (fid, sca, kind) not in snap.psfs:
-            raise LookupError(f"no official {kind} psfs row for fid {fid} sca {sca} in {d}")
+            raise NotFound(f"no official {kind} psfs row for fid {fid} sca {sca} in {d}")
         job, binding = snap.psfs[fid, sca, kind]
         return {"product": "psfs", "key": {"dataset": d, "fid": fid, "sca": sca, "kind": kind},
                 "source_job": job, "binding": binding}
@@ -650,7 +651,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         if k not in snap.sources or k in snap.packets or k in packet_keys:
             continue
         if snap.gaia is None:
-            raise LookupError("the run has no official catalogs binding for the packet stage's Gaia")
+            raise NotFound("the run has no official catalogs binding for the packet stage's Gaia")
         expid, sca, fid = k
         out.append({"stage": "packet", "scope": {"expid": expid, "sca": sca, "fid": fid},
                     "inputs": [{"product": "refimages", "key": {"dataset": d, "field": row["field"],
@@ -740,7 +741,7 @@ def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: 
     row recording it ends the wait as ``failed``, as a loop pass marks it; a
     ``failed`` row whose Batch job is still active (Batch's own retry) is not
     ended. Returns ``{"states": {job: state}, "ended": bool, "seconds"}``;
-    ``LookupError`` names a job that does not exist.
+    ``NotFound`` names a job that does not exist.
     """
     started = clock()
     while True:
@@ -751,7 +752,7 @@ def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: 
             conn.commit()
             missing = sorted(set(jobs) - set(rows))
             if missing:
-                raise LookupError(f"no job {', '.join(map(str, missing))}")
+                raise NotFound(f"no job {', '.join(map(str, missing))}")
             retrying = set()
             if batch is not None:
                 for run in sorted({run for run, state in rows.values() if state != "published"}):

@@ -237,7 +237,8 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
                 break
             except Exception as error:  # noqa: BLE001 - any failed acknowledgement leaves the set unstamped
                 failed[job] = error
-                logger.error("packet set %d: an acknowledgement failed (%s); left unstamped", job, error)
+                logger.exception("packet set %d: an acknowledgement failed (%s: %s); left unstamped",
+                                 job, type(error).__name__, error)
                 continue
             if "held" in sent:
                 held.append(job)
@@ -248,8 +249,9 @@ def publish(connect: Callable[[], Any], run: int, producer: Any, topic: str) -> 
             largest = max(largest, sent["largest"])
         late = late_sets(conn, run)
     if failed:
+        named = "; ".join(f"{job}: {type(error).__name__}: {error}" for job, error in sorted(failed.items()))
         raise PublishError(f"run {run}: packet sets {sorted(failed)} left unstamped after a failed"
-                           f" acknowledgement ({next(iter(failed.values()))}); stamped {sets}")
+                           f" acknowledgement ({named}); stamped {sets}")
     return {"run": run, "topic": topic, "sets": sets, "packets": packets, "bytes": total,
             "largest_message": largest, "waiting": waiting, "held": held, "late": late,
             "seconds": round(time.monotonic() - started, 3)}

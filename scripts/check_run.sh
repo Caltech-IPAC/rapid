@@ -39,6 +39,7 @@ fail=0
 "$PY" scripts/inspect_run.py --run "$RUN" --out "$INSPECT" >&2 || fail=1
 
 s=$SECONDS
+# `|| fail=1` sees validate_run.py's status, not tail's, only under pipefail (line 21).
 v=$("$PY" scripts/validate_run.py --run "$RUN" "${SCAS[@]}" | tee -a /dev/stderr | tail -n 1) || fail=1
 validate="validate $(grep -o '[0-9]*/[0-9]*' <<<"$v") $((SECONDS - s)) s"
 
@@ -55,6 +56,8 @@ clean=$(grep -c ' | 0 |$' <<<"$r")
 reader="reader $clean/$n $((SECONDS - s)) s"
 
 s=$SECONDS
+# `|| fail=1` sees consume_packets.py's status, not grep's, only under pipefail (line 21);
+# it fails a run with no stamped packet set, or none holding a packet.
 c=$("$PY" scripts/consume_packets.py --run "$RUN" "${SETTINGS[@]}" | tee -a /dev/stderr | grep '^Consumer check') || fail=1
 consumer="consumer $(sed -n 's/.*expected \([0-9]*\) seen \([0-9]*\).*/\2\/\1/p' <<<"$c") $((SECONDS - s)) s"
 

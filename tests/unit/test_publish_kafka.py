@@ -6,7 +6,8 @@ headers, the container header and its block as the value, then flushed and
 stamped with the partition and the first and last acknowledged offsets
 before the next set is sent; one connection serves the pass; a failed
 acknowledgement leaves its set's stamp null, the other sets stamped, and
-``publish`` exits non-zero; a flush that times out stops the pass, leaving
+``publish`` exits non-zero, its error naming every failed set with its
+error's class; a flush that times out stops the pass, leaving
 that set and the later ones unstamped; a packet job that publishes and
 binds sends its own set, a failure to send it leaves the job exit 0 and the
 set unstamped, and a job that did not bind sends nothing; a set the
@@ -222,3 +223,24 @@ def test_a_held_set_is_not_sent_by_its_own_packet_job(packet_job, outbox, held, 
     monkeypatch.setattr(publish_kafka, "producer", lambda servers, size: Producer(outbox))
     assert cli.main(["job", "run", "--job", "7"]) == ExitCode.SUCCESS
     assert not [e for e in outbox if e[0] in ("send", "stamp")]
+
+
+class FailingProducer(Producer):
+    """A producer whose acknowledgement of every packet in ``failing`` raises."""
+
+    def __init__(self, events, failing):
+        super().__init__(events)
+        self.failing = failing
+
+    def send(self, topic, key, value, headers):
+        future = super().send(topic, key, value, headers)
+        if self.sent[-1][3] in self.failing:
+            future.error = ConnectionResetError("broker went away")
+        return future
+
+
+def test_a_pass_with_two_failed_sets_names_each_with_its_error_class(outbox):
+    with pytest.raises(publish_kafka.PublishError) as raised:
+        publish_kafka.publish(_connect, 3, FailingProducer(outbox, {b"7:70", b"9:90"}), "topic")
+    message = str(raised.value)
+    assert "7: ConnectionResetError" in message and "9: ConnectionResetError" in message

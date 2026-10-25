@@ -36,6 +36,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from rapidpipe.foundation.official import NotFound
+
 #: The ``[gate]`` table's defaults, for a run whose body predates it.
 DEFAULTS = {"snr_gt20_factor": 3.0, "core_fraction_max_abs": 0.025, "ring_fraction_max_abs": 0.015,
             "min_epochs": 5, "usable_fraction_min": 0.9, "registration_max_px": 0.25}
@@ -80,7 +82,7 @@ def decide(conn, packet_job: int, settings: dict[str, Any] | None = None) -> dic
     """:func:`judge` for the packet set ``packet_job``, read from ``job_metrics`` in one transaction.
 
     ``settings`` is the run's ``[gate]`` table (its defaults when absent). Adds
-    ``difference_job`` to the answer; ``LookupError`` when the set names no source set.
+    ``difference_job`` to the answer; ``NotFound`` when the set names no source set.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT source_job FROM job_inputs WHERE job = %s AND kind = 'input'"
@@ -88,7 +90,7 @@ def decide(conn, packet_job: int, settings: dict[str, Any] | None = None) -> dic
         row = cur.fetchone()
         if row is None:
             conn.commit()
-            raise LookupError(f"packet set {packet_job} names no sources input")
+            raise NotFound(f"packet set {packet_job} names no sources input")
         difference = row[0]
         cur.execute("SELECT metric, value FROM job_metrics WHERE job = %s", (difference,))
         metrics = dict(cur.fetchall())

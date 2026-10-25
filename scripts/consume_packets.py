@@ -24,7 +24,8 @@ before they were recorded) is a failure, never read.
 
 The verdict is one line: messages read, kept, valid, byte-equal, packets
 expected and seen, sets and sets sampled, and the offset ranges read per
-partition. A run with no stamped set reads nothing and says so.
+partition. A run with no stamped set, or whose stamped sets hold no
+packets, produced nothing to check and fails (:func:`produced`).
 
 The client skips its record-batch CRC check: kafka-python without the
 ``crc32c`` C module computes CRC-32C in pure Python, about 50 messages a
@@ -161,6 +162,15 @@ def check(messages: Iterable[tuple[bytes, list, bytes]], sets: dict[int, dict],
     return counts, failures
 
 
+def produced(stamped: int, expected: int) -> list[str]:
+    """The failure of a run that produced nothing: no stamped set, or ``stamped`` sets holding no ``expected`` packet."""
+    if not stamped:
+        return ["no stamped packet set: the run produced nothing to read"]
+    if not expected:
+        return [f"{stamped} stamped packet sets hold no packets: the run produced nothing to read"]
+    return []
+
+
 def read_ranges(settings: dict, ranges: dict[int, list[tuple[int, int]]]) -> Iterator[tuple[bytes, list, bytes]]:
     """``(key, headers, value)`` of every message in each partition's inclusive ``ranges``, in order."""
     from kafka import KafkaConsumer, TopicPartition
@@ -204,11 +214,9 @@ def main(argv: list[str] | None = None) -> int:
                 for s in located}
         ranges = merged_ranges(located)
         started = time.monotonic()
-        if not stamped:
-            print(f"Run {args.run} has no stamped packet set: nothing read")
         messages = read_ranges(settings, ranges) if ranges else iter(())
         counts, more = check(messages, sets, lambda job: outbox(conn, job))
-        failures += more
+        failures += more + produced(len(stamped), counts["expected"])
         seconds = time.monotonic() - started
     verdict = "CLEAN" if not failures else f"{len(failures)} FAILURES"
     offsets = ", ".join(f"p{p} {a}..{b}" for p, spans in sorted(ranges.items()) for a, b in spans)

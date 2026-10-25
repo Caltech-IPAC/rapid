@@ -25,6 +25,14 @@ import psycopg2
 from psycopg2.extras import Json
 
 
+class NotFound(LookupError):
+    """A run, job, group or row the foundation looked up and did not find: exit 64 at the CLI.
+
+    The one lookup class the CLI maps to a usage error; a ``KeyError`` or
+    ``IndexError`` from stage code is a bug and reaches the 70 path.
+    """
+
+
 class Refused(Exception):
     """A change group the official table refused; ``binding`` names the binding, when one is."""
 
@@ -107,7 +115,7 @@ def undo(conn, group_id: int, who: str, why: str) -> int:
         closed = cur.fetchall()
     if not opened and not closed:
         conn.rollback()
-        raise LookupError(f"change group {group_id} opened and closed nothing")
+        raise NotFound(f"change group {group_id} opened and closed nothing")
     inverse = [{"close": binding} for binding in opened]
     for product, key, job, survey, dataset, run in closed:
         inverse.append({"open": {"product": product, "key": key, "job": job} if job is not None

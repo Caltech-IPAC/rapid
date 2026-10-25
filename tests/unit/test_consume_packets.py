@@ -7,7 +7,8 @@ naming a packet the index lacks, is a failure; a sampled set's messages
 are also compared byte for byte with the outbox and a differing one fails,
 an unsampled set's are only counted; the sample is one set per field;
 overlapping ranges of one partition are read once; the read seeks to each
-range's first offset and stops after its last.
+range's first offset and stops after its last. A run with no stamped set,
+or whose stamped sets hold no packet, produced nothing and fails.
 """
 
 from __future__ import annotations
@@ -133,3 +134,9 @@ def test_the_read_seeks_to_each_range_and_stops_after_its_last_offset(monkeypatc
     keys = [key for key, _, _ in consume_packets.read_ranges({}, {0: [(1, 2), (5, 7)]})]
     assert consumers[0].seeks == [1, 5]
     assert keys == [b"1", b"2", b"5", b"6", b"7"]
+
+
+def test_a_run_with_no_stamped_set_or_no_packets_fails_and_one_with_packets_does_not():
+    assert consume_packets.produced(0, 0)
+    assert consume_packets.produced(3, 0)
+    assert consume_packets.produced(3, 12) == []

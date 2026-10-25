@@ -156,7 +156,7 @@ A change group refused because a binding it names is no longer open, or because 
 
 ## Running a stage under a job
 
-`rapidpipe.launch` starts a job's stage once its job row exists (`rapidpipe.foundation.create_job`): `submit` sends `job run --job <id>` to AWS Batch under the job name `<prefix>-<stage>-<job>`, and `run_locally` runs an old-contract stage as a subprocess. Batch retries under the job definition's retry strategy; nothing here retries. The job definition is the `--job-definition` argument of `job submit` and `loop`; the rest comes from the environment:
+`rapidpipe.launch` starts a job's stage once its job row exists (`rapidpipe.foundation.create_job`): `submit` sends `job run --job <id>` to AWS Batch under the job name `<prefix>-<stage>-<job>`. Batch retries under the job definition's retry strategy; nothing here retries. The job definition is the `--job-definition` argument of `job submit` and `loop`; the rest comes from the environment:
 
 - `RAPIDPIPE_BATCH_JOB_QUEUE` -- the Batch job queue name or ARN.
 - `RAPIDPIPE_BATCH_JOB_NAME_PREFIX` -- optional, default `rapid`.

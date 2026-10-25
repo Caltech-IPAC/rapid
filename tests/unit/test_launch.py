@@ -9,7 +9,6 @@ what the job's ``publish_kafka.endpoint`` then reads instead of SSM.
 from __future__ import annotations
 
 import json
-import sys
 
 import pytest
 
@@ -150,10 +149,6 @@ def test_submit_refuses_an_outputs_root_a_batch_job_cannot_write(batch_env, monk
     with pytest.raises(launch.LaunchError, match="s3://"):
         launch.submit(7, "difference", job_definition="definition", client=batch)
     assert batch.submitted == []
-
-
-def test_run_locally_returns_the_stages_exit_code():
-    assert launch.run_locally("admit", ["--no-such-flag"], python=sys.executable) == 64
 
 
 class _Ssm:
