@@ -7792,6 +7792,59 @@ Check, held: the loop drained in **29.0 min** (23:02:28 to 23:31:29 UTC) with ex
 
 Left in place, nothing deleted: dataset `r00340-gb3` with run 112 live, its products and 1,278 packets on the alerts topic. The sample root under `samples/r00340-gb3/l2/` also stays. Raw evidence is in the brief's `t1/`: `sample.txt`, `copy.log`, `gaia.log`, `loop.log`, `check.log`, `stages.md`, `inspect/` and `jobs/` (every job's `job show`).
 
+### Step sfft-rearm: SFFT with dev's prefilter under the HLWAS overlay's SFFT block, against ZOGY on the same bytes; 530 of 600 detected against 542, so the overlay stays on ZOGY
+
+**The change.** None in code or settings.
+
+- **The decision.** One `decisions.md` entry, `decision-hlwas-sfft-rearm` (rapid_docs PR 119).
+- **The rule.** dev-prefilter's default rule failed on one condition, the total detected, so `hlwas-r00342.toml` does not gain `diff_flavor = "sfft"`.
+- **The global default.** It stays `zogy`.
+
+**The run.**
+
+- **The arm.** dev-prefilter's arm C ran again with `--set difference.diff_flavor="sfft"` only, on `rapid-rebuild:77` at `--revision a761ae23`. So the overlay's `[difference.sfft]` OpenUniverse block (PR 435) and the prefilter (PR 431) are what ran.
+- **The same bytes.** The injected sample is `r00342-inj1` `001_0001` SCA 8 F146, passes 4 to 6 (600 injected), against run 81's `refimages` 22029 and `psfs` 22015. The null sample is r00342 epoch 4040101 against run 95's rows.
+- **The datasets.** The arm runs under `r00342-sr-c-inj` (run 114) and `r00342-sr-c-null` (run 113).
+- **The control, read again, not re-run.** Arm A is runs 103 and 104 at `:76`. Its ZOGY code is the same at `:77`: `git diff 14860f57 a761ae23` touches only the runbook, the HLWAS overlay, comments in `foundation-thin.toml` and one test.
+
+```sh
+arms.sh a761ae2372db221326728ec39b9021ddc5d6814e rapid-rebuild:77   # the brief's t1/: arm.sh c inj and c null side by side, loop and waits at 1500 s
+python scripts/completeness.py --run 114 --truth truth-sca8.parquet --expids 4040101,5040101,6010101
+metrics.py 114 113; metrics.py 103 104; gate_proof.py 114 113                   # the brief's t1/scripts
+```
+
+Check, held:
+
+- **The runs.** Runs 114 and 113 are `check_run.sh` **CLEAN**: validate 6/6, consumer 809/809 and 86/86.
+- **The jobs.** All eight Batch jobs succeeded on their first attempt on `:77`.
+- **The resolved settings.** Run 114's `rp run show` reads `diff_flavor = "sfft"` and the block.
+- **The control.** Arm A, read again by the same scripts, matches PR 432 to the digit.
+
+**Measured.**
+
+| | A: ZOGY (`:76`) | C: socsims block (`:76`) | **C′: OpenUniverse block (`:77`)** |
+|---|---|---|---|
+| runs (injected / null) | 103 / 104 | 107 / 106 | **114 / 113** |
+| detected of 600 | **542** | 275 | 530 |
+| AB 24 to 25, of 96 | **93** | 78 | **93** |
+| AB 25.0 bin, of 57 | **57** | 0 | **57** |
+| alerted of detected | 516 / 542 | 257 / 275 | 504 / 530 |
+| false positives per epoch, mean (highest) | 214 (233) | 388 (390) | **102 (118)** |
+| of them bright-flagged | 0.62 | 0.86 | **0.21** |
+| candidates before the cap, per injected epoch | 954–1,018 | 1,524–1,677 | 449–486 (cap not reached) |
+| null: S/N > 20 / packets / candidates | 20 / 182 / 777 | 500 / 478 / 1,431 | **19 / 86 / 271** |
+| container seconds | 199–251 | 250–252 | 213–258 |
+| core / ring fraction | −0.0011 to +0.0032 / −0.0000 to +0.0017 | +0.251 to +0.271 / −0.002 to +0.021 | −0.0002 to +0.0004 / −0.0092 to −0.0069 |
+| gate `decide`, past `min_epochs` | 4 send | 4 held (core) | 4 send |
+
+**Applying the rule.**
+
+- **Where C′ loses.** All its losses are faint: AB 26.0 drops from 46 to 41 of 60 and AB 26.5 from 20 to 12 of 60, 13 in all. AB 25.5 gains one, so the net loss is 12.
+- **The conditions.** Of dev-prefilter's rule, AB 24 to 25 (equal), false positives (mean and highest) and null packets hold. The planner's added condition holds too: core and ring are inside the gate bounds on all four differences. The total detected does not: 530 against 542.
+- **So the overlay stays ZOGY.**
+
+Raw evidence is in the brief's `t1/`: `c-inj/`, `c-null/`, `c-114.txt`, `c-114/`, `c-103.txt`, `metrics.txt`, `metrics-control.txt`, `gate-sfft.txt` and `batch-jobs.txt`.
+
 ## Results of part 13 so far (2026-10-24 22:35 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
