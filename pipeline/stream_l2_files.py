@@ -37,6 +37,10 @@ p.add_argument("--unguided", action='store_true',
                 help="include unguided images in archive query")
 p.add_argument("--workers", type=int, default=1,
                 help="number of files to transfer in parallel")
+p.add_argument("--verbose", action='store_true',
+                help="print names of all files to be downloaded")
+p.add_argument("--force", action='store_true',
+                help="download all files regardless of whether they already exist")
 
 args = p.parse_args()
 
@@ -52,6 +56,8 @@ ingest_bucket = args.ingest_bucket
 dryrun = args.dryrun
 unguided = args.unguided
 workers = args.workers
+verbose = args.verbose
+force = args.force
 
 s3 = boto3.client('s3')
 
@@ -78,6 +84,28 @@ def transfer_file(filename):
         src.raise_for_status()
         s3.upload_fileobj(src.raw, ingest_bucket, filename)
     return filename
+
+def remove_already_downloaded(l2_filenames, ingest_bucket):
+    """
+    Remove files from the download list if they already exist
+    Parameters
+    ----------
+    l2_filenames : list, arr
+        List of L2 filenames. ``r0099..._cal.asdf``.
+    ingest_bucket : str
+        The name of the AWS S3 bucket where the files are downloaded to
+
+    Returns
+    -------
+    to_transfer : set
+        Set of filenames that are not in the s3 bucket already
+    """
+    existing = set()
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=ingest_bucket):
+        existing.update(obj["Key"] for obj in page.get("Contents", []))
+
+    to_transfer = sorted(set(l2_filenames) - existing)
+    return to_transfer
 
 
 start = datetime.datetime.now()
@@ -121,7 +149,7 @@ if visit is not None:
 if unguided==False:
     search['guide_star_id']=['!PGS0100001','!PGS0200001','!PGS0300001','!PGS0400001','!PGS0500001','!PGS0600001','!PGS0700001',
                             '!PGS0800001','!PGS0900001','!PGS1000001','!PGS1100001','!PGS1200001','!PGS1300001','!PGS1400001',
-                            '!PGS1500001','!PGS1600001', '!PGS1700001', '!PGS100001']
+                            '!PGS1500001','!PGS1600001', '!PGS1700001', '!PGS1800001']
 if mjdmin is not None:
     search['exposure_start_time']=f">{Time(mjdmin, format='mjd').fits}"
 if mjdmax is not None:
@@ -140,17 +168,24 @@ results = missions.query_criteria(
 # from MAST; assumes each Roman L2 file is named <fileSetName>_cal.asdf
 filesets = np.unique(results['fileSetName'])
 l2_filenames = [f"{fs}_cal.asdf" for fs in filesets]
-#l2_filenames = [f"{fs}_cal.asdf" for fs in filesets]
-print(f"{len(l2_filenames)} to download")
+print(f"{len(l2_filenames)} identified")
 
 if dryrun is True:
-    for filename in l2_filenames:
-        print(filename)
+    if force is False and ingest_bucket != 'local':
+        l2_filenames = remove_already_downloaded(l2_filenames, ingest_bucket)
+        print(f"{len(l2_filenames)} to download")
+    if verbose is True:
+        for filename in l2_filenames:
+            print(filename)
+
 else:
     if ingest_bucket=='local':
         missions.download_products(Table({'filename': l2_filenames}),
                                       download_dir='.', flat=True)
     else:
+        if force is False:
+            l2_filenames = remove_already_downloaded(l2_filenames, ingest_bucket)
+            print(f"{len(l2_filenames)} to download")
         failed = []
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(transfer_file, ifile): ifile for ifile in l2_filenames}
