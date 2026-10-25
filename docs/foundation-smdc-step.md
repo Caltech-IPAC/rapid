@@ -7845,6 +7845,67 @@ Check, held:
 
 Raw evidence is in the brief's `t1/`: `c-inj/`, `c-null/`, `c-114.txt`, `c-114/`, `c-103.txt`, `metrics.txt`, `metrics-control.txt`, `gate-sfft.txt` and `batch-jobs.txt`.
 
+### Step finder-mask: the PSF-fit catalog's finder sees past masked pixels; SCA 7 detects 0.959 below AB 25 against 0.728, SCA 8 unchanged
+
+**The change** (rapid PR 439, `1e2af61a`; `rapid-rebuild:78`). `psfcat.compute_psf_catalog` now handles the difference's non-finite pixels in two ways:
+- It fills them from their neighbours for the finder, with `astropy.convolution.interpolate_replace_nans` and a Gaussian of σ 1 px. A hole wider than the kernel is set to 0.
+- It passes them as `mask=` to `PSFPhotometry`, so the fit and the initial flux ignore every filled value.
+
+The function is shared, so the change covers the ZOGY, SFFT and naive catalogs, positive and negative. No setting was added and no threshold changed. One `decisions.md` entry, `decision-psfcat-nan-fill` (rapid_docs PR 121).
+
+**The probe first** (the brief's `t1/probe/`, in the `:77` image, photutils 3.0.0). The probe ran a synthetic star with one NaN d px away through `psf_catalog` as the stage calls it:
+- At `:77` the star is missed at 0 to 4 px and found from 5 px. That is part 12 step 6's mechanism, reproduced.
+- **`mask=` alone does not fix it.** `PSFPhotometry` already masks non-finite pixels when it calls the finder. DAOStarFinder uses the mask only to exclude peaks; it convolves and measures each star's moments with the NaN in place, and `_filter_finite` drops the star. With the NaN left in, `mask=` misses the star at 0 to 4 px. With the pixel also given a finite value, the star is found. Part 12 step 6's synthetic line ("found at every distance when the NaNs are passed as `mask=`") does not hold for NaN-in-place data on this photutils.
+- **The neighbour fill, not a zero fill.** Both find every star 1 to 6 px from a NaN (20 of 20 at 100 and 400 counts). They differ when a star's own peak pixel is masked:
+  - A zero fill splits the star into four rows that fit to one position (77 rows for 20 stars), and does the same to a masked bright-star core.
+  - The neighbour fill misses such a star, as `:77` does.
+- The fill costs 3.4 s per 4088 × 4088 catalog.
+
+**The runs.** Same bytes, dev-prefilter's arm method (the brief's `t1/arm.sh`, `scripts/submit.py`). The sample is `r00342-inj1` `001_0001` F146, passes 4 to 6, 200 injected sources an epoch, every arm `--set difference.diff_flavor="zogy"`. Difference and packet jobs were hand-submitted against the baseline's `refimages` and `psfs` rows:
+
+| arm | dataset | run | revision / job definition | baseline rows |
+|---|---|---|---|---|
+| SCA 7 before | `r00342-fm-before-sca7` | 115 | `a761ae23` / `:77` | run 72's (field 5383348, job 21832) |
+| SCA 7 after | `r00342-fm-after-sca7` | 117 | `1e2af61a` / `:78` | run 72's |
+| SCA 8 after | `r00342-fm-after-sca8` | 116 | `1e2af61a` / `:78` | run 81's |
+| SCA 8 before, read not re-run | `r00342-dp-a-inj` | 103 | `14860f57` / `:76` | run 81's |
+
+The pairing: `git diff a761ae23 1e2af61a -- rapidpipe/ requirements.txt` is this change and `rimtimsim-260622.toml` (rimtimsim-reader's overlay, which no arm loads). `:76` to `:77` changed no ZOGY code (part 13 step sfft-rearm).
+
+```sh
+arm.sh before 7 a761ae2372db221326728ec39b9021ddc5d6814e rapid-rebuild:77   # the brief's t1/
+arm.sh after 7 1e2af61aee4eb495bb02c805c2be48c44b16cfe5 rapid-rebuild:78
+arm.sh after 8 1e2af61aee4eb495bb02c805c2be48c44b16cfe5 rapid-rebuild:78
+measure.py 115 truth-18sca.parquet; measure.py 117 truth-18sca.parquet; measure.py 116 truth-sca8.parquet; measure.py 103 truth-sca8.parquet
+```
+
+`measure.py` runs `completeness.py`, then splits by each epoch's own ZOGY masked difference, as part 12 step 6 did: the distance from each truth source to the nearest non-finite pixel, at 5 px or more and within 5 px.
+
+Check, held:
+- **The runs.** Runs 115, 117 and 116 are `check_run.sh` **CLEAN**: validate 6/6 each, consumer 791/791, 764/764 and 1157/1157.
+- **The baselines.** The SCA 7 before arm reproduces run 72's part 12 step 6 numbers to the digit (0.728; 0.926 / 0.097), and run 103 read again reproduces PR 432's (542, 214, 233).
+
+**Measured.**
+
+| | SCA 7 before (115) | **SCA 7 after (117)** | SCA 8 before (103) | **SCA 8 after (116)** |
+|---|---|---|---|---|
+| detected below AB 25 | 284 / 390 = 0.728 | **374 / 390 = 0.959** | 375 / 378 = 0.992 | **378 / 378 = 1.000** |
+| the same, 5 px or more from a masked pixel | 275 / 297 = 0.926 | **293 / 297 = 0.987** | 375 / 378 | 378 / 378 |
+| the same, within 5 px | 9 / 93 = 0.097 | **81 / 93 = 0.871** | none | none |
+| detected of 600 | 410 | **535** | 542 | **545** |
+| per AB bin 21 / 22 / 23 / 24 / 25 / 26 | 78/96, 72/108, 78/99, 56/87, 91/123, 35/87 | 96/96, 99/108, 99/99, 80/87, 114/123, 47/87 | 84/84, 108/108, 90/90, 93/96, 101/102, 66/120 | 84/84, 108/108, 90/90, 96/96, 101/102, 66/120 |
+| false positives per epoch, mean (highest) | 174 (186) | **165 (167)** | 214 (233) | **214 (233)** |
+| of them bright-flagged | 0.64 | 0.65 | 0.62 | 0.62 |
+| candidates before the cap, per epoch | 648–672 | 851–881 | 954–1,018 | 1,010–1,080 |
+| packets per epoch | 256–279 | 249–260 | 354–404 | 354–404 |
+| difference masked / area within 5 px of a mask | 0.0325 / 0.242 | the same | 0.0006 / 0.013 | the same |
+
+- **SCA 7.** Of the 106 missed sources below AB 25, 90 are now found, 72 of them within 5 px of a masked pixel. False positives fell slightly. The 12 of 93 still missed near a mask are not read here.
+- **SCA 8, the control.** Detection did not fall, and the false positives' highest epoch (233) did not rise above run 103's (233), so there is no regression. Candidates before the cap rose by 56 to 64 an epoch, and the cap still fills.
+- **The other SCAs** are not re-measured. Part 12 step 6 measured their area within 5 px of a mask at 1 to 12%.
+
+Raw evidence is in the brief's `t1/`: `probe/`, `before-sca7/`, `after-sca7/`, `after-sca8/`, `comp-*/`, `m-*.json`, `pairing.diff` and `masks/`.
+
 ## Results of part 13 so far (2026-10-24 22:35 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
