@@ -28,6 +28,14 @@ program_id = -3
 F087 = "roman_wfi_epsf_0266.asdf"
 F213 = "roman_wfi_epsf_0280.asdf"
 
+# [difference] reference_psf stays "measured" (no key here). F213 over-
+# subtracts the stars' cores (core -0.050 to -0.075 on run 99's five epochs,
+# outside the gate's 0.025). Measured on epoch 4571 against the same
+# reference, PSF and settings (runs 124 and 133, only this key different),
+# read on run 124's 30 residual stars: "science" moves core -0.0694 ->
+# -0.0044, inside its bound, but ring -0.0339 -> -0.0557, further outside
+# 0.015. Not taken. Runbook part 13 step rts-f213-core.
+
 [difference.instrument]
 # dev's [INSTRUMENT] rimtimsims block: the converter writes DN at gain 1.
 sca_gain = 1.0
