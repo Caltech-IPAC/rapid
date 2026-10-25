@@ -88,14 +88,20 @@ One pass, in order:
   expects the ``exposures`` key only when nothing holds or claims it (the
   18 SCAs of an exposure share it); with the dataset's Gaia ``catalogs``
   official, it names that too, for the intake's WCS offset metric.
-- ``reference``: a job per (field, filter, SCA) with at least
-  ``[reference.selection] min_frames`` official L2 rows, no official
-  reference and none pending or failed, while no intake of the run is
-  pending (so a reference coadds every epoch a drain admits). A field two
-  SCAs share gets one, from the first SCA in order with enough frames.
+- ``reference``: a job per (field, filter) that a selected official L2
+  row has as its own ``field`` (with the bound, a row at or after it), no
+  official reference and none pending or failed, while no intake of the
+  run is pending (so a reference coadds every epoch a drain admits). Its
+  frames are the selected official rows of the filter, of any SCA, whose
+  ``overlapfields`` list the field, in ``mjdobs`` order, as `dev`'s
+  ``get_overlapping_l2files`` selects them (not its second key, the
+  distance from the tile centre), at least ``[reference.selection]
+  min_frames`` of them; its scope's SCA is the first in order among the
+  rows that will be differenced against it. A dithered visit's later
+  epoch so gets a reference from earlier epochs centred in other fields.
 - With ``[reference.selection] before_mjd`` set, the reference's epochs are
-  bounded: it names only the field's official L2 rows with ``mjdobs <
-  before_mjd``, and waits until the selection's intake has drained (no
+  bounded: it names only those rows with ``mjdobs < before_mjd``, and
+  waits until the selection's intake has drained (no
   listed stem of the selection unpublished and no intake of the run
   pending: a pass admits at most ``max_intake`` stems, so a pass with no
   intake pending alone does not mean every pre-bound epoch is in). A field
@@ -321,7 +327,7 @@ class Snapshot:
     jobs: list[dict]
     psfs: dict[tuple[int, int, str], tuple[int, int]]          # (fid, sca, kind) -> (job, binding)
     exposures: set[int]                                          # expids with an open binding
-    l2: dict[tuple[int, int, int], dict]                         # key -> {field, mjdobs, job}
+    l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job}
     refs: dict[tuple[int, int], int]                             # (field, fid) -> job
     diffs: dict[tuple[int, int, int], int]                       # key -> difference job
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
@@ -353,8 +359,9 @@ def snapshot(conn, run: int) -> Snapshot:
                           " ORDER BY id", (run, list(STAGES)))
         bound = _rows(cur, "SELECT id, product, key, job FROM official WHERE closed_at IS NULL"
                            " AND job IS NOT NULL AND key->>'dataset' = %s", (d,))
-        l2 = {_l2key(r): {"field": r["field"], "mjdobs": r["mjdobs"], "job": r["job"]}
-              for r in _rows(cur, "SELECT expid, sca, fid, field, mjdobs, job FROM l2files_official"
+        l2 = {_l2key(r): {"field": r["field"], "overlapfields": r["overlapfields"], "mjdobs": r["mjdobs"],
+                          "job": r["job"]}
+              for r in _rows(cur, "SELECT expid, sca, fid, field, overlapfields, mjdobs, job FROM l2files_official"
                                   " WHERE dataset = %s", (d,))}
     conn.commit()
     by = defaultdict(list)
@@ -590,33 +597,36 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     bound = snap.settings["reference"]["selection"].get("before_mjd")
     after = {k: v for k, v in selected.items() if bound is None or v["mjdobs"] >= float(bound)}
 
-    # Reference: per (field, filter, SCA), once its frames are official and no intake is pending;
-    # with the bound, from the rows before it, once the selection's intake has drained.
+    # Reference: per (field, filter) a row to be differenced has as its own field, from the rows
+    # (before the bound, when set) whose overlapfields list it, of any SCA, once no intake is pending;
+    # with the bound, once the selection's intake has drained.
     min_frames = int(snap.settings["reference"]["selection"]["min_frames"])
     held_refs = {(int(j["scope"]["field"]), int(j["scope"]["fid"])) for j in taken["reference"]}
-    frames = defaultdict(list)
-    for (expid, sca, fid), row in sorted(selected.items(), key=lambda kv: kv[1]["mjdobs"]):
-        rows = frames[row["field"], fid, sca]     # a field with no row before the bound keeps its entry
-        if bound is None or (expid, sca, fid) not in after:
-            rows.append((expid, row["job"]))
+    scope_sca = {}                              # (field, fid) -> the first SCA of the rows it serves
+    for (_, sca, fid), row in after.items():
+        scope_sca[row["field"], fid] = min(sca, scope_sca.get((row["field"], fid), sca))
+    frames = {need: [] for need in scope_sca}
+    for (expid, sca, fid), row in sorted(selected.items(), key=lambda kv: (kv[1]["mjdobs"], kv[0])):
+        if bound is not None and (expid, sca, fid) in after:
+            continue
+        for field in row["overlapfields"]:
+            if (field, fid) in frames:
+                frames[field, fid].append((expid, sca, row["job"]))
     ready = not intake_pending and (bound is None or all(s in snap.published_stems for s in admitted))
     held = []
     if ready:
-        for (field, fid, sca), rows in sorted(frames.items()):
+        for (field, fid), rows in sorted(frames.items()):
             if len(rows) < min_frames or (field, fid) in snap.refs or (field, fid) in held_refs:
                 continue
             held_refs.add((field, fid))
-            out.append({"stage": "reference", "scope": {"field": field, "fid": fid, "sca": sca},
-                        "inputs": [{"product": "l2files", "key": key(e, sca, fid), "source_job": j}
-                                   for e, j in rows],
+            out.append({"stage": "reference", "scope": {"field": field, "fid": fid, "sca": scope_sca[field, fid]},
+                        "inputs": [{"product": "l2files", "key": key(e, s, fid), "source_job": j}
+                                   for e, s, j in rows],
                         "expects": [{"product": "refimages",
                                      "key": {"dataset": d, "field": field, "fid": fid}, "binding": None}]})
-        most = defaultdict(int)                 # (field, fid) -> the most pre-bound rows of one SCA
-        for (field, fid, _), rows in frames.items():
-            most[field, fid] = max(most[field, fid], len(rows))
         held = [{"field": field, "fid": fid,
-                 "reason": f"{n} official L2 rows before before_mjd {bound}, fewer than min_frames {min_frames}"}
-                for (field, fid), n in sorted(most.items())
+                 "reason": f"{len(rows)} official L2 rows before before_mjd {bound}, fewer than min_frames {min_frames}"}
+                for (field, fid), rows in sorted(frames.items())
                 if bound is not None and (field, fid) not in snap.refs and (field, fid) not in held_refs]
 
     # Difference: per official L2 row with an official reference, after the bound when one is set.
