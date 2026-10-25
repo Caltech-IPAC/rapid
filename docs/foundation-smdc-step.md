@@ -8301,6 +8301,68 @@ The brief reads run 116's "214 (233)" as a median and a highest. They are the me
 
 Raw evidence is in the brief's `t1/`: `proof.sh`, `flight/`, `hlwas/` (`loop.log`, `check.txt`, `comp.txt`, `comp/`), `e4-metrics.tsv`, `build.log`, `deploy.log`.
 
+### Step gaia-pm: acceptance failed: flight e4 `gaia_dx_px` −0.0909 against at most 0.09; all four flight files read the hand-propagated offset to three decimals, HLWAS reads as before, GBTDS SCA 2's +0.27 px is not proper motion
+
+Brief `gaia-pm`, task 1. The code is rapid PR 453, merged as `a5e8a872`. This step's PR carries the evidence only.
+
+**What.** `[intake] gaia_proper_motion` (shipped `false`; `flight-1049.toml` sets it `true`): `_gaia_metrics` reads `pmra`, `pmdec` and `ref_epoch` beside `ra` and `dec` and carries each Gaia star to the frame's mid-exposure (`MJD-OBS` + `EXPTIME`/2) by `crossmatch.py`'s `epoch_offset_years` and `propagate_positions` before the unchanged `gaia_offset`. Intake only: no reference, difference or packet job.
+
+- **The image.** `rapid-rebuild:81` = `a5e8a872`, digest `sha256:7e7a28e9…`, on every job below; every run's `--revision` is `a5e8a872`.
+- **The datasets.** Three of the step's own, each live from creation, each with its own Gaia import and psf job, every file of theirs read from the source the original run read.
+
+```sh
+rp run create ... --revision a5e8a872... --overlay rapidpipe/settings/datasets/flight-1049.toml \
+  --set 'intake.source_root="<the inputs bucket>/flight-1049/"' --set reference.selection.before_mjd=61337.4594 \
+  --survey CAR198 --dataset flight-1049-pm                                  # run 128, live group 21885
+rp run create ... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml --set "intake.source_root=\"$SOURCE_ROOT\"" \
+  --set reference.selection.before_mjd=61591.4056 --survey HLWAS --dataset r00342-pm      # run 129, live group 21887
+rp run create ... --overlay ... --set 'intake.crpix_shift=[0.0, 0.0]' --dataset r00342-pm # run 132, never live
+rp run create ... --overlay rapidpipe/settings/datasets/gbtds-r00340.toml --set 'intake.source_root="<the sample root>"' \
+  --set intake.unsigned=false --set reference.selection.before_mjd=61679.1465 --survey GBTDS --dataset r00340-gb3-pm   # run 130, live group 21889
+rp run create ... (run 130's layers) --set intake.gaia_proper_motion=true --dataset r00340-gb3-pm   # run 131, never live
+rp job local --run <run> --stage import --scope '{"source_dir": "<dir>", "gaia": {"name": "gaia-<dataset>", "version": "DR3", "path": "<the original run's box>"}}' ...   # jobs 23205, 23207, 23209
+rp job submit --run <run> --stage psf ... --job-definition rapid-rebuild:81      # jobs 23206, 23208, 23210
+rp job submit --run <run> --stage intake --scope '{"dataset": ..., "file": ...}' \
+  --inputs '[<the dataset's catalogs job>, <its psfs job>]' [--expects <exposures, l2files>] --job-definition rapid-rebuild:81
+rp job wait --job ... --timeout 3000 --interval 20
+```
+
+Check, held: every job published on its first attempt (imports 23205, 23207, 23209; psf 23206, 23208, 23210; intakes 23211 to 23218). Runs 131 and 132 are never live and bind nothing. The driver is `t1/scripts/proof.py` and `t1/scripts/hlwas-noshift.sh`.
+
+**Flight, run 128** (the overlay's `gaia_proper_motion = true`), beside run 118's intake rows (2016.0) and flight-first's hand propagation.
+
+| epoch | run 118 dx / dy (2016.0) | hand-propagated dx / dy | run 128 dx / dy | stars (hand / run 128) |
+|---|---|---|---|---|
+| 0001 (23211) | −0.076 / −0.441 | −0.089 / −0.056 | **−0.089 / −0.056** | 34 / 34 |
+| 0002 (23212) | +0.024 / −0.468 | −0.070 / −0.046 | **−0.070 / −0.046** | 40 / 40 |
+| 0003 (23213) | −0.031 / −0.350 | −0.045 / −0.038 | **−0.045 / −0.038** | 38 / 38 |
+| 0004 (23214) | +0.157 / −0.559 | −0.091 / −0.060 | **−0.0909 / −0.060** | 35 / 35 |
+
+- **The acceptance: failed on one number.** The bound is PR 445's "Gaia offset, propagated ≤ 0.09 px". Seven of the eight values are inside it; e4's dx is −0.09094, outside it by 0.0009 px.
+- **Why the miss.** PR 445 wrote the bound as its own table's values at two decimals, and its table's e4 dx is −0.091. The intake now reads every hand value to three decimals, with the same star counts, so the miss is the bound's rounding, not the propagation. Nothing tuned.
+
+**HLWAS, run 129 and run 132** (`001_0001` SCA 8 F146 pass 4, `r0034201004001004001_0001_wfi08_f146`, the shipped `false`).
+
+| | `crpix_shift` | `gaia_dx_px` | `gaia_dy_px` | stars | before (part 12) |
+|---|---|---|---|---|---|
+| run 132, job 23218 | off | **+0.127** | **−0.986** | 34 | +0.127 / −0.986 / 34 (job 20168) |
+| run 129, job 23215 | the overlay's `[0.12, -0.99]` | **+0.007** | **+0.003** | 33 | +0.007 / +0.003 / 33 (job 20134) |
+
+Check, held: both read their old values to three decimals. The brief's (+0.127, −0.986) is the reading without the overlay's translation, so the step reads the file both ways.
+
+**GBTDS, the pair** (`r0034001002001001006_0001_wfi02_f146`, SCA 2; the same image, Gaia import and psf; only the setting differs; the GBTDS overlay unchanged).
+
+| | `gaia_proper_motion` | `gaia_dx_px` | `gaia_dy_px` | stars |
+|---|---|---|---|---|
+| run 130, job 23216 | false | −0.155 | +0.232 | 256 |
+| run 131, job 23217 | true | −0.148 | +0.297 | 241 |
+| on minus off | | +0.007 | **+0.065** | −15 |
+
+- The off reading is run 112's job 23053's for the same file exactly (−0.155, +0.232, 256). Run 112's nine files read +0.23 to +0.38 in y.
+- **Proper motion does not cause SCA 2's +0.27 px.** Carried to the frame's epoch (2027.75, 11.7 years), Gaia's stars move the y offset further from zero, by +0.065 px. The simulation's stars sit at Gaia's 2016.0, as the shipped default assumes. The y offset stays unread: SCA 2's distortion or the extinction-biased Gaia sample, part 13 step gbtds-second's two candidates.
+
+Left in place, nothing deleted: datasets `flight-1049-pm`, `r00342-pm` and `r00340-gb3-pm`, live runs 128, 129 and 130 with their imports, psfs and intake rows, and runs 131 and 132. Raw evidence is in the brief's `t1/`: `proof.json`, `proof.log`, `hlwas-noshift.log`, `build.log`, `deploy.log` and `scripts/`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
