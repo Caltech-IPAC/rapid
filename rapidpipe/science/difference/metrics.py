@@ -13,8 +13,11 @@ from the dict it returns, never zero.
 The star list is the reference PSF measurement's own finder output
 (:class:`rapidpipe.science.difference.refpsf.ReferencePsf` ``found``,
 DAOStarFinder at 8 sigma on the resampled, background-subtracted
-reference), so no finder runs twice. All positions are on the science
-grid, 0-based pixels.
+reference), so no finder runs twice; under ``[difference] reference_psf =
+"science"``, which measures nothing, it is the reference mosaic's
+SExtractor catalog mapped onto the science grid, the registration stars
+:func:`residual_stars`' choice among it (the difference stage's
+``_catalog_stars``). All positions are on the science grid, 0-based pixels.
 
 - :func:`residuals`: ``core_fraction`` and ``ring_fraction``, the
   difference's sum within :data:`CORE_RADIUS_PX` and between it and
