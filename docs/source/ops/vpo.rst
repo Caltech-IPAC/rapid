@@ -29,7 +29,25 @@ processing request is recorded and every file the request writes is filed under 
 request.
 
 The VPO is executed inside a RAPID-pipeline Docker container running on an EC2 instance
-that has access to the operations database.
+that has access to the operations database.  Start the container from the RAPID-pipeline Docker
+image, which contains a RAPID git-clone in ``/code``, with a working directory bound to ``/work``:
+
+.. code-block::
+
+   docker run -it --entrypoint bash --name rapid-vpo-20261025 --shm-size=64g -e TMPDIR=/dev/shm \
+       -v /home/ubuntu/work/vpo_20261025:/work \
+       -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 -e NUMEXPR_NUM_THREADS=1 \
+       public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+
+``--shm-size=64g`` and ``-e TMPDIR=/dev/shm`` put the temporary files of the codes the VPO
+launches in memory rather than on the instance's root volume, which made forced photometry in
+alert production 16 times faster in the 10/21/2026 socsims test; lower the size on an instance
+with less than 64 GB of memory to spare.  The ``*_NUM_THREADS=1`` variables keep each process to
+one thread, since the stages already run one process per core.  The container name and work
+directory are arbitrary.  Inside the container, set the environment as for running the stages
+by hand (see :ref:`setting up <bulk-run-setup>` in :doc:`bulk_run`), except ``JOBPROCDATE`` and
+``PROCREQ``, which the VPO sets itself, then start the VPO as described below.  The VPO, and the stages it is running, stop if the container's shell exits, as
+an alert-production run of the 10/21/2026 test did, so keep that shell open for the whole run.
 
 
 Running the VPO
