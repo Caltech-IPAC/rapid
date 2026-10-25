@@ -14,12 +14,13 @@ the pipeline imports.
   ```
 
   It creates the Q3C extension and its indexes when Q3C is installed and
-  says so in a NOTICE when it is not, as on a developer's container. There
-  is no migration machinery until the first change after real data; from
-  then on changes are incremental SQL: `schema.sql` carries every change
-  for a fresh database, and a dated file beside it
-  (`2026-10-23-runs-layers.sql`, the first; `2026-10-24-job-metrics.sql`, the `job_metrics` view; `2026-10-24-kafka-offsets.sql`, a packet set's acknowledgement coordinates; `2026-10-24-object-catalog.sql`, the object catalog that replaced the set chain; `2026-10-24-job-attempts.sql`, a job's Batch submissions and the per-job numbers `job_metrics` reads from them; `2026-10-24-pixel-columns.sql`, `dev`'s `sumrat`, `nneg` and `nbad` on `sources`) brings an existing one to it,
-  applied once.
+  says so in a NOTICE when it is not, as on a developer's container.
+- The dated files (`database/<date>-<name>.sql`), the rule for incremental
+  change, as each file's header says: `schema.sql` builds a fresh database
+  whole. A dated file is the one granted statement that brought SMDC's
+  existing database to it, applied once and recorded in its runbook step
+  (`docs/foundation-smdc-step.md`). A dated file is never applied after a
+  fresh `schema.sql`; it fails there.
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven
   statements: packet history three ways, lineage up and down) and the

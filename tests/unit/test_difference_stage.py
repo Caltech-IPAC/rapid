@@ -53,7 +53,7 @@ from rapidpipe.science.alerts.cutouts import CUTOUT_FILES
 from rapidpipe.science.difference.tools import ToolFailed
 from rapidpipe.science.load.catalogs import source_set
 from rapidpipe.foundation.local import JobContext
-from rapidpipe.selftest.support.fakedifftools import (
+from tests.support.fakedifftools import (
     FakePsfCatalog,
     FakeReferencePsf,
     FakeToolRunner,

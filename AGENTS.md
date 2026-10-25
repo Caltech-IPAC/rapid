@@ -22,8 +22,7 @@ install the hook with `git config core.hooksPath .githooks`.
 (https://roman-rapid.readthedocs.io/en/latest/system/), sourced from
 the `rapid_docs` repository's `system/` directory: `foundation.md` (the
 schema, runs, jobs, the publisher, official bindings, the verbs and the
-thin chain), `specification.md` (requirements), `stage-contract.md`
-(package layout and per-stage contract), `tool.md` (the command-line
+thin chain), `specification.md` (requirements), `tool.md` (the command-line
 tool), `loop.md`, `datasets.md`, `decisions.md`, `observability.md`
 (logging, monitoring, job timing), and per-stage pages; `operations.md`
 holds the direction pass's operations-readiness proposal (2026-09-26),
@@ -74,35 +73,34 @@ including lazy and relative imports. A unit imports only units strictly
 below it in this order:
 
 Leaf modules
-(`exitcodes`, `log`, `revision`: no `rapidpipe` import) <
+(`exitcodes`, `log`: no `rapidpipe` import) <
 `products` < `db`, `science` and `foundation` (which do not import one
-another) < `stages` < `launch` < `selftest` < `cli`. Stage modules
+another) < `stages` < `launch` < `cli`. Stage modules
 never import other stage modules.
 
 A failure names the offending edge and file:line. A new edge up the order
-is a design question for the stage-contract page, not a test to relax.
+is a design question for `foundation.md`, not a test to relax.
 
 | Subpackage | Holds |
 |---|---|
-| `stages/` | One module per stage. The foundation's stages are one function, `run(job: JobContext) -> None`, run by `rapidpipe job local`/`job run`/`job submit`: `import_products` (stage `import`), `intake` (one SOC L2 ASDF file, read anonymously from a public source root when the run says so, converted by `dev`'s `build_fits_file` into its gzipped FITS, the pixels of `[intake] dq_mask_bits` NaN as commissioning #238 sets them, with its `exposures` and `l2files` rows), `packet` (`dev`'s alerts package at schema 00.06: Avro packets with three cutouts, forced photometry and Gaia matches, the object catalog and window read as they stand and recorded, and the packet index) `reference` (`dev`'s awaicgen coadd of the named `l2files`, with its SExtractor catalog: `refimages`, `refimimages`, `refimcatalogs`) `difference` (`dev`'s ZOGY subtraction of the named `l2files` row against the named `refimages` row with the science PSF and the reference PSF it measures on the resampled reference, SFFT and naive beside it as `dev` runs them: `diffimages` and the capped `sources` set; then the association, crossmatch and statistics in one, its sources matched in memory against the objects of its run in each source's field and its neighbours as it read them, each founding in its own field: `objects` founded here and `memberships`, reconciled at publish) and `psf` (new science: one filter and SCA's science `psfs` row, reduced from the CRDS ePSF reference the L2 file names, fetched by name). `admit` and `finalize` keep the older contract until their port, with the shared runner `contract.py` and `settings.py`. Each is directly runnable as `python -m rapidpipe.stages.<name>` and via `rapidpipe stage <name>`. Exit codes: 0 success, 64 usage, 65 bad/missing input, 69 declared-but-not-implemented (reserved: no stage in this build returns it), 70 unclassified error, 75 retryable transient failure. The run model's database stages (`register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`) were retired with its schema; the foundation plan's Part 5 ports their science (into `difference` and `packet`; the `associate` stage that first held it retired 2026-10-24). |
-| `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `intake`, `finalize`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
+| `stages/` | One module per stage. The foundation's stages are one function, `run(job: JobContext) -> None`, run by `rapidpipe job local`/`job run`/`job submit`: `import_products` (stage `import`), `intake` (one SOC L2 ASDF file, read anonymously from a public source root when the run says so, converted by `dev`'s `build_fits_file` into its gzipped FITS, the pixels of `[intake] dq_mask_bits` NaN as commissioning #238 sets them, with its `exposures` and `l2files` rows), `packet` (`dev`'s alerts package at schema 00.06: Avro packets with three cutouts, forced photometry and Gaia matches, the object catalog and window read as they stand and recorded, and the packet index) `reference` (`dev`'s awaicgen coadd of the named `l2files`, with its SExtractor catalog: `refimages`, `refimimages`, `refimcatalogs`) `difference` (`dev`'s ZOGY subtraction of the named `l2files` row against the named `refimages` row with the science PSF and the reference PSF it measures on the resampled reference, SFFT and naive beside it as `dev` runs them: `diffimages` and the capped `sources` set; then the association, crossmatch and statistics in one, its sources matched in memory against the objects of its run in each source's field and its neighbours as it read them, each founding in its own field: `objects` founded here and `memberships`, reconciled at publish) and `psf` (new science: one filter and SCA's science `psfs` row, reduced from the CRDS ePSF reference the L2 file names, fetched by name). A stage's exit, through `job run`: 0 success, 64 usage, 65 bad/missing input, 70 unclassified error, 75 retryable transient failure. The older `main(argv)` contract's `admit` and `finalize` were retired 2026-10-25. The run model's database stages (`register`, `load`, `maintain`, `crossmatch`, `statistics`, `prune`, `alerts`, `export`) were retired with its schema; the foundation plan's Part 5 ports their science (into `difference` and `packet`; the `associate` stage that first held it retired 2026-10-24). |
+| `science/` | Pure algorithms and tool wrappers the stages call (`difference`, `reference`, `intake`, `load`, `crossmatch`, `statistics`, `alerts`, plus `spatial` for HEALPix/tessellation). No stage, `launch` or CLI imports. |
 | `products/` | Product identifiers, kinds, manifest types (`manifest.py`), storage layout (`storage.py`), per-kind modules (`l2image`, `diffimage`), `filters`, and `spatial` (the pure HEALPix and tessellation derivations; `science.spatial` re-exports them). |
 | `db/` | `connection.py` (one connection from the `PG*` environment, a secret or a parameter tree) and `ids.py` (ULIDs). |
 | `foundation/` | The foundation plan's operations over `database/schema.sql`: `bookkeeping.py` (`create_run`, `create_job`, `run_show`, `job_show`), `official.py` (`change`, `undo`, `apply`, `Refused`), `publish.py` (`publish`, the manifest format, `PublishError`), `catalog.py` (reconcile at publish: a difference job's founded objects attached to those founded since its read, under the field's lock), `local.py` (`JobContext`, the foundation's stage contract, and `run_job`, one attempt run here and published), `prefix.py` (`get` and `put` for `file://` and `s3://` URLs), `layers.py` (`resolve`: a run's settings body from the base, the dataset overlay and the `--set`s, with the record of its layers), `publish_kafka.py` (`deliver`, the one send boundary, which a packet job calls for its own set as its last act, and `publish`, the sweep of a run's unstamped official sets: each set stamped `jobs.kafka_published_at` with its acknowledgements' partition and offsets), `loop.py` (one pass of `rapidpipe loop`: the source root's new stems for a selection admitted and every ready job submitted one stage forward, no field chains or order, ending at the topic). The verbs in `cli/main.py` wrap them. |
 | `launch/` | `__init__.py`: `submit` (a recorded job to AWS Batch as `job run --job <id>`). No retry and no attempt bookkeeping. |
-| `cli/` | The `rapidpipe` command-line tool: `main.py` holds the foundation verbs (`run create`, `run show`, `job show`, `job local`, `job run`, `job submit`, `official change`, `official undo`, `publish`, `loop`) and `selftest`, and dispatches `stage ...` to `stagectl.py`. |
-| `selftest/` | `runner.py` plus the `finalize` module and `support/` fakes (`fakereftools.py` and `fakedifftools.py` serve the reference and difference stages' unit tests); drives `make stage-<name>` and `rapidpipe selftest --stage <name> [--real-tools]`. `fixtures/` ships each stage's packaged expected output. |
+| `cli/` | The `rapidpipe` command-line tool: `main.py` holds the foundation verbs (`run create`, `run show`, `job show`, `job local`, `job run`, `job submit`, `official change`, `official undo`, `publish`, `loop`). |
 | `exitcodes.py` | A bare top-level module, not a subpackage: `ExitCode`, the one exit-code vocabulary, and `ArgumentParser` (parse failures exit 64). Stdlib-only, so every subpackage, `science` included, may import it. |
-| `settings/` | Per-stage default settings and schema, `<name>.toml`, merged recursively with a `--settings` overlay; and `foundation-thin.toml`, a foundation run's base settings body (`run create`'s default `--settings`), one table per stage (the reference stage's as subtables, one per `dev` ini section); `datasets/<dataset>.toml`, one overlay per dataset holding only the keys that differ, each with its measurement (`run create --overlay`, `rapidpipe.foundation.layers`). |
+| `settings/` | `foundation-thin.toml`, a foundation run's base settings body (`run create`'s default `--settings`), one table per stage (the reference stage's as subtables, one per `dev` ini section); `datasets/<dataset>.toml`, one overlay per dataset holding only the keys that differ, each with its measurement (`run create --overlay`, `rapidpipe.foundation.layers`). |
 
 ## The schema
 
 `database/schema.sql` is the whole schema, applied to an empty
 PostgreSQL 18 database with `psql -v ON_ERROR_STOP=1 -f
 database/schema.sql`; it creates the Q3C extension and its indexes when
-Q3C is installed and says so in a NOTICE when it is not. There is no
-migration machinery until the first change after real data (foundation
-plan, "Fresh schema, one file"); from then on changes are incremental SQL.
+Q3C is installed and says so in a NOTICE when it is not. The dated files
+beside it each brought SMDC's existing database to `schema.sql` once and
+are never applied after a fresh one (the rule: `database/README.md`).
 
 ## Tests and CI
 
@@ -114,24 +112,18 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 | `tests/unit` | `unit-tests.yml` | No database; `rapidpipe.db`/`rapidpipe.foundation` import `psycopg2` but tests never connect. Run locally: `python -m pytest tests/unit -q` in any interpreter that has `pip install -r requirements.txt pytest`; requirements.txt is the one dependency authority (pyproject.toml reads it, the CI workflows install from it). No per-checkout venv is needed or assumed. |
 | `tests/db` | `foundation.yml` | Real PostgreSQL 18 + Q3C service container, `schema.sql` applied first: the schema, the publisher, change groups and the procedure proof (`tests/db/proof/`). Fails, never skips, when `PGHOST` is unset; any throwaway PostgreSQL 18 serves locally. |
 | `tests/cli` | `foundation.yml` | The five verbs against the same database: argv in, exit code/stdout/stderr/database state out. |
-| n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version`, `stage admit --help`, the imports of the kept helpers outside `rapidpipe/` and the presence of the `/code` script and config files. Proves the build recipe only, not the production science environment. |
+| n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version`, `--help`, the imports of the kept helpers outside `rapidpipe/` and the presence of the `/code` script and config files. Proves the build recipe only, not the production science environment. |
 | n/a | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
 
-Stage fixtures under `tests/fixtures/<name>/` back both:
-
-- `make stage-<name>` (runs the stage locally, `fake` tools by default,
-  or `real` where a target exists).
-- `rapidpipe selftest --stage <name> [--real-tools]`: submits the same
-  fixture as an ordinary Batch job against the deployed image. This is
-  the venue for exercising a stage against real tools and a real database,
-  owned by `rapid_systems`' Batch recipes, outside this repository's CI.
+The stages' fake external tools are `tests/support/fakedifftools.py` and
+`fakereftools.py`; a stage's real tools run in the image, under a job.
 
 ## Settings and secrets
 
-Each stage ships default settings and a schema at
-`rapidpipe/settings/<name>.toml`. A `--settings` overlay merges
-recursively, replacing the scalars and arrays it names. Unknown keys or
-invalid values fail with exit 64. Algorithm parameters (including random
+A run's settings body is resolved once, at `run create`, from
+`rapidpipe/settings/foundation-thin.toml`, the dataset's overlay and the
+`--set`s (`rapidpipe.foundation.layers`); a key the base lacks is refused.
+Algorithm parameters (including random
 seeds) belong in settings; deployment locations and credentials never do.
 
 Database credentials reach `rapidpipe.db` only through `PG*` environment
@@ -146,18 +138,15 @@ documented in README.md): named environment variables only.
 A command prints only data on stdout. Everything else goes through
 `rapidpipe.log` to stderr in one line shape:
 `<UTC> <LEVEL> run= attempt= stage= unit= <logger> <message>`.
-A stage invocation writes the same lines to `log/<stage>.log` beside the
-attempt's outputs. New subcommands follow this split; commands that output
+New subcommands follow this split; commands that output
 records should offer `--json` (the direction pass's proposal, 2026-09-26).
-`RAPIDPIPE_LOG_LEVEL` sets the level; `--profile` (or
-`RAPIDPIPE_PROFILE=1`) profiles a stage body on a scratch run.
+`RAPIDPIPE_LOG_LEVEL` sets the level.
 
 The exit-code vocabulary is
-`rapidpipe/exitcodes.py` (`ExitCode`); stages use its subset
-`STAGE_EXIT_CODES` (`rapidpipe/stages/contract.py`); every parser is
+`rapidpipe/exitcodes.py` (`ExitCode`); every parser is
 `rapidpipe.exitcodes.ArgumentParser`, so a parse failure exits 64. The
-tables on the `rapid_docs` tool and stage-contract pages document it; do
-not invent a new code or a second list.
+table on the `rapid_docs` tool page documents it; do not invent a new
+code or a second list.
 
 ## Writing conventions
 

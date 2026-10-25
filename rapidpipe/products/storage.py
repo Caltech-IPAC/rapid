@@ -1,43 +1,30 @@
-"""Locations a stage reads from or writes to: a local directory or S3 prefix.
+"""S3 locations, the S3 client and S3 error classification.
 
-The stage contract's "Invocation" section: "`--inputs` names a local
-directory or S3 prefix containing `manifest.json`... `--outputs` names the
-attempt's exclusive output location... The same program accepts a local
-directory or an S3 location." This module gives that a small type
-(:class:`Location`) and the four operations ``rapidpipe.stages.contract``
-needs to fetch inputs down to local disk before a stage body runs, and
-publish outputs back up after it returns.
+:class:`Location` names a local directory or an S3 prefix;
+:func:`publish_dir` uploads a directory to an S3 prefix with its manifest
+last (``rapidpipe.foundation.prefix``). :func:`s3_client` is the one place
+``boto3`` makes an S3 client, a module-level indirection point tests
+monkeypatch. :func:`client_error_code`, :func:`is_not_found` and
+:func:`is_transient` classify a ClientError-shaped exception by shape.
 
-:class:`Storage` is the copy, size, existence and manifest read/write
-helper the input-set composers (``run inputs``, ``run start`` and the
-processing-date loop) share across local and S3 locations.
-
-This module imports nothing from ``rapidpipe`` outside ``rapidpipe.products``
-except ``rapidpipe.exitcodes``.
-``boto3`` is imported lazily, inside the functions that need it, so importing
-this module -- and running a stage entirely against local directories --
-never requires it to be installed.
+This module imports nothing from ``rapidpipe``. ``boto3`` is imported lazily, inside :func:`s3_client`, so importing this
+module never requires it to be installed.
 """
 
 from __future__ import annotations
 
-import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
-
-from rapidpipe.exitcodes import CommandExit, ExitCode
-from rapidpipe.products.manifest import Manifest
+from typing import Any
 
 
 class LocationError(ValueError):
-    """A location string is malformed."""
+    """A location :func:`publish_dir` cannot publish to."""
 
 
 @dataclass(frozen=True)
 class Location:
-    """A parsed ``--inputs``/``--outputs`` argument.
+    """A local directory or an S3 prefix.
 
     ``kind`` is ``"local"`` or ``"s3"``. A local location carries ``path``;
     an S3 location carries ``bucket`` and ``prefix`` (no leading or
@@ -53,33 +40,6 @@ class Location:
         return self.kind == "s3"
 
 
-def parse_location(text: str) -> Location:
-    """Parse a ``--inputs``/``--outputs`` argument into a :class:`Location`.
-
-    ``s3://bucket`` and ``s3://bucket/`` are the bucket root, an empty
-    prefix. Anything starting ``s3://`` with no bucket (``s3://`` or
-    ``s3:///foo``) is malformed. Everything else is a local path.
-    """
-    if text.startswith("s3://"):
-        rest = text[len("s3://"):]
-        bucket, _, prefix = rest.partition("/")
-        if not bucket:
-            raise LocationError(f"malformed S3 location {text!r}: no bucket")
-        prefix = prefix.strip("/")
-        return Location(kind="s3", bucket=bucket, prefix=prefix)
-    return Location(kind="local", path=Path(text))
-
-
-def join(location: Location, relative: str) -> str:
-    """Return the string a manifest or database row records for ``relative``
-    beneath ``location``."""
-    if location.is_s3():
-        prefix = f"{location.prefix}/{relative}" if location.prefix else relative
-        return f"s3://{location.bucket}/{prefix}"
-    assert location.path is not None
-    return str(location.path / relative)
-
-
 def _key(location: Location, relative: str = "") -> str:
     assert location.bucket is not None
     if not relative:
@@ -90,9 +50,7 @@ def _key(location: Location, relative: str = "") -> str:
 def s3_client(unsigned: bool = False) -> Any:
     """Return a fresh ``boto3`` S3 client; ``unsigned`` reads a public bucket anonymously.
 
-    A module-level indirection point: ``rapidpipe.stages.contract`` calls
-    this exactly once per :func:`~rapidpipe.stages.contract.run_stage`
-    invocation that needs one, so tests can monkeypatch
+    A module-level indirection point, so tests can monkeypatch
     ``rapidpipe.products.storage.s3_client`` to return a fake.
     """
     import boto3
@@ -105,80 +63,6 @@ def s3_client(unsigned: bool = False) -> Any:
     return boto3.client("s3")
 
 
-def fetch_prefix(location: Location, dest_dir: Path, *, client: Any = None) -> Path:
-    """Materialize ``location`` beneath ``dest_dir`` on local disk.
-
-    For a local location, returns ``location.path`` unchanged -- no copy is
-    made. For an S3 location, lists every object under ``prefix/`` and
-    downloads each beneath ``dest_dir``, preserving the key's path relative
-    to the prefix, then returns ``dest_dir``. Refuses to overwrite a
-    ``dest_dir`` that already exists and is non-empty.
-    """
-    if not location.is_s3():
-        assert location.path is not None
-        return location.path
-
-    if dest_dir.exists() and any(dest_dir.iterdir()):
-        raise LocationError(
-            f"refusing to fetch into non-empty destination: {dest_dir}")
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    s3 = client if client is not None else s3_client()
-    prefix = location.prefix
-    list_prefix = f"{prefix}/" if prefix else ""
-
-    continuation_token = None
-    found_any = False
-    while True:
-        kwargs: dict[str, Any] = {"Bucket": location.bucket, "Prefix": list_prefix}
-        if continuation_token:
-            kwargs["ContinuationToken"] = continuation_token
-        response = s3.list_objects_v2(**kwargs)
-        for obj in response.get("Contents", []):
-            found_any = True
-            key = obj["Key"]
-            relative = key[len(list_prefix):] if list_prefix else key
-            if not relative:
-                # The "directory marker" object some tools write at the
-                # prefix itself, with nothing after it.
-                continue
-            dest_path = dest_dir / relative
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            s3.download_file(location.bucket, key, str(dest_path))
-        if response.get("IsTruncated"):
-            continuation_token = response.get("NextContinuationToken")
-            continue
-        break
-
-    if not found_any:
-        raise LocationError(
-            f"no objects found under s3://{location.bucket}/{list_prefix}")
-
-    return dest_dir
-
-
-def fetch_object(
-    location: Location, relative: str, dest_path: Path, *, client: Any = None,
-) -> Path:
-    """Fetch one object, ``relative`` to ``location``'s prefix, to ``dest_path``.
-
-    For a local location, returns the local path unchanged (no copy) --
-    ``dest_path`` is ignored, matching :func:`fetch_prefix`'s no-copy rule
-    for local locations. For S3, downloads exactly one object; used by
-    ``--dry-run`` to validate an S3 input manifest without fetching the
-    whole prefix.
-    """
-    if not location.is_s3():
-        assert location.path is not None
-        return location.path / relative
-
-    s3 = client if client is not None else s3_client()
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    key = _key(location, relative)
-    s3.download_file(location.bucket, key, str(dest_path))
-    return dest_path
-
-
 def publish_dir(
     src_dir: Path,
     location: Location,
@@ -189,17 +73,14 @@ def publish_dir(
     """Publish everything beneath ``src_dir`` to ``location``.
 
     For a local location: a no-op when ``location.path`` is already
-    ``src_dir`` (the runner passes the same directory as both the body's
-    working output directory and its declared ``--outputs``); any other
-    local location is an error, since the runner never asks for a local
-    copy.
+    ``src_dir``; any other local location is an error, since a local copy
+    is not supported.
 
     For an S3 location: uploads every file beneath ``src_dir``, preserving
     relative paths as keys under the prefix, uploading the file named
     ``last`` (the manifest) after every other file -- so a reader that
     lists the prefix and finds the manifest can trust every other object
-    is already there (stage contract, "The manifest": "a stage publishes
-    its manifest only after its outputs are complete").
+    is already there.
     """
     if not location.is_s3():
         assert location.path is not None
@@ -207,7 +88,7 @@ def publish_dir(
             return
         raise LocationError(
             f"publish_dir: local destination {location.path} is not the "
-            f"stage's own output directory {src_dir}; a local copy is not "
+            f"directory being published, {src_dir}; a local copy is not "
             "supported")
 
     s3 = client if client is not None else s3_client()
@@ -232,28 +113,6 @@ def publish_dir(
         key = _key(location, last)
         s3.upload_file(str(last_path), location.bucket, key)
 
-
-def upload_object(local_path: Path, location: Location, relative: str, *,
-                   client: Any = None) -> None:
-    """Upload one local file to ``relative`` under ``location``.
-
-    For a local ``location``, a no-op: the file already lives there (or
-    the caller made a mistake giving a local destination for a single
-    object it expects to be copied, which this function does not do).
-    For S3, uploads exactly one object; used by ``run_stage`` to publish
-    the per-stage log file on its own, separately from :func:`publish_dir`
-    (which only runs once, on success).
-    """
-    if not location.is_s3():
-        return
-    s3 = client if client is not None else s3_client()
-    key = _key(location, relative)
-    s3.upload_file(str(local_path), location.bucket, key)
-
-
-# ----------------------------------------------------------------------
-# Storage error classification
-# ----------------------------------------------------------------------
 
 #: Recognised as network-shaped: a fetch or publish is retryable when the
 #: exception's class name ends with one of these, checked by name (suffix,
@@ -318,64 +177,3 @@ def is_transient(exc: BaseException) -> bool:
     response = getattr(exc, "response", None)
     status = response.get("ResponseMetadata", {}).get("HTTPStatusCode") if isinstance(response, dict) else None
     return status == 503
-
-
-class Storage:
-    """Copy, size and existence checks across local and S3 locations.
-
-    The S3 client is made on first use only (:func:`s3_client`, which tests
-    monkeypatch), so a purely local composition never imports boto3.
-    """
-
-    def __init__(self, client: Any = None):
-        self._client = client
-
-    @property
-    def s3(self) -> Any:
-        if self._client is None:
-            self._client = s3_client()
-        return self._client
-
-    def exists(self, location: Location, relative: str) -> bool:
-        if not location.is_s3():
-            return (location.path / relative).exists()
-        try:
-            self.s3.head_object(Bucket=location.bucket, Key=_key(location, relative))
-        except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-            if is_not_found(exc):
-                return False
-            raise
-        return True
-
-    def size(self, location: Location, relative: str) -> int:
-        if not location.is_s3():
-            return (location.path / relative).stat().st_size
-        head = self.s3.head_object(Bucket=location.bucket, Key=_key(location, relative))
-        return int(head["ContentLength"])
-
-    def copy(self, src: Location, src_rel: str, dst: Location, dst_rel: str) -> None:
-        if src.is_s3() and dst.is_s3():
-            # Server-side; copy_object handles objects up to 5 GB.
-            self.s3.copy_object(
-                Bucket=dst.bucket, Key=_key(dst, dst_rel),
-                CopySource={"Bucket": src.bucket, "Key": _key(src, src_rel)})
-        elif src.is_s3():
-            target = dst.path / dst_rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            self.s3.download_file(src.bucket, _key(src, src_rel), str(target))
-        elif dst.is_s3():
-            self.s3.upload_file(str(src.path / src_rel), dst.bucket, _key(dst, dst_rel))
-        else:
-            target = dst.path / dst_rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src.path / src_rel, target)
-
-    def write_manifest(self, manifest: Manifest, location: Location) -> None:
-        if not location.is_s3():
-            location.path.mkdir(parents=True, exist_ok=True)
-            manifest.write(location.path / "manifest.json")
-            return
-        with tempfile.TemporaryDirectory(prefix="rapidpipe-run-inputs-") as tmp:
-            path = Path(tmp) / "manifest.json"
-            manifest.write(path)
-            self.s3.upload_file(str(path), location.bucket, _key(location, "manifest.json"))

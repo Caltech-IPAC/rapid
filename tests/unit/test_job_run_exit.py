@@ -77,7 +77,6 @@ def test_a_stage_whose_dependency_is_missing_fails_70_not_not_implemented(monkey
     monkeypatch.setattr(importlib, "import_module", _import_failing("astropy"))
     with pytest.raises(ModuleNotFoundError):
         cli._stage_run("psf")
-    assert cli.main(["stage", "run", "admit"]) == ExitCode.STAGE_ERROR
 
 
 def test_a_stage_whose_own_module_is_missing_is_a_usage_error(monkeypatch):

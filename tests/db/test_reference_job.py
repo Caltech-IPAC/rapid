@@ -14,8 +14,8 @@ from datetime import datetime
 
 from rapidpipe.cli import main as cli
 from rapidpipe.foundation import change, create_job, create_run, publish
-from rapidpipe.selftest.support import fakereftools
-from rapidpipe.selftest.support.fakereftools import FRAMES, RTID, write_frames
+from tests.support import fakereftools
+from tests.support.fakereftools import FRAMES, RTID, write_frames
 from rapidpipe.stages import reference
 from tests.db.foundation_helpers import write_attempt
 from tests.unit.test_reference_stage import settings

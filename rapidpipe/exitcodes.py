@@ -1,13 +1,10 @@
 """The one exit-code vocabulary for every rapidpipe entrypoint.
 
-:class:`ExitCode` is the single set of process exit codes that the ``rapid``
-command line, the selftest harness and every stage entrypoint return. Values 64 to 75 are the stage
-contract's codes (sysexits-derived); 0, 1 and 2 are the operator-facing
-outcomes. A stage may return only the subset
-:data:`rapidpipe.stages.contract.STAGE_EXIT_CODES`; the command line may
-return any member. The ``rapid_docs`` tool page carries the table that
-documents this vocabulary, and the stage-contract page carries the stage
-subset; they describe this module, they do not define a second list.
+:class:`ExitCode` is the single set of process exit codes that the ``rapidpipe``
+command line and every stage it runs return. Values 64 to 75 are sysexits-derived;
+0, 1 and 2 are the operator-facing outcomes. The ``rapid_docs`` tool page
+carries the table that documents this vocabulary; it describes this module,
+it does not define a second list.
 
 :class:`ArgumentParser` is ``argparse.ArgumentParser`` with its parse
 failures mapped to :attr:`ExitCode.USAGE` (64) instead of argparse's 2, so
