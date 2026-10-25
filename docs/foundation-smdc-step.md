@@ -8239,6 +8239,68 @@ Check, held:
 
 Raw evidence is in the brief's `t1/`: `create.sh`, `loop.sh`, `run125*.json`, `job*.json`, `r123/`, `loop-125.log`, `check-125.log`, `comp-125*`, `measure_unc.py`, `unc-123.out`, `unc-125.out`.
 
+### Step ref-overlap: the loop builds a field's reference from the rows whose `overlapfields` list it, as dev; flight e4 referenced and differenced with no hand job (run 126), HLWAS injected 546 of 600 (run 127)
+
+Brief `ref-overlap`, task 1. The code is rapid PR 450, merged as `d7e67597`; the decision is rapid_docs PR 125. This step's PR carries the evidence only.
+
+**What.** `loop.plan` plans a reference for each (field, filter) that a selected row at or after the bound has as its own field (with no bound, any selected row's). Its frames are the selected official rows of the filter before the bound whose `overlapfields` list the field, of any SCA, in `mjdobs` order, as dev's `get_overlapping_l2files` selects them. The scope's SCA is the first SCA among the rows it serves. `min_frames`, the drain wait, `held` and the one-reference-per-(field, filter) key are unchanged. dev's distance-from-tile-centre ordering is not ported: this is membership parity. The reference stage now accepts an `l2files` input of any SCA, provided its filter is the scope's.
+
+**The image.** `rebuild-d7e67597…` (`sha256:adef89da…`), **`rapid-rebuild:80`**, under the release lock. Both runs were created at `--revision d7e67597`, and the loop alone ran each, with no `rp job submit`.
+
+```sh
+rp run create ... --overlay rapidpipe/settings/datasets/flight-1049.toml \
+  --set 'intake.source_root="<the inputs bucket>/flight-1049/"' \
+  --set reference.selection.before_mjd=61337.4594 --survey CAR198 --dataset flight-1049-ro      # run 126
+rp run create ... --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set 'intake.source_root="<the inputs bucket>/r00342-inj1/l2/"' --set intake.unsigned=false \
+  --set 'difference.diff_flavor="zogy"' --set reference.selection.before_mjd=61591.4056 \
+  --survey HLWAS --dataset r00342-ro-inj                                                         # run 127
+# each: run live, Gaia imported (run 118's and run 116's parquet), then
+rp loop --run 126 --filters F158 --scas 2 --pointings all --job-definition rapid-rebuild:80 --interval 60
+rp loop --run 127 --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,3,4,5,6 --job-definition rapid-rebuild:80 --interval 60
+scripts/check_run.sh --run N --inspect DIR; python scripts/completeness.py --run 127 --truth truth-sca8.parquet
+```
+
+Check, held:
+
+- **Run 126.** Loop exit 0, drained, 01:02 to 01:13 UTC. Its jobs: import, psf, four intakes, reference 23193, difference 23196, packet 23201. Each was published on its first attempt. `check_run.sh` is **CLEAN**: validate 6/6, reader 1/1, consumer 328/328. Nothing was held, and no reference was built for 3014319 or 3014320, which nothing differences against.
+- **Run 127.** Loop exit 0, drained, 01:02 to 01:16 UTC. Its jobs: import, psf, six intakes, reference 23194, differences 23197 to 23199, packets 23200, 23202 and 23203. Each was published on its first attempt. `check_run.sh` is **CLEAN**: validate 6/6, reader 3/3, consumer 1157/1157.
+
+| reference | field | frames (`job_inputs`, expid, SCA) | `cov5percent` | `infobits` |
+|---|---|---|---|---|
+| 23193 (run 126, loop) | 3010224 | 1020101, 1020102, 1020103, SCA 2 | 10.77 | 1 |
+| 23131 (run 118, by hand) | 3010224 | 1020101, 1020102, 1020103, SCA 2 | 10.77 | 1 |
+| 23194 (run 127, loop) | 5387158 | 1040101, 2040101, 3040101, SCA 8 | 11.58 | 1 |
+| 22029 (run 81, loop) | 5387158 | 1040101, 2040101, 3040101, SCA 8 | 19.57 | 0 |
+
+Run 81's reference predates the 9100 px references (PR 416). Its `cov5percent` and `infobits` therefore differ on the same frames.
+
+**Flight e4 (1020104), against run 118.**
+
+| metric | run 118 (hand reference) | **run 126 (loop)** |
+|---|---|---|
+| core / ring fraction | +0.0013386 / −0.0050176 | +0.0013386 / −0.0050176 |
+| usable fraction | 0.7811 | 0.7811 |
+| registration px | (−0.0183, −0.0126) | (−0.0183, −0.0126) |
+| candidates / kept above S/N 20 | 1,492 / 227 | 1,492 / 227 |
+| objects founded / packets | 327 / 328 | 327 / 328 |
+| `scalefacref` | 1.1356 | 1.1356 |
+| difference container | 223 s | 222 s |
+
+**HLWAS injected (`001_0001` SCA 8 F146, passes 4 to 6, ZOGY), against run 116.**
+
+| | run 116 (run 81's reference, by hand) | **run 127 (loop)** | acceptance |
+|---|---|---|---|
+| detected of 600 | 545 | **546** | ≥ 545, held |
+| alerted / sent | 516 / 516 | 517 / 517 | |
+| false positives per epoch (min, median, max) | 180, 228, 233 | 177, 230, 233 | |
+| false positives per epoch, mean (highest) | 213.7 (233) | **213.3 (233)** | ≤ 214 (233), held |
+| packets | 1,157 | 1,157 | |
+
+The brief reads run 116's "214 (233)" as a median and a highest. They are the mean and the highest (finder-mask's `m-116.json`: `fp_mean` 213.7, `fp_max` 233). The acceptance is judged on the mean and the highest, and both hold. The median is 230 against 228, from the same frames on another image (`:80` against `:78`; diff-trim, PR 446, only stopped making the naive subtraction's catalogs).
+
+Raw evidence is in the brief's `t1/`: `proof.sh`, `flight/`, `hlwas/` (`loop.log`, `check.txt`, `comp.txt`, `comp/`), `e4-metrics.tsv`, `build.log`, `deploy.log`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
