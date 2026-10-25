@@ -124,15 +124,12 @@ NUM_CORES               Number of parallel processes.  Defaults to the number
 SIPDISTORTIONDEGREE     Degree of the SIP fit to the gWCS.  Defaults to 5,
                         which is what the L2Files table stores.
 MAXFILESTOINGEST        Stop after this many files, for short tests.
-<<<<<<< HEAD
 DQMASKBITS              DQ bits whose pixels are set to NaN, as an integer
                         (0x... accepted).  Defaults to 0x2110C03; 0 turns the
                         masking off.
-=======
 L2GZIPLEVEL             gzip compression level (0-9) of the FITS files.
                         Defaults to 1, which is about 30 times faster than 9
                         for a 4 percent larger file.
->>>>>>> dev
 DONTCHECKALREADYINGESTED
                         Set to skip the L2Files query for already-ingested
                         files and (re-)ingest everything in the input bucket.
