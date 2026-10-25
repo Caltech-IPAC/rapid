@@ -6,9 +6,9 @@ with exactly their tables' columns from ``database/schema.sql``, all three
 carrying the one ``rfid`` drawn for the job, the files under the attempt's
 prefix and the header stamped with the job; frames past ``max_frames`` are
 not coadded and are named in the manifest; too few frames, a frame in
-another filter, an input outside the scope's filter and SCA, a refused
+another filter, an input outside the scope's filter, a refused
 setting and a tool that writes nothing each fail the job before a manifest
-is written; the row and the header carry the reference's grade; the run settings body's ``[reference]`` table is valid as it
+is written, and a frame of another SCA is coadded; the row and the header carry the reference's grade; the run settings body's ``[reference]`` table is valid as it
 ships.
 """
 
@@ -168,7 +168,7 @@ def test_frames_past_max_frames_are_not_coadded_and_are_named(tmp_path, frames):
 @pytest.mark.parametrize("case", ["too few", "another filter", "outside the scope"])
 def test_bad_inputs_fail_before_a_manifest(tmp_path, frames, case):
     kwargs = {"too few": {"order": (0,)},
-              "outside the scope": {"key_override": {"sca": 2}}}.get(case, {})
+              "outside the scope": {"key_override": {"fid": FID + 1}}}.get(case, {})
     if case == "another filter":
         with fits.open(frames[1]) as hdul:
             hdul = fits.HDUList([h.copy() for h in hdul])
@@ -177,6 +177,11 @@ def test_bad_inputs_fail_before_a_manifest(tmp_path, frames, case):
     with pytest.raises(ValueError):
         run_reference(tmp_path, frames, **kwargs)
     assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_a_frame_of_another_sca_is_coadded(tmp_path, frames):
+    prefix = run_reference(tmp_path, frames, key_override={"sca": SCA + 1})
+    assert sorted(r["rid"] for r in read(prefix, "refimimages")) == [7000, 7001, 7002]
 
 
 @pytest.mark.parametrize("tables", [

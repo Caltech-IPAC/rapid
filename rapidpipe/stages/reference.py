@@ -27,7 +27,9 @@ Settings: the run's ``[reference]`` table, whose subtables are `dev`'s
 ini sections (``rapidpipe/settings/foundation-thin.toml``).
 
 Inputs, every one an ``input`` row of product ``l2files`` whose key has the
-scope's ``fid`` and ``sca``: the frames, read through
+scope's ``fid``, of any SCA (`dev`'s launcher takes every L2 file whose
+``overlapfields`` list the field; the scope's ``sca`` is the first SCA the
+reference serves): the frames, read through
 :func:`rapidpipe.foundation.prefix.get` by the row's ``filename``, coadded
 in ``mjdobs`` order (`dev`'s launcher orders by mjdobs, then distance). At
 least ``[selection] min_frames``; frames past ``max_frames`` are not
@@ -241,7 +243,7 @@ class Frame:
 
 def _read(job: JobContext) -> tuple[str, list[tuple[int, str]], int]:
     """The scope's filter name, each named L2 row's ``(rid, filename)``, and a new ``rfid``."""
-    fid, sca = int(job.scope["fid"]), int(job.scope["sca"])
+    fid = int(job.scope["fid"])
     l2_inputs = [i for i in job.inputs if i["kind"] == "input" and i["product"] == "l2files"]
     others = sorted({i["product"] for i in job.inputs if i["kind"] == "input"} - {"l2files"})
     if others:
@@ -254,12 +256,11 @@ def _read(job: JobContext) -> tuple[str, list[tuple[int, str]], int]:
             raise ValueError(f"job {job.job}: fid {fid} is not in filters")
         for item in l2_inputs:
             key = item["key"]
-            if (int(key["fid"]), int(key["sca"])) != (fid, sca):
-                raise ValueError(f"job {job.job}: l2files input {key} is not the scope's fid "
-                                 f"{fid} and sca {sca}")
+            if int(key["fid"]) != fid:
+                raise ValueError(f"job {job.job}: l2files input {key} is not the scope's fid {fid}")
             cur.execute("SELECT rid, filename FROM l2files WHERE job = %s AND dataset = %s"
                         " AND expid = %s AND sca = %s AND fid = %s",
-                        (item["source_job"], key["dataset"], key["expid"], sca, fid))
+                        (item["source_job"], key["dataset"], key["expid"], int(key["sca"]), fid))
             row = cur.fetchone()
             if row is None:
                 raise ValueError(f"job {job.job}: no l2files row {key} in job {item['source_job']}")

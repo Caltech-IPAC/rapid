@@ -2,7 +2,12 @@
 
 Contracts: a listed stem with no published intake and no intake job of the
 run is submitted once, and not again while its job is pending; a reference
-is submitted only once its field has ``min_frames`` official L2 rows; every
+is submitted only once its field has ``min_frames`` official L2 rows whose
+``overlapfields`` list it, of any SCA, and only for a field some row to be
+differenced has as its own, scoped to that row's SCA (a dithered visit's
+last epoch gets one from three earlier epochs centred in two other fields;
+a fixed pointing's frames are its own field's rows, whatever neighbours
+they overlap); every
 official source set gets one packet job naming its reference, Gaia, PSF and
 source set only, in any order, whatever else of its field is upstream or
 pending (association is in the difference job), in every field in the same
@@ -14,7 +19,8 @@ its whole key, dataset included. With ``before_mjd`` set: the reference
 names only rows before it and waits while a selected stem is unpublished;
 a difference is submitted only at or after it; a field with too few rows
 before it is reported held and the pass still drains; absent, nothing
-changes. Against Batch: a container that ended without
+changes; a field no row at or after the bound has as its own gets no
+reference and is not held. Against Batch: a container that ended without
 its row recording it is marked failed with Batch's reason; a row marked
 failed whose Batch job is still running is Batch's retry, held pending; a
 local job (no Batch id) is left alone. PSFs: a new stem whose filter and
@@ -111,8 +117,9 @@ def snap(**kw) -> loop.Snapshot:
     return loop.Snapshot(**base)
 
 
-def l2row(field: int, mjd: float, job: int) -> dict:
-    return {"field": field, "mjdobs": mjd, "job": job}
+def l2row(field: int, mjd: float, job: int, overlap: tuple[int, ...] = ()) -> dict:
+    """An official L2 row centred in ``field`` that overlaps ``overlap`` too."""
+    return {"field": field, "overlapfields": sorted({field, *overlap}), "mjdobs": mjd, "job": job}
 
 
 def stages(subs: list[dict], name: str) -> list[dict]:
@@ -419,13 +426,55 @@ def test_the_bound_differences_only_rows_at_or_after_it():
 
 
 def test_a_field_with_too_few_rows_before_the_bound_is_held_and_the_pass_drains():
-    k3, k4 = (expid(3, 1, 1), 8, 8), (expid(4, 1, 2), 8, 8)
-    l2 = {k3: l2row(7, 3.0, 22), k4: l2row(9, 1.0, 23)}         # field 7: none before; 9: one
-    done = [stem(3, 1, 1), stem(4, 1, 2)]
+    k3, k4, k5 = (expid(3, 1, 1), 8, 8), (expid(4, 1, 2), 8, 8), (expid(5, 1, 3), 8, 8)
+    # Field 7: one row before the bound overlaps it; field 11: none. Field 9 is no later row's own.
+    l2 = {k3: l2row(7, 3.0, 22), k4: l2row(9, 1.0, 23, overlap=(7,)), k5: l2row(11, 3.0, 24)}
+    done = [stem(3, 1, 1), stem(4, 1, 2), stem(5, 1, 3)]
     subs, counts = loop.plan(snap(settings=BOUND, l2=l2, published_stems=set(done)), done, SEL)
     assert subs == []
-    assert [(h["field"], h["reason"].split()[0]) for h in counts["held"]] == [(7, "0"), (9, "1")]
+    assert [(h["field"], h["reason"].split()[0]) for h in counts["held"]] == [(7, "1"), (11, "0")]
     assert counts["new"] == 0 and not any(counts["pending"].values())
+
+
+def test_a_dithered_visits_last_epoch_is_referenced_from_the_earlier_epochs_that_overlap_its_field():
+    # Program 1049's four F158 WFI02 epochs (flight-first, PR 445): centred in three fields, every
+    # earlier one overlapping epoch 4's; the bound between epochs 3 and 4.
+    sel = loop.Selection.parse("F146", "2", "all")
+    e1, e2, e3, e4 = ((expid(1, 1, n), 2, 8) for n in (1, 2, 3, 4))
+    l2 = {e1: l2row(3014319, 1.0, 20, overlap=(3010224, 3014320)),
+          e2: l2row(3014320, 2.0, 21, overlap=(3010224, 3014319)),
+          e3: l2row(3014320, 2.1, 22, overlap=(3010224, 3014319)),
+          e4: l2row(3010224, 3.0, 23, overlap=(3014320,))}
+    subs, counts = loop.plan(snap(settings=BOUND, l2=l2, psfs={(8, 2, "science"): (10, 100)}), [], sel)
+    (ref,) = stages(subs, "reference")
+    assert ref["scope"] == {"field": 3010224, "fid": 8, "sca": 2}
+    assert [i["source_job"] for i in ref["inputs"]] == [20, 21, 22] and counts["held"] == []
+
+    # Once it is official, epoch 4 is differenced against it, and nothing else is.
+    subs, _ = loop.plan(snap(settings=BOUND, l2=l2, refs={(3010224, 8): 30},
+                             psfs={(8, 2, "science"): (10, 100)}), [], sel)
+    (diff,) = stages(subs, "difference")
+    assert diff["scope"]["expid"] == e4[0] and diff["inputs"][-1]["source_job"] == 30
+
+
+def test_a_fixed_pointings_reference_takes_its_own_rows_and_none_is_built_for_the_fields_it_overlaps():
+    k1, k2, k3 = ((expid(p, 1, 1), 8, 8) for p in (1, 2, 3))
+    l2 = {k: l2row(7, mjd, job, overlap=(6, 8)) for k, mjd, job in ((k1, 1.0, 20), (k2, 2.0, 21), (k3, 3.0, 22))}
+    subs, counts = loop.plan(snap(settings=BOUND, l2=l2), [], SEL)
+    (ref,) = stages(subs, "reference")
+    assert ref["scope"]["field"] == 7 and [i["source_job"] for i in ref["inputs"]] == [20, 21]
+    assert counts["held"] == []
+
+
+def test_a_reference_takes_overlapping_rows_of_any_sca_scoped_to_the_first_sca_it_serves():
+    sel = loop.Selection.parse("F146", "8,9", "all")
+    a, b, c = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 9, 8), (expid(3, 1, 1), 9, 8)
+    l2 = {a: l2row(5, 1.0, 20, overlap=(7,)), b: l2row(7, 2.0, 21), c: l2row(7, 3.0, 22)}
+    subs, _ = loop.plan(snap(settings=BOUND, l2=l2, psfs={(8, 8, "science"): (10, 100),
+                                                         (8, 9, "science"): (11, 101)}), [], sel)
+    (ref,) = stages(subs, "reference")
+    assert ref["scope"] == {"field": 7, "fid": 8, "sca": 9}
+    assert [(i["key"]["sca"], i["source_job"]) for i in ref["inputs"]] == [(8, 20), (9, 21)]
 
 
 def test_without_the_bound_the_reference_takes_every_row_and_nothing_is_held():
