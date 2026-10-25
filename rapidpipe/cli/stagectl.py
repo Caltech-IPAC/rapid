@@ -98,7 +98,9 @@ def _import_stage(name: str) -> Any:
 def _declaration_or_none(name: str) -> Any:
     try:
         module = _import_stage(name)
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
+        if exc.name != f"rapidpipe.stages.{name.replace('-', '_')}":   # a missing dependency, not the stage
+            raise
         return None
     return getattr(module, "DECLARATION", None)
 

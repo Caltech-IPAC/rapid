@@ -370,30 +370,6 @@ class Storage:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src.path / src_rel, target)
 
-    def read_manifest(self, location_text: str) -> Manifest:
-        """``<location_text>/manifest.json``; :class:`CommandExit` 64 when it
-        is absent or invalid."""
-        location = parse_location(location_text)
-        try:
-            if not location.is_s3():
-                return Manifest.read(location.path / "manifest.json")
-            with tempfile.TemporaryDirectory(prefix="rapidpipe-run-inputs-") as tmp:
-                path = Path(tmp) / "manifest.json"
-                try:
-                    self.s3.download_file(
-                        location.bucket, _key(location, "manifest.json"), str(path))
-                except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-                    if is_not_found(exc):
-                        raise FileNotFoundError(path) from exc
-                    raise
-                return Manifest.read(path)
-        except FileNotFoundError as exc:
-            raise CommandExit(int(ExitCode.USAGE),
-                              f"no manifest.json at {location_text}") from exc
-        except (ValueError, TypeError, KeyError) as exc:
-            raise CommandExit(int(ExitCode.USAGE),
-                              f"{location_text}/manifest.json: invalid manifest: {exc}") from exc
-
     def write_manifest(self, manifest: Manifest, location: Location) -> None:
         if not location.is_s3():
             location.path.mkdir(parents=True, exist_ok=True)

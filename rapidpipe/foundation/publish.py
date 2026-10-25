@@ -46,7 +46,7 @@ from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
 
 from rapidpipe.foundation import catalog as object_catalog
-from rapidpipe.foundation.official import Refused, apply
+from rapidpipe.foundation.official import NotFound, Refused, apply
 from rapidpipe.foundation.prefix import get
 
 #: The tables a manifest may declare outputs for.
@@ -84,7 +84,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                         " WHERE id = %s FOR UPDATE", (job_id,))
             row = cur.fetchone()
             if row is None:
-                raise LookupError(f"job {job_id} does not exist")
+                raise NotFound(f"job {job_id} does not exist")
             state, run, published_attempt, refusal = row
             if state == "published":
                 conn.commit()

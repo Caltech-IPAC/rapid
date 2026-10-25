@@ -26,6 +26,8 @@ from typing import Any, Iterable
 
 from psycopg2.extras import Json, RealDictCursor
 
+from rapidpipe.foundation.official import NotFound
+
 
 def create_run(conn, who: str, why: str, revision: str, settings: dict,
                survey: str, dataset: str, layers: dict | None = None) -> int:
@@ -78,7 +80,7 @@ def run_show(conn, run_id: int) -> dict[str, Any]:
         cur.execute("SELECT * FROM runs WHERE id = %s", (run_id,))
         run = cur.fetchone()
         if run is None:
-            raise LookupError(f"run {run_id} does not exist")
+            raise NotFound(f"run {run_id} does not exist")
         cur.execute("SELECT id FROM official WHERE run = %s AND closed_at IS NULL", (run_id,))
         live = cur.fetchone()
         cur.execute("SELECT id, stage, state, published_attempt, refusal FROM jobs"
@@ -93,7 +95,7 @@ def job_show(conn, job_id: int) -> dict[str, Any]:
         cur.execute("SELECT * FROM jobs WHERE id = %s", (job_id,))
         job = cur.fetchone()
         if job is None:
-            raise LookupError(f"job {job_id} does not exist")
+            raise NotFound(f"job {job_id} does not exist")
         cur.execute("SELECT kind, product, key, source_job, binding FROM job_inputs"
                     " WHERE job = %s ORDER BY kind, product", (job_id,))
         inputs = [dict(r) for r in cur.fetchall()]
