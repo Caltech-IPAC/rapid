@@ -7906,7 +7906,7 @@ Check, held:
 
 Raw evidence is in the brief's `t1/`: `probe/`, `before-sca7/`, `after-sca7/`, `after-sca8/`, `comp-*/`, `m-*.json`, `pairing.diff` and `masks/`.
 
-## Results of part 13 so far (2026-10-24 22:35 UTC)
+## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
 each, several in parallel, and every brief's task wrote `TASK DONE` on
@@ -7919,7 +7919,14 @@ SFFT was published, measured worse than ZOGY on the same bytes, and the
 published differencer is now the setting `[difference] diff_flavor`,
 shipped `zogy`; `dev`'s pixel columns and its prefilter, the remedy Ben
 named, are ported under `sfft` and measured: they do not bring SFFT to
-ZOGY on HLWAS, so `zogy` stays. The gate holds on lost sky and
+ZOGY on HLWAS, so `zogy` stays. SFFT's bright-star core residual on
+HLWAS was the stage's zeroed DQ-masked science cores in its kernel fit;
+the HLWAS overlay carries `dev`'s OpenUniverse SFFT block, which avoids
+them, and under it SFFT with the prefilter detects 530 of 600 against
+ZOGY's 542 at half the false positives: still short on the total, so
+`zogy` stays. The PSF-fit catalog's finder now sees past masked pixels
+(SCA 7 below AB 25 0.728 → 0.959). RimTimSim F213 and F087 and a second
+GBTDS pointing ran through the chain. The gate holds on lost sky and
 misregistration too. Every run below is CLEAN by `check_run.sh` except
 run 83, which failed on purpose.
 
@@ -7937,8 +7944,14 @@ run 83, which failed on purpose.
 | dev-columns | no sumrat, nneg, nbad | on every SFFT candidate after a 64 px local background, on `sources` under `sfft`; run 96 identical to 88 but for the columns; sumrat > 0.4 keeps 0.997 of injected, 0.68 of noise, 0.90 of bright-flagged; 4.3 to 5.2 s a difference; schema statement applied 21:26 UTC | PRs 422, 427; rapid_docs 112 |
 | mig-quickstart | no local recipe; the loop page had no night from scratch | README Getting started, one HLWAS epoch in the image against a throwaway `postgres:18`, verbatim twice, 465 packets, validate 6/6; the loop page's Starting a night verbatim on SMDC, run 97 CLEAN 471 / 471 | PRs 423, 428; rapid_docs 109 |
 | gate-metrics | lost sky and misregistration invisible to the gate | holds at `usable_fraction` < 0.9 and offset > 0.25 px; replay of 4,627 sets holds run 72 SCA 9's three (usable 0.704) and nothing healthy; run 98 CLEAN as smoke | PRs 426, 430; rapid_docs 111 |
-| rimtimsim-reader (code only) | no FITS reader | `[intake] reader = "rimtimsim"`, overlay `rimtimsim-260622.toml`; one file: WCS (+0.052, +0.060) px from 588 Gaia stars, so no `crpix_shift`; the chain's runs are its step's | PR 429 |
+| rimtimsim-reader | no FITS reader | `[intake] reader = "rimtimsim"`, overlay `rimtimsim-260622.toml`; one file: WCS (+0.052, +0.060) px from 588 Gaia stars, so no `crpix_shift`; F213 (run 99) and F087 (run 100), 10 reference frames and 5 epochs each, CLEAN, every job first attempt, difference 3,767–4,318 s (F213) and 1,648–1,892 s (F087); F213 core −0.075 to −0.050 (one set held); the science PSF transposed changes nothing (run 101); the 250513 truth's times and positions agree, its injected signal does not, so completeness waits on a 260622 truth | PRs 429, 437; rapid_docs 118 |
 | dev-prefilter | SFFT's catalog capped raw | under `sfft`, sumrat > 0.4 and the 2 px edge before the cap, `""` none; same bytes, three arms: ZOGY detected 542 of 600, raw SFFT 256, SFFT with the cut 275 (AB 25 bin 57 / 0 / 0 of 57), false positives per epoch 214 / 385 / 388, null packets 182 / 471 / 478; the cut drops a third of SFFT's candidates but the bright-star residuals refill the cap, so `diff_flavor` stays `zogy` and the gate's core and ring bounds stay (arm A's sit inside them) | PRs 431, 432, 434; rapid_docs 114 |
+| sfft-core | SFFT on HLWAS under the socsims block: core +0.251, ring +0.021 (run 88) | the cause: the stage's zero-filled DQ-masked science cores (5,096 px, 31% of Σ ref²) in the unmasked kernel fit, masking them alone gives core −0.014; the HLWAS overlay carries `dev`'s OpenUniverse block (cross-convolution, segmentation, gain-match catalogs, bsmask 50 / 100), read only under `sfft`: core −0.000, ring −0.009, injected 179 of 200 against 130 (ZOGY 183) on one pair (run 109); Batch proof run 111 on `:77`, core −0.000026 | PRs 435, 436; rapid_docs 116 |
+| gbtds-second | one GBTDS pointing (run 67, 268.54 −28.54 SCA 8) | 266.71 −28.93 SCA 2 F146 (`r00340-gb3`), run 112 on `:77`: difference 1,036 s (820), reference 9100 px peak 4,514 of 6,144 MiB (27% margin), every kept source above S/N 20 (497–500 of 500), 1,278 packets; the gate sends every set unjudged below `min_epochs`; `gaia_dy_px` +0.27 constant on SCA 2 | PR 438 |
+| sfft-rearm | SFFT with the prefilter, socsims block: 275 of 600 (run 107) | under the HLWAS OpenUniverse block (runs 114 / 113 on `:77`): detected 530 of 600 against ZOGY's 542 (losses only at AB 26 and 26.5; AB 24–25 93 = 93), false positives per epoch 102 (118) against 214 (233), null packets 86 against 182, core and ring inside the gate's bounds; `dev-prefilter`'s rule fails on the total, so the overlay stays `zogy` | PR 440; rapid_docs 119 |
+| finder-mask | the PSF-fit finder missed any star within about 4 px of a NaN (photutils 3.0.0 builds the mask itself; `mask=` alone is a no-op) | the difference's non-finite pixels filled from their neighbours (Gaussian σ 1 px) for the finder and passed as the mask to finder and fit, every PSF-fit catalog; same bytes: SCA 7 below AB 25 0.728 → 0.959 (within 5 px of a mask 9 → 81 of 93), false positives per epoch 174 → 165 (runs 115 → 117); SCA 8 542 → 545 of 600, false positives 214 (233) unchanged (run 116); a star whose peak pixel is masked is still missed | PRs 439, 442; rapid_docs 121 |
+| mig-stale | AGENTS.md, CONTRIBUTING, README, `db.rst`, the tool page, the stage navigation and the workstation page described commands, branches and schema files that do not exist | each says what `rebuild` does at the tip, retired and older-contract pages out of the stage navigation; no code path changes | PR 441; rapid_docs 120; rapid_systems 427 |
+| flight-first (overlay only) | no flight overlay | `flight-1049.toml`: program 1049's four F158 WFI02 epochs read by the `soc-l2` reader unchanged, `program_id = 1049`, HLWAS's DQ mask 0x2110C01 (0.231% masked), no WCS correction (tweakreg rmse 0.013–0.015 px; the 2016.0 Gaia offset is proper motion); no run merged yet | PR 443 |
 
 **The current procedure**, where these steps changed it:
 
@@ -7960,7 +7973,9 @@ run 83, which failed on purpose.
   `psfs` rows (runs 88, 89, 96).
 - The published catalog is ZOGY's unless a run sets
   `difference.diff_flavor="sfft"`; SFFT's catalogs and their pixel
-  columns are under every difference job's `diff/` either way.
+  columns are under every difference job's `diff/` either way. Under
+  `sfft` a dataset's overlay may carry its own `[difference.sfft]`
+  block; HLWAS's is `dev`'s OpenUniverse block.
 - The unit suite runs under `env -u RAPID_PARAMETER_PATH` once the
   session has exported it for the database.
 
@@ -7971,20 +7986,42 @@ The live runs the part made: 83 (`r00342-et-fail`), 84
 `r00342-dr-inj9100`, `r00342-dr-null7000`, `r00342-dr-null9100`), 95
 (`r00342-wk-errtrans`), 96 (`r00342-dc-cols-inj`), 97
 (`r00342-mq-night`), 98 (`r00342-gm-smoke`), 102 to 107
-(dev-prefilter's three arms, injected and null). Job definitions
-`rapid-rebuild:65` to `:76` were registered; `:75` is `479eb163` (PR
-429) and `:76`, the latest, `14860f57` (PR 431). The one schema statement was PR 422's `ALTER TABLE sources
+(dev-prefilter's three arms, injected and null), 99 to 101
+(`rts260622-f213`, `rts260622-f087`, `rts260622-f213-psft`), 108 to
+110 (`r00342-sfft-core-{S,X,G}`, local) and 111 (its Batch proof), 112
+(`r00340-gb3`), 113 and 114 (`r00342-sr-c-null`, `r00342-sr-c-inj`),
+115 to 117 (finder-mask's SCA 7 before, SCA 8 after, SCA 7 after). Job
+definitions `rapid-rebuild:65` to `:78` were registered; `:76` is
+`14860f57` (PR 431), `:77` `a761ae23` (PR 435) and `:78`, the latest,
+`1e2af61a` (PR 439). The one schema statement was PR 422's `ALTER TABLE sources
 ADD COLUMN`. Flight program 1049's four F158 WFI02 epochs are in the
-inputs bucket under `flight-1049/`, read by no run yet. Nothing was
-deleted.
+inputs bucket under `flight-1049/` with overlay `flight-1049.toml` (PR
+443), read by no merged run yet. Nothing was deleted.
 
 **What remains, and where it sits:**
 
-- **Whether `sfft` comes back**: not through the catalog's selection.
-  sumrat keeps 0.90 of SFFT's point-like bright-star residuals on HLWAS,
-  so the route is SFFT's own configuration (queue item `sfft-core`).
-  Under SFFT `n_sources_snr_gt20` saturates at the cap, so the gate's
-  count check cannot see an SFFT epoch off-scale (PR 432).
+- **Whether `sfft` comes back**: under the HLWAS OpenUniverse block it
+  trails ZOGY only at AB 26 and 26.5 (530 against 542 of 600) at half
+  the false positives (step sfft-rearm). The lever left unmeasured is
+  excluding the zeroed DQ cores from SFFT's fit in the stage
+  (`rapidpipe/stages/difference.py`, PR 435); GBTDS's and RimTimSim's
+  blocks are unchecked for the same effect. Under the socsims block
+  `n_sources_snr_gt20` saturates at the cap, so the gate's count check
+  cannot see an SFFT epoch off-scale (PR 432).
+- **A star whose peak pixel is masked** is still missed by the PSF-fit
+  finder, about 0.6% of SCA 7's sources (PR 439).
+- **The gate is inert on a sample run**: it judges a set only once the
+  run has `min_epochs` differences, so the five-epoch RimTimSim runs and
+  the three-epoch GBTDS run sent unjudged sets; on GBTDS under
+  `reference_psf = "science"` only `usable_fraction` exists to judge
+  (PRs 437, 438).
+- **RimTimSim completeness** waits on a 260622 truth from the
+  simulator's authors; F213's core over-subtraction (−0.075 to −0.050)
+  is that dataset's next measurement (PR 437).
+- **GBTDS SCA 2's constant `gaia_dy_px` +0.27 px**, unread; the
+  reference at 27% memory margin on GBTDS (PR 438). On flight data the
+  intake's Gaia offset reads proper motion as WCS offset, about 0.45 px
+  (PR 443).
 - **The false positives per epoch** under the field rule, a median 224
   on the injected footprint under ZOGY (part 12), unchanged by this part.
 - **The injected arms' 415 false positives per epoch** (runs 91, 92)
@@ -8037,6 +8074,14 @@ from in brackets):
   merged in and the walk-through rerun on it (423).
 - gate-metrics, rimtimsim-reader: COMMON's "at writing" facts were one
   merge behind PR 425 (426, 429).
+- sfft-core: a `sleep` inside a backgrounded Bash subshell never
+  returned on the planner host (435).
+- rimtimsim-reader, gbtds-second: the public-safety scan reads any 12
+  consecutive digits (a 40-character sha, a GBTDS stem fragment) as an
+  account id (437, 438).
+- finder-mask: PR 391's synthetic claim that `mask=` alone suffices did
+  not reproduce on the deployed photutils; the plan pass's "actual path
+  first" probe caught it (439).
 
 ## Validation
 
