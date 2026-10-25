@@ -98,7 +98,23 @@ name is arbitrary.
    cd /home/ubuntu/work/run_20261015
    aws s3 cp s3://rapid-pipeline-files/roman_tessellation_nside512.db roman_tessellation_nside512.db
 
-   docker run -it --entrypoint bash --name rapid-run-20261015 -v /home/ubuntu/work/run_20261015:/work public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+   docker run -it --entrypoint bash --name rapid-run-20261015 --shm-size=64g -e TMPDIR=/dev/shm \
+       -v /home/ubuntu/work/run_20261015:/work \
+       -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1 -e NUMEXPR_NUM_THREADS=1 \
+       public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest
+
+The options after the container name were adopted for the 10/21/2026 socsims test (see
+:doc:`../dev/socsim_tests`):
+
+* ``--shm-size=64g`` and ``-e TMPDIR=/dev/shm`` put the container's temporary files in memory
+  (``/dev/shm``, 64 MB by default in Docker) rather than on the instance's root volume.  Forced
+  photometry in alert production stages each previous image there; on the root volume (gp3, 125
+  MiB/s) that was disk-bound at 33.9 s per image, in memory it took 2.1 s.  The 64 GB come out of
+  the instance's memory, so lower the size on an instance with less memory.
+* ``OMP_NUM_THREADS``, ``OPENBLAS_NUM_THREADS``, ``MKL_NUM_THREADS`` and ``NUMEXPR_NUM_THREADS``
+  set to 1 keep each process to one thread.  The pipeline stages already run one process per core,
+  and without these, numpy, scipy and numexpr would each start as many threads as there are cores
+  in every process, overloading the machine.
 
 Inside the container, set the environment that all stages use:
 
