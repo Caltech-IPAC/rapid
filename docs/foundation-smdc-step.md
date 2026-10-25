@@ -8196,6 +8196,49 @@ Result, held: **0 rows**, over **124 runs (1 to 124) at 2026-10-25 00:51:07 UTC*
 
 Left in place, nothing deleted: the scratch samples, the host files, `r00342-inj1/` and every other existing prefix. No live run or overlay is re-pointed to the copies. A run's `intake.source_root` is set at `run create`, and the copies' prefixes are what a new run's `--set` would name. The raw evidence is in the brief's `t1/`: `runs.tsv`, `paths.tsv`, `jobsweep.tsv`, `live_inputs.tsv`, `plan.tsv`, `copied.tsv`, `reused-verified.tsv`, `g0008_manifest.json`, `g0008-listing.txt`, `imss_check.psql.out` and `imss_control.out`.
 
+### Step ou-zp: acceptance failed: false positives 493 against at most 492; the zero points and `sca_gain = 1.0` held every other line (`scalefacref` 1.011), so the overlay stays
+
+**The arm** (`rapid-rebuild:78`, `1e2af61a`): run 123's recipe exactly, under its own dataset `ou-zp`, run **125**. That is H158 SCA 10, run 80's six reference frames and bound (`before_mjd` 62026.3), the truth-star Gaia import and epoch 28737. The run was made live before its import. It carries ou-gain's overlay block by `--set` (the eight `[reference.awaicgen] zprefimg_<filter>` at the `[intake.nominal_zptmag]` values) and `sca_gain = 1.0` in both `[reference.instrument]` and `[difference.instrument]`:
+
+```sh
+rp run create ... --revision 1e2af61aee4eb495bb02c805c2be48c44b16cfe5 --overlay rapidpipe/settings/datasets/openuniverse-tds.toml \
+  --set "intake.source_root=\"$OU_ROOT\"" --set reference.selection.before_mjd=62026.3 \
+  --set reference.awaicgen.zprefimg_<filter>=<nominal_zptmag> (x8) \
+  --set reference.instrument.sca_gain=1.0 --set difference.instrument.sca_gain=1.0 --survey HLTDS --dataset ou-zp   # run 125
+rp official change --group live.json ...; rp job local --run 125 --stage import ...                               # live; truth stars
+rp loop --run 125 --filters F158 --scas 10 --pointings 247,632,1017,1402,1787,2172,28737 \
+  --job-definition rapid-rebuild:78 --interval 60                                                                 # 00:53 to 01:06 UTC, exit 0
+scripts/check_run.sh --run 125 --inspect DIR; python scripts/completeness_ou.py --run 125
+```
+
+Check, held:
+- 12 jobs (1 import, 1 psf, 7 intake, 1 reference, 1 difference, 1 packet), each published on its first attempt.
+- `check_run.sh` is **CLEAN**: validate 6/6, reader 1/1, consumer 497/497.
+- The inputs are run 123's objects. Every intake, reference and difference job has the same scope and input keys as run 123's. The only difference is the dataset's own truth-catalog name, a copy of the same parquet.
+
+| | run 123 (zero point only) | run 125 (zero points, `sca_gain` 1.0) | acceptance |
+|---|---|---|---|
+| **`scalefacref`** | 1.0178 | **1.0112** | 0.984 to 1.033, held |
+| core, ring | −0.0229, +0.0121 | −0.0202, +0.0136 | `[gate]` 0.025, 0.015, held |
+| evaluated, detected, alerted | 56, 4, 4 | 56, 4, 4 | detected ≥ 4, held |
+| **false positives** (bright, galaxy, other) | 492 (31, 7, 454) | **493** (26, 8, 459) | ≤ 492, **failed** |
+| `n_candidates`, kept, kept above S/N 20 | 2,616, 500, 399 | 2,593, 500, 265 | |
+| difference container | 273 s | 276 s | |
+| reference coadd std / median uncertainty | 1.629 (0.02402 / 0.01475) | 1.350 (0.02402 / 0.01780) | reported |
+| ZOGY difference std / median uncertainty | 0.980 (0.03792 / 0.03870) | 0.977 (0.04175 / 0.04272) | reported |
+| science sky std / model (151 counts) | 15.17 / 9.88 = 1.535 at gain 2 | 15.17 / 15.47 = 0.980 at gain 1 | reported |
+
+**The acceptance fails on one line.** False positives are 493, one more than run 123's 492, so no overlay PR merges. The overlay keeps the shipped zero points and gain. The candidate overlay (both keys, their comments with this run's numbers) is pushed on branch `ou-zp/1-overlay` and not proposed.
+- Every other line held: `scalefacref` 1.0112 inside run 80's own spread, detected 4 = 4, and core and ring inside the gate's bounds.
+- The packets are 497 against 496. The cap kept 500 of 2,593 candidates against 500 of 2,616.
+- Gain 1 raises both images' uncertainties as the model says:
+  - The reference coadd's median uncertainty rises × 1.207, and its std / uncertainty moves 1.629 to 1.350.
+  - Kept candidates above S/N 20 fall 399 to 265.
+- The difference's pixels change too (std 0.0379 to 0.0418), so the cap fills with a different 500. The one extra false positive is inside that reshuffle (bright 31 to 26, other 454 to 459).
+- The 500-source cap is `ou-cap`'s, not this step's.
+
+Raw evidence is in the brief's `t1/`: `create.sh`, `loop.sh`, `run125*.json`, `job*.json`, `r123/`, `loop-125.log`, `check-125.log`, `comp-125*`, `measure_unc.py`, `unc-123.out`, `unc-125.out`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
