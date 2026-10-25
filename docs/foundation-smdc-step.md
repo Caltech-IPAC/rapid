@@ -8470,6 +8470,44 @@ Raw evidence is in the brief's `t1/`:
 - the queries `q0` to `q9`, each `.sql` with its `.out`; `measure.out`;
 - the results: `sets-{81,80,38,37,36}.tsv`, `summary.txt`, `extra.txt`, `tables.md`.
 
+### Step diff-trim: the naive subtraction's PSF-fit catalogs are no longer made; one RimTimSim F213 difference 4,169 s → 2,645 s on the same bytes, its rows unchanged
+
+Brief `diff-trim`, task 1.
+
+**The change** (rapid PR 446, `6681cdd5`; `rapid-rebuild:79`). The difference job no longer runs the naive subtraction's Photutils PSF-fit catalogs, positive or negative. It still makes, as dev does:
+- the naive image, its masked and negative images and its uncertainty;
+- its SExtractor catalogs.
+
+`[naive_diffimage] naive_diffimage_flag` is unchanged. A catalog not run sets no outcome bit, so `infobitssci` bits 4 and 5 are never set. ZOGY's and SFFT's catalogs are untouched. No setting was added. One `decisions.md` entry, `decision-naive-no-psfcat` (rapid_docs PR 126).
+
+**The runs.** Same bytes, dev-prefilter's arm method (the brief's `t1/arm.sh`, `t1/scripts/submit.py`). The sample is RimTimSim 260622 lite F213, field 4682737 SCA 2, epoch pointing 4571, under `rimtimsim-260622.toml` with run 99's `--set` layer. Difference and packet jobs were hand-submitted against run 99's `refimages` and `psfs` rows (reference job 22939, PSF job 22921). Both arms ran on the prompt queue on m6a.2xlarge, every job first attempt, with equal settings hashes (`sha256:5ce2dee3…`, seed 0).
+
+| arm | dataset | run | revision / job definition | check_run |
+|---|---|---|---|---|
+| before | `rts-dt-before` | 122 | `1e2af61a` / `:78` | **CLEAN** validate 6/6, reader 1/1, consumer 349/349 |
+| after | `rts-dt-after` | 124 | `6681cdd5` / `:79` | **CLEAN** validate 6/6, reader 1/1, consumer 349/349 |
+
+Byte identity: the reference image, coverage map, uncertainty, catalog and science PSF the two difference jobs read hash equal. The science L2 file is each arm's own intake product: its pixels are equal, and only its `CHECKSUM`, `CREATED` and `SWVERS` (job id) cards differ. `git diff 1e2af61a 6681cdd5 -- rapidpipe/ requirements.txt` holds this change, PR 441's docstring lines and the `flight-1049.toml` overlay, which neither arm reads.
+
+| | before | after |
+|---|---|---|
+| difference container s | 4,169 | **2,645** (−37%) |
+| ZOGY PSF-fit catalogs s, positive / negative | 210 / 879 | 210 / 860 |
+| SFFT PSF-fit catalogs s, positive / negative | 1,029 / 317 | 1,020 / 310 |
+| naive PSF-fit catalogs s, positive / negative | 1,247 / 245 | not run |
+| peak RSS MiB | 16,348 | 16,361 |
+| `sources` rows / packets | 500 / 349 | 500 / 349 |
+
+**The row comparison.** Each run's official rows were compared as multisets, exactly, with only the execution identities excluded (`diffimages` `pid`, `rid`, `job`, `dataset`, `filename`, `created`; `sources` `job`, `dataset`, `pid`):
+- **`sources`: all 27 columns are equal.**
+- **`diffimages`: 19 of 20 columns are equal**, `infobitssci` 0 = 0 among them. The one differing column is `checksum`, 1 of 1 rows. It is the published file's MD5, and the file's pixels are equal; its header differs only in `CHECKSUM`, `CREATED`, `DATE` and `SWVERS` (job id), so no two jobs' checksums can agree.
+
+The manifest metrics are equal: core −0.0694, ring −0.0339, 19,798 candidates.
+
+What the change does not reach: ZOGY's negative and SFFT's positive catalogs are now 71% of the job (860 s and 1,020 s), and they are not changed here.
+
+Raw evidence: the brief directory's `t1/`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
