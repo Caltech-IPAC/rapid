@@ -8508,7 +8508,7 @@ What the change does not reach: ZOGY's negative and SFFT's positive catalogs are
 
 Raw evidence: the brief directory's `t1/`.
 
-## Results of part 13 so far (2026-10-25 00:21 UTC)
+## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
 each, several in parallel, and every brief's task wrote `TASK DONE` on
@@ -8527,10 +8527,16 @@ the HLWAS overlay carries `dev`'s OpenUniverse SFFT block, which avoids
 them, and under it SFFT with the prefilter detects 530 of 600 against
 ZOGY's 542 at half the false positives: still short on the total, so
 `zogy` stays. The PSF-fit catalog's finder now sees past masked pixels
-(SCA 7 below AB 25 0.728 → 0.959). RimTimSim F213 and F087 and a second
-GBTDS pointing ran through the chain. The gate holds on lost sky and
-misregistration too. Every run below is CLEAN by `check_run.sh` except
-run 83, which failed on purpose.
+(SCA 7 below AB 25 0.728 → 0.959). RimTimSim F213 and F087, a second
+GBTDS pointing and the first flight data (program 1049) ran through the
+chain. The gate holds on lost sky and misregistration too. The loop
+builds a field's reference from every row whose `overlapfields` list it,
+of any SCA, as `dev`; the intake's Gaia offset can carry the stars to the
+frame's epoch (flight only); the naive subtraction makes no PSF-fit
+catalog. Two OpenUniverse overlay changes failed their acceptance and the
+overlay is unchanged. Every live run's inputs are in the inputs bucket.
+Every run below is CLEAN by `check_run.sh` except run 83, which failed on
+purpose.
 
 | step | before | after | where |
 |---|---|---|---|
@@ -8553,7 +8559,14 @@ run 83, which failed on purpose.
 | sfft-rearm | SFFT with the prefilter, socsims block: 275 of 600 (run 107) | under the HLWAS OpenUniverse block (runs 114 / 113 on `:77`): detected 530 of 600 against ZOGY's 542 (losses only at AB 26 and 26.5; AB 24–25 93 = 93), false positives per epoch 102 (118) against 214 (233), null packets 86 against 182, core and ring inside the gate's bounds; `dev-prefilter`'s rule fails on the total, so the overlay stays `zogy` | PR 440; rapid_docs 119 |
 | finder-mask | the PSF-fit finder missed any star within about 4 px of a NaN (photutils 3.0.0 builds the mask itself; `mask=` alone is a no-op) | the difference's non-finite pixels filled from their neighbours (Gaussian σ 1 px) for the finder and passed as the mask to finder and fit, every PSF-fit catalog; same bytes: SCA 7 below AB 25 0.728 → 0.959 (within 5 px of a mask 9 → 81 of 93), false positives per epoch 174 → 165 (runs 115 → 117); SCA 8 542 → 545 of 600, false positives 214 (233) unchanged (run 116); a star whose peak pixel is masked is still missed | PRs 439, 442; rapid_docs 121 |
 | mig-stale | AGENTS.md, CONTRIBUTING, README, `db.rst`, the tool page, the stage navigation and the workstation page described commands, branches and schema files that do not exist | each says what `rebuild` does at the tip, retired and older-contract pages out of the stage navigation; no code path changes | PR 441; rapid_docs 120; rapid_systems 427 |
-| flight-first (overlay only) | no flight overlay | `flight-1049.toml`: program 1049's four F158 WFI02 epochs read by the `soc-l2` reader unchanged, `program_id = 1049`, HLWAS's DQ mask 0x2110C01 (0.231% masked), no WCS correction (tweakreg rmse 0.013–0.015 px; the 2016.0 Gaia offset is proper motion); no run merged yet | PR 443 |
+| flight-first | no flight overlay | `flight-1049.toml`: program 1049's four F158 WFI02 epochs read by the `soc-l2` reader unchanged, `program_id = 1049`, HLWAS's DQ mask 0x2110C01 (0.231% masked), no WCS correction (tweakreg rmse 0.013–0.015 px); run 118 on `:78` CLEAN, 328 packets, every job first attempt, ePSF 0239 on all four; e4 (core +0.0013, ring −0.0050, usable 0.781) was differenced against a hand-submitted reference from e1 to e3, since superseded by ref-overlap; 3,116 recurrent hot pixels, 341 unflagged, 472 unmasked, no one mask bit fixes them; stars 1.19–1.20 times the ePSF's sigma; pointing oscillation unmet, not observable in four 60 s frames | PRs 443, 445; rapid_docs 123 |
+| ou-gain | OpenUniverse `scalefacref` 2.2 unexplained | it is the reference zero point: shipped `zprefimg_h158` 25.6549 (socsim) against OpenUniverse's ZPTMAG 26.5113, 10^(0.4 × 0.8564) = 2.2006 (124 stars 2.214), not `sca_gain`; on the science's own zero points it reads 1.0178 with every other line held (runs 121 / 123 on `:78`), outside the brief's 0.94–1.01, so the overlay stays; `sca_gain` 2 makes the science sky's std 1.535 times its model | PR 448 |
+| self-contained | some live runs read their inputs from the scratch bucket or host files | every live run's L2, truth and Gaia in the inputs bucket: 139 objects copied under `g0008-selfcontained/` (24.99 GB, manifest-sealed, listing = manifest), 489 verified in place (99.53 GB); 0 of runs 1 to 124 name an IMSS bucket; no run re-pointed; runs 53 and 54's Gaia copy unverifiable (its scratch original deleted) | PR 449; rapid_docs 124 |
+| ou-zp | OpenUniverse on the socsim zero points and `sca_gain` 2 | **acceptance failed**, the overlay unchanged: the science's own zero points and `sca_gain = 1.0` together (run 125 on `:78`, run 123's inputs) give `scalefacref` 1.0112, detected 4 = 4, core and ring inside the gate, reference std / uncertainty 1.629 → 1.350, but false positives 493 against at most 492, a count inside the capped 500; the candidate is on branch `ou-zp/1-overlay`, the tolerance Ben's | PR 451 |
+| ref-overlap | a field's reference only from rows whose own field is that field: flight e4 needed a hand reference | from every selected row before the bound whose `overlapfields` list the field, of any SCA, as `dev`'s `get_overlapping_l2files` (membership parity; `dev`'s distance-from-centre order not ported); flight run 126 on `:80` builds e4's reference from e1 to e3 itself, e4 identical to run 118; HLWAS injected 546 of 600 against 545 (run 127 against 116), false positives per epoch 213.3 (233) against 213.7 (233) | PRs 450, 452; rapid_docs 125 |
+| gaia-pm | the intake's Gaia offset at Gaia's 2016.0: flight dy −0.56 to −0.35 px of proper motion read as WCS offset | `[intake] gaia_proper_motion` carries each star to the frame's mid-exposure, shipped `false`, `flight-1049.toml` `true`; run 128 on `:81`: flight dy −0.060 to −0.038, dx −0.0909 to −0.045, every file the hand propagation to three decimals; **acceptance failed** on e4's dx −0.0909 against the brief's 0.09, PR 445's two-decimal summary of the same −0.091, the propagation left in force; HLWAS unchanged (+0.007 / +0.003 under the overlay, run 129); GBTDS SCA 2's dy +0.232 → +0.297 propagated, so its offset is not proper motion | PRs 453, 454 |
+| forced-growth | `forced` "about 400 MB after about 5,000 epochs" | 4.83 M rows, 1.02 GB, 211 B a row, 81% on HLWAS breadth runs 36 to 38; a set's rows are its objects times its window images (median ratio 1.000, packets flat); breadth fields span under 10 days, so the 30-day window never closes and a field's cumulative rows grow quadratically in epoch over 1 to 26; copies 0.57 of run 38's rows, and copies cross runs of one dataset (run 38 from 27 and 33); past a 30-day span unmeasured | PR 455 |
+| diff-trim | the naive subtraction's positive and negative PSF-fit catalogs made, unpublished and unread | not made; the naive image and its SExtractor catalogs stay, naive catalog bits 4 and 5 never set; RimTimSim F213 epoch 4571 on the same bytes (runs 122 on `:78`, 124 on `:79`): difference 4,169 → 2,645 s, `sources` equal in all 27 columns, `diffimages` equal but `checksum` (the file's job-id and timestamp cards; pixels equal), 349 packets both | PRs 446, 456; rapid_docs 126 |
 
 **The current procedure**, where these steps changed it:
 
@@ -8578,6 +8591,16 @@ run 83, which failed on purpose.
   columns are under every difference job's `diff/` either way. Under
   `sfft` a dataset's overlay may carry its own `[difference.sfft]`
   block; HLWAS's is `dev`'s OpenUniverse block.
+- A dithered visit needs no hand reference: the loop plans a reference
+  for each field a row at or after the bound has as its own, from the
+  rows before the bound whose `overlapfields` list it (run 126). The
+  live runs' existing references were built under the earlier rule and
+  are not re-planned.
+- A flight overlay sets `[intake] gaia_proper_motion = true`; the SOC
+  simulations place their stars at 2016.0 and leave it off.
+- A same-bytes comparison of a difference job reads the image's pixels,
+  not `diffimages.checksum`: the file carries its job id and timestamps
+  (step diff-trim).
 - The unit suite runs under `env -u RAPID_PARAMETER_PATH` once the
   session has exported it for the database.
 
@@ -8592,13 +8615,18 @@ The live runs the part made: 83 (`r00342-et-fail`), 84
 (`rts260622-f213`, `rts260622-f087`, `rts260622-f213-psft`), 108 to
 110 (`r00342-sfft-core-{S,X,G}`, local) and 111 (its Batch proof), 112
 (`r00340-gb3`), 113 and 114 (`r00342-sr-c-null`, `r00342-sr-c-inj`),
-115 to 117 (finder-mask's SCA 7 before, SCA 8 after, SCA 7 after). Job
-definitions `rapid-rebuild:65` to `:78` were registered; `:76` is
-`14860f57` (PR 431), `:77` `a761ae23` (PR 435) and `:78`, the latest,
-`1e2af61a` (PR 439). The one schema statement was PR 422's `ALTER TABLE sources
-ADD COLUMN`. Flight program 1049's four F158 WFI02 epochs are in the
-inputs bucket under `flight-1049/` with overlay `flight-1049.toml` (PR
-443), read by no merged run yet. Nothing was deleted.
+115 to 117 (finder-mask's SCA 7 before, SCA 8 after, SCA 7 after), 118
+(`flight-1049`), 121 and 123 (`ou-gain-before`, `ou-gain-after`; 119
+and 120 created and never live), 122 and 124 (`rts-dt-before`,
+`rts-dt-after`), 125 (`ou-zp`), 126 (`flight-1049-ro`), 127
+(`r00342-ro-inj`), 128 (`flight-1049-pm`), 129 (`r00342-pm`) and 130
+(`r00340-gb3-pm`; 131 and 132 never live). Job definitions
+`rapid-rebuild:65` to `:81` were registered; `:77` is `a761ae23` (PR
+435), `:78` `1e2af61a` (PR 439), `:79` `6681cdd5` (PR 446), `:80`
+`d7e67597` (PR 450) and `:81`, the latest, `a5e8a872` (PR 453). The one
+schema statement was PR 422's `ALTER TABLE sources ADD COLUMN`. Every
+live run's inputs are in the inputs bucket (step self-contained).
+Nothing was deleted.
 
 **What remains, and where it sits:**
 
@@ -8620,10 +8648,30 @@ inputs bucket under `flight-1049/` with overlay `flight-1049.toml` (PR
 - **RimTimSim completeness** waits on a 260622 truth from the
   simulator's authors; F213's core over-subtraction (−0.075 to −0.050)
   is that dataset's next measurement (PR 437).
-- **GBTDS SCA 2's constant `gaia_dy_px` +0.27 px**, unread; the
-  reference at 27% memory margin on GBTDS (PR 438). On flight data the
-  intake's Gaia offset reads proper motion as WCS offset, about 0.45 px
-  (PR 443).
+- **GBTDS SCA 2's constant `gaia_dy_px` +0.27 px** is not proper motion
+  (propagated it reads +0.297); SCA 2's distortion or the Gaia sample
+  remain, unread; the reference at 27% memory margin on GBTDS (PRs 438,
+  454).
+- **The OpenUniverse overlay** stays on the socsim zero points and
+  `sca_gain` 2: the candidate on branch `ou-zp/1-overlay` holds every
+  line but false positives 493 against 492 inside the capped 500, and a
+  tolerance from the count's own spread is Ben's ruling (PR 451).
+- **Flight program 1049**: 341 unflagged recurrent hot pixels (472 not
+  masked, no one bit fixes them) and the pointing oscillation, not
+  observable in four 60 s frames (PR 445). Field 3014319 of run 118 has
+  no reference.
+- **`forced` grows with the window**: a field's rows quadratically in
+  epoch while its 30-day window stays open, copies 0.57 of a deep set's
+  rows; storing references instead of copies is the later item, and
+  saturation past a 30-day span is unmeasured (PR 455).
+- **`diffimages.checksum` cannot agree across two jobs** (the file
+  carries its job id and timestamps), and ZOGY's negative and SFFT's
+  positive PSF-fit catalogs are 71% of a RimTimSim F213 difference; the
+  `[psfcat_diffimage] output_naive_psfcat_*` keys are read by nothing
+  (PR 446).
+- **Every `import` manifest's provenance** is the constant "imported
+  from IMSS socsimsdb 20260821 run", even for archive Gaia boxes (PR
+  449).
 - **The false positives per epoch** under the field rule, a median 224
   on the injected footprint under ZOGY (part 12), unchanged by this part.
 - **The injected arms' 415 false positives per epoch** (runs 91, 92)
@@ -8684,6 +8732,22 @@ from in brackets):
 - finder-mask: PR 391's synthetic claim that `mask=` alone suffices did
   not reproduce on the deployed photutils; the plan pass's "actual path
   first" probe caught it (439).
+- flight-first: galsim's HSM adaptive moments collapse on the
+  undersampled F158 flight stars (sigma about 0.6 px); a
+  pixel-integrated elliptical Gaussian fit replaced it (445).
+- ou-gain: the acceptance window, HLWAS's measured range, is narrower
+  than the gain match's own per-epoch spread about the zero-point ratio
+  (0.984 to 1.033 of 2.2006 on run 80), so an exact fix can fail it
+  (448).
+- self-contained: a script named `copy.py` shadowed the standard
+  library's `copy` and broke boto3's import (449).
+- ou-zp: an environment script's `cd` sent a following heredoc's
+  relative output into the worktree; absolute paths fixed it (451).
+- ref-overlap: the brief's file list left out `reference.py`, which the
+  any-SCA rule needed changed (450).
+- forced-growth: a self-join of `forced` on `forced_id`, which has no
+  index of its own, ran on after its client was killed and was cancelled
+  by `pg_cancel_backend` (455).
 
 ## Validation
 
