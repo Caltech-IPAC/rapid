@@ -8537,6 +8537,38 @@ A consequence for later checks: a run whose every set the gate holds now reads F
 
 Raw evidence: the brief directory's `t1/`.
 
+### Step err-edges-sci: the science code's edge and cut rows closed; a failed PSF-fit catalog write, an unreadable required node, an empty background or a rejected declared input fails with its class and cause, and the uncalled NED path is gone
+
+Brief `err-edges-sci`, task 1.
+
+**The change** (rapid PR 459, `ff025a1b`; `rapid-rebuild:83`). This closes the error-handling ledger's 13 science rows. Each ends in one bin, and PR 459's body holds the table: 8 fixed here (22, 23, 24, 25, 27, 32, 103, 149), 2 already fixed (151 by PR 407; 46 by PR 408, moved from the cut bin because SFFT's nonzero exit has raised `ToolFailed` since then), and 3 cut candidates not built (26, 66, 67). What changed:
+- `psfcat.py` loses its three catch-alls: around the photometry constructor, the residual write and the catalog writes. A failure in any of them raises its own error and the job exits 70 with `<Class>: <message>` on its row. The empty fit (photutils' `None`, PR 415's case) is still the empty catalog with its outcome bit; it now writes no residual instead of having the residual's failure swallowed.
+- `intake.py`: an unreadable `data`, `err` or `var_*` node raises; an unreadable unknown extra is still skipped with a warning.
+- `forced.py`: `error_array` raises when no pixel is good, instead of returning an all-NaN error.
+- The declared-input rejections in `difference.read_inputs`, `reference._read` and `import_products._science_psf` raise `CommandExit(65, reason)`. The row records 65, input rejected, with the reason.
+- Deleted: `crossmatch.fetch_nedcat` and `chip_ned_matches`, which nothing called. The packet stage's `ned_matches=None` stays.
+
+**The proof.** Image `rebuild-ff025a1b…` (digest `4399776e…`), `rapid-rebuild:83`. Run **135** (`r00342-es`, HLWAS, live) covers `001_0001`, SCA 8, F146, passes 1 to 4, with the shipped settings, the HLWAS overlay and the bound 61591.4056. Epoch 4040101 was differenced and packeted. Gaia came from import job 23232.
+
+```sh
+t1/proof.sh ff025a1bda942ac71609a2e3b32c84990150e25a rapid-rebuild:83   # run create, live, Gaia import, loop, check_run
+```
+
+Check, held:
+- **The drain.** 02:22:15 to 02:34:03 UTC, loop exit 0, `failed` empty. Jobs 23233 and 23235 to 23241 each published on attempt 1, every one with `refusal` null.
+- `check_run.sh --run 135`: **CLEAN**, validate 6/6, reader 1/1, consumer 181/181. The set holds **181 packets**.
+- **The difference** (job 23240, m6a.2xlarge, 214 s), beside the same epoch on earlier images:
+
+  | run | job definition | core fraction | ring fraction | candidates / kept | S/N > 20 | packets |
+  |---|---|---|---|---|---|---|
+  | 84 | ZOGY before PR 408 | −0.0010312 | +0.0017103 | 773 / 500 | 21 | 180 |
+  | 134 | `:82` (err-edges-ops) | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
+  | 135 | `:83` (this change) | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
+
+  Run 135 equals run 134 on every column. On data where nothing fails, the change alters nothing.
+
+Raw evidence: the brief directory's `t1/`.
+
 ## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
