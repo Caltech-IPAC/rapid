@@ -8635,7 +8635,7 @@ Check, held:
 
 Raw evidence: the brief directory's `t1/`.
 
-### Step dead-trim: acceptance failed, 180 packets against 181: the code nothing called is deleted (rapid PR 467), and run 140 is CLEAN, but its reference ran on Intel where run 136's ran on AMD
+### Step dead-trim: the code nothing called is deleted (rapid PR 467); run 141 CLEAN with 181 packets, equal to run 136 on a matched instance (run 140, reference on Intel, held 180)
 
 Brief `dead-trim`, task 1.
 
@@ -8665,9 +8665,26 @@ t1/proof2.sh 9f4c54f68ede2c92715f40a69f5d4a04563d443e rapid-rebuild:87   # run c
   | 136 | `:84` (mig-contracts) | m6a.2xlarge | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
   | 140 | `:87` (this change + PR 468) | **r6i.2xlarge** | −0.0010314 | +0.0017105 | 829 / 500 | 26 | 180 |
 
-**Why the counts moved.** The first row to differ is upstream of every changed line. The four intake jobs match run 136's on every recorded metric (Gaia offsets and star counts). The reference job (23296) ran on `r6i.2xlarge`, Intel, where run 136's (23249) ran on `m6a.2xlarge`, AMD. Its `coverage_lt3` reads 0.2596 against 0.2597, and no reference code changed between `:84` and `:87`. This is the plan's Determinism line (Intel and AMD differ). The difference read a different reference, which moved one candidate across the threshold and one packet out of the set. Every other column agrees to the fourth significant figure. Measured mode's metric-star code (PRs 465, 468) and this change's deletions do not touch the difference image. That is shown by reading the code, not by a run, because no matched-instance run on `:87` exists. The run was not repeated to get 181.
+**Why the counts moved.** The first row to differ is upstream of every changed line. The four intake jobs match run 136's on every recorded metric (Gaia offsets and star counts). The reference job (23296) ran on `r6i.2xlarge`, Intel, where run 136's (23249) ran on `m6a.2xlarge`, AMD. Its `coverage_lt3` reads 0.2596 against 0.2597, and no reference code changed between `:84` and `:87`. This is the plan's Determinism line (Intel and AMD differ). The difference read a different reference, which moved one candidate across the threshold and one packet out of the set. Every other column agrees to the fourth significant figure. Measured mode's metric-star code (PRs 465, 468) and this change's deletions do not touch the difference image. That was shown by reading the code; the second attempt shows it by a run.
 
-Raw evidence: the brief directory's `t1/` (`proof/` for run 140, `proof-138/` for run 138, `proof/job-*.json`).
+**The matched-instance proof (the task's second attempt).** Run **141** (`r00342-dt3`, a third dataset because runs 138 and 140 hold the first two live), the same selection, settings and image (`rapid-rebuild:87`, revision `9f4c54f6`), started with the prompt queue's compute environment empty, so every job landed on `m6a.2xlarge`, run 136's type. Nothing was changed between runs 140 and 141 but the instance the reference ran on.
+
+```sh
+t1/proof3.sh 9f4c54f68ede2c92715f40a69f5d4a04563d443e rapid-rebuild:87   # proof2.sh under dataset r00342-dt3
+```
+
+- **The drain.** 04:26:27 to 04:39:57 UTC, loop exit 0, `failed` empty, every job published on one Batch submission.
+- `check_run.sh --run 141`: **CLEAN**, validate 6/6, reader 1/1, consumer 181/181: **181 packets**, acceptance met.
+- Reference job 23308, difference 23309, packet 23310, each on `m6a.2xlarge`:
+
+  | run | job definition | reference instance | core fraction | ring fraction | candidates / kept | S/N > 20 | packets |
+  |---|---|---|---|---|---|---|---|
+  | 136 | `:84` (mig-contracts) | m6a.2xlarge | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
+  | 141 | `:87` (this change + PR 468) | m6a.2xlarge | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
+
+Run 141 equals run 136 on every number above, so run 140's one packet was the reference's instance type, as the plan's Determinism line says.
+
+Raw evidence: the brief directory's `t1/` (`proof3/` for run 141, `proof/` for run 140, `proof-138/` for run 138, `proof*/job-*.json`).
 
 ### Step gate-sci-psf: under `reference_psf = "science"` the core, ring and registration stars come from the reference catalog; GBTDS gb3 records all three on every epoch (run 139 CLEAN), and the gate replayed at `min_epochs` holds each on the core
 
