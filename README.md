@@ -131,7 +131,7 @@ The [specification](https://roman-rapid.readthedocs.io/en/latest/system/specific
 
 The distribution is `rapid-pipeline`; its import package is `rapidpipe`. The foundation plan (v5, 2026-10-20) is the design authority for its database side: one schema file, runs and jobs, the publisher, official bindings changed in recorded groups, and five verbs. `rapidpipe.foundation` holds those operations over [`database/schema.sql`](database/schema.sql); `rapidpipe.db` holds the connection, which gets database credentials through the `PG*` environment or an AWS Secrets Manager secret named by `RAPID_DB_SECRET_ID`, never through arguments or a committed file.
 
-`rapidpipe stage <name>` runs one stage against a declared unit of work, input manifest and output location, implementing [the contract page](https://roman-rapid.readthedocs.io/en/latest/system/stage-contract.html). `--inputs`/`--outputs` accept a local directory or an `s3://bucket/prefix` location. For S3, the runner fetches (or stages) it in a temporary work directory before running the stage body, using `RAPIDPIPE_WORK` if set, else the system temp directory. Only `admit` and `finalize` are still on this contract, and the loop runs neither; every other stage runs under a job (`job local`, `job run`, below).
+`rapidpipe stage <name>` runs one stage on the older contract (`admit` and `finalize`, which the loop does not run) against a declared unit of work, input manifest and output location, implementing [the contract page](https://roman-rapid.readthedocs.io/en/latest/system/stage-contract.html). `--inputs`/`--outputs` accept a local directory or an `s3://bucket/prefix` location. For S3, the runner fetches (or stages) it in a temporary work directory before running the stage body, using `RAPIDPIPE_WORK` if set, else the system temp directory. Only `admit` and `finalize` are still on this contract, and the loop runs neither; every other stage runs under a job (`job local`, `job run`, below).
 
 ## Container
 
@@ -152,7 +152,7 @@ The database is built by `psql -v ON_ERROR_STOP=1 -f database/schema.sql` on an 
 
 A change group refused because a binding it names is no longer open, or because a key it opens already has an open binding, and a job published but refused its automatic binding, exit 1 with the binding named on stderr; a run, job or group that does not exist, or a file that cannot be read, exits 64.
 
-`rapidpipe stage run <name> ...` (also `rapidpipe stage <name> ...`), `rapidpipe stage list` and `rapidpipe stage describe <name>` run, list and describe stages; `rapidpipe selftest --stage finalize` runs a stage's packaged fixture.
+`rapidpipe stage run <name> ...` (also `rapidpipe stage <name> ...`), `rapidpipe stage list` and `rapidpipe stage describe <name>` run, list and describe the older-contract stages, `admit` and `finalize`, which the loop does not run; `rapidpipe selftest --stage finalize` runs a stage's packaged fixture.
 
 ## Running a stage under a job
 

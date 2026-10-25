@@ -11,8 +11,9 @@ RAPID Image-Difference Pipeline Documentation
    under development at IPAC/Caltech.
 
    This Sphinx site documents the pipeline as it exists on the ``dev``
-   branch. On ``rebuild``, the pipeline lives under ``rapidpipe/``;
-   its design and operations pages are on the rapid_docs site instead.
+   branch, and its pages are left as ``dev``'s. On ``rebuild``, the
+   pipeline lives under ``rapidpipe/``, and its documentation is the
+   rapid_docs site, https://roman-rapid.readthedocs.io.
    Paths named on the pages below, such as
    ``pipeline/``, ``alerts/``, ``database/schema/`` and
    ``database/scripts/``, exist on ``dev`` only.

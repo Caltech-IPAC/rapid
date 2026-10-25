@@ -61,26 +61,26 @@ instead, so this is a recorded divergence (rapid_docs ``decisions.md``,
 
 Outputs under ``job.path``. ``[paths] work_subdirectory`` holds what the
 packet stage and a person read, and nothing else (:func:`trim`, Ben's
-ruling of 2026-10-22): the SFFT difference image, its uncertainty, its
-mask (the resampled reference coverage map it is masked with), the
+ruling of 2026-10-22): the published differencer's difference image
+(``[difference] diff_flavor``), its uncertainty, its mask (the resampled reference coverage map it is masked with), the
 positive and negative PSF-fit catalogs of SFFT and of ZOGY
-(``*_psfcat[_negative].parquet``, uncapped; ZOGY's and the negatives are
-diagnostics, read by no stage; SFFT's two carry `dev`'s ``sumrat``,
+(``*_psfcat[_negative].parquet``, uncapped; all but the published
+differencer's positive one are diagnostics, read by no stage; SFFT's two carry `dev`'s ``sumrat``,
 ``nneg`` and ``nbad`` on every source, :mod:`rapidpipe.science.difference.columns`,
 each catalog measured on the image its sources are positive in), and the packet
-stage's other reads beside the difference image, the difference PSF
-(``sfftdiffpsf.fits``, forced photometry), the background-subtracted science
+stage's other reads beside the difference image, the published
+differencer's difference PSF (forced photometry), the background-subtracted science
 image (forced photometry and the science cutout) and the resampled
 gain-matched reference (the template cutout), and the measured reference
 PSF (``refimage_psf.fits``). Every FITS file is
 gzipped (``.fits.gz``, level 1, as the intake's). The rest of `dev`'s
-diagnostic files (ZOGY's and naive's images, S_corr, intermediate
+diagnostic files (the other differencer's and naive's images, S_corr, intermediate
 images, text catalogs) is not published; a variant is re-created by
 rerunning the job. Declared tables: ``diffimages`` (one
-row, the SFFT image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
+row, the published differencer's image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
 table's identity sequence so the sources can carry it; ``infobitssci`` is
 `dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
-and ``sources`` (the SFFT positive PSF-fit catalog through
+and ``sources`` (the published differencer's positive PSF-fit catalog through
 :func:`rapidpipe.science.load.catalogs.source_set`, under ``diff_flavor =
 "sfft"`` through `dev`'s database prefilter first
 (``[difference.database_prefilter]``), then capped at ``max_sources``
@@ -133,11 +133,12 @@ settings have it. `dev`'s unseeded clipping-correction draw (negative)
 moves every clipped standard deviation by about 3e-4 and the source count
 by a few (foundation/determinism).
 
-Departures from `dev` (difference page): ZOGY and naive files are not
-published as rows (a run has one differencer), and only ZOGY's PSF-fit
-catalogs are kept under the prefix (the trim above; ZOGY and naive still
-run, for the outcome bits and the diagnostics); a missing SFFT PSF-fit
-catalog publishes an empty source set with its outcome bit set, where
+Departures from `dev` (difference page): only the published differencer's
+files are rows (a run has one differencer; `dev` publishes SFFT's), the
+other differencer's PSF-fit catalogs are kept under the prefix as
+diagnostics and naive's files are not (the trim above; all three still
+run, for the outcome bits and the diagnostics); a missing PSF-fit catalog
+of the published differencer publishes an empty source set with its outcome bit set, where
 `dev`'s loader skips the job.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,

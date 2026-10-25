@@ -10,11 +10,11 @@ installed as a plug-in for fast sky-position queries.
 .. note::
    This page describes the database design as built on the ``dev``
    branch and is evolving and subject to change. On the ``rebuild``
-   branch, the schema is versioned SQL under
-   ``database/migrations/`` in the RAPID git repository, applied in
-   filename order by ``database/apply-migrations.sh``; see
-   ``database/README.md`` for the rules and how to run the applier
-   locally. ``dev``'s ``database/scripts/buildDatabase.sh`` and
+   branch, the schema is ``database/schema.sql``, which builds a fresh
+   database alone, and each change since real data is also a dated SQL
+   file beside it (``database/2026-10-23-runs-layers.sql`` the first)
+   that brings an existing database to it, applied once; see
+   ``database/README.md``. ``dev``'s ``database/scripts/buildDatabase.sh`` and
    ``database/schema/`` are not carried on ``rebuild``.
 
 Schema
