@@ -1,8 +1,8 @@
-"""Product identifiers, kinds, manifest types and the storage layout.
+"""Product identifiers, kinds and the storage layout.
 
 Holds the four unit-of-work kinds and identifier types (``ids.py``), the
-completion-manifest dataclasses and their JSON read/write and validation
-(``manifest.py``), the storage layout beneath a run, and the pure spatial
+storage layout beneath a run, the difference image's bits
+(``diffimage.py``), the filter names (``filters.py``) and the pure spatial
 derivations registration needs (``spatial.py``). Above the leaf modules
 (``exitcodes``, ``log``, ``revision``) it imports no other part
 of ``rapidpipe`` (``tests/unit/test_dependency_direction.py``). Every

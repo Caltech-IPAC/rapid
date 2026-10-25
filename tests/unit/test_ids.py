@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import time
 
-from rapidpipe.db.ids import ULID_LENGTH, is_valid_ulid, new_ulid
+from rapidpipe.db.ids import ULID_LENGTH, new_ulid
 
 
 def test_new_ulid_has_the_domain_shape():
     value = new_ulid()
     assert isinstance(value, str)
     assert len(value) == ULID_LENGTH == 26
-    assert is_valid_ulid(value)
 
 
 def test_new_ulid_uses_only_crockford_base32_uppercase():
@@ -56,7 +55,7 @@ def test_new_ulid_accepts_an_explicit_timestamp():
     ids_module._last_random = None
     value = new_ulid(now_ms=0)
     assert value.startswith("0" * 10)
-    assert is_valid_ulid(value)
+    assert len(value) == ULID_LENGTH
 
 
 def test_new_ulid_rejects_a_timestamp_past_the_48_bit_range():
@@ -64,26 +63,3 @@ def test_new_ulid_rejects_a_timestamp_past_the_48_bit_range():
 
     with pytest.raises(OverflowError):
         new_ulid(now_ms=(1 << 48))
-
-
-def test_is_valid_ulid_rejects_wrong_length():
-    assert not is_valid_ulid("TOO-SHORT")
-    assert not is_valid_ulid("0" * 25)
-    assert not is_valid_ulid("0" * 27)
-
-
-def test_is_valid_ulid_rejects_excluded_letters():
-    # I, L, O, U are not in the Crockford alphabet this module uses.
-    base = "0" * 25
-    for excluded in "ILOU":
-        assert not is_valid_ulid(base + excluded)
-
-
-def test_is_valid_ulid_rejects_lowercase():
-    value = new_ulid()
-    assert not is_valid_ulid(value.lower())
-
-
-def test_is_valid_ulid_rejects_non_string():
-    assert not is_valid_ulid(12345)
-    assert not is_valid_ulid(None)

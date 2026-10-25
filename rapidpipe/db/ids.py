@@ -87,16 +87,3 @@ def new_ulid(now_ms: int | None = None) -> str:
         _last_random = random_value
 
     return _encode(time_ms, _TIME_LEN) + _encode(random_value, _RANDOM_LEN)
-
-
-def is_valid_ulid(value: str) -> bool:
-    """Return whether ``value`` has the shape this module's ids have.
-
-    Uppercase only, matching what :func:`new_ulid` emits and what the
-    migration's ``rapid_ulid`` domain accepts -- this module does not
-    normalize case, so a lowercase-but-otherwise-valid string is rejected
-    rather than silently accepted as equivalent.
-    """
-    if not isinstance(value, str) or len(value) != ULID_LENGTH:
-        return False
-    return all(c in _CROCKFORD_ALPHABET for c in value)
