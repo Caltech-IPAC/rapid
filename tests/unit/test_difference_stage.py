@@ -601,7 +601,7 @@ def test_reference_psf_science_measures_nothing_and_gives_zogy_the_science_psf_f
     assert not {"refpsf_stars", "refpsf_sigma_px", "ref_sci_sigma_ratio"} & set(recorded["metrics"])
 
 
-def test_reference_psf_science_takes_the_metrics_stars_from_the_reference_catalog():
+def test_reference_psf_science_takes_the_metrics_stars_from_the_reference_catalog(tmp_path):
     from astropy.wcs import WCS
 
     from rapidpipe.science.difference import metrics as quality
@@ -624,7 +624,16 @@ def test_reference_psf_science_takes_the_metrics_stars_from_the_reference_catalo
     assert found[:, 2].tolist() == [900.0, 700.0, 500.0]                     # FLUX_AUTO
     assert len(stars_xy) == 3
     recorded = quality.registration(science, reference, stars_xy)
-    recorded.update(quality.residuals(reference, 0.1 * reference,
-                                      quality.residual_stars(found, reference.shape, reference)))
     assert recorded["registration_dx_px"] == pytest.approx(1.0, abs=0.05)
+    # The job's own metric pass on those rows: core, ring and the ring count present.
+    for name, data in (("ref", reference), ("diff", 0.1 * reference), ("cov", np.ones((n, n)))):
+        fits.PrimaryHDU(data.astype(np.float32)).writeto(tmp_path / f"{name}.fits")
+    sources = pa.table({"xfit": [50.0], "yfit": [70.0], "fluxfit": [100.0], "fluxerr": [1.0]})
+    catalog = pa.table({"x_fit": [50.0], "y_fit": [70.0], "flux_fit": [100.0], "flux_err": [1.0]})
+    difference._quality_metrics(
+        recorded, found, thresh=0.5, candidates=1, sources=sources, catalog=catalog,
+        in_footprint=np.array([False]), gainmatched_reference=tmp_path / "ref.fits",
+        difference=tmp_path / "diff.fits", coverage=tmp_path / "cov.fits", reference_xy=found[:, :2])
+    assert recorded["n_residual_stars"] == 3
+    assert recorded["n_sources_ring_snr_gt20"] == 1                 # 10 px from the star at (50, 60)
     assert {"core_fraction", "ring_fraction", "registration_dy_px"} <= set(recorded)
