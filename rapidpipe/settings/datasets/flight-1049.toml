@@ -1,0 +1,39 @@
+# The overlay for Roman flight program 1049 ('RAPID CAR-198 Implementation',
+# MAST L2 ASDF, romancal 1.0.2, roman_datamodels 1.0.0's wfi_image-2.0.0),
+# given at `rapidpipe run create --overlay`. It holds only the keys whose
+# value differs from the shipped defaults (foundation-thin.toml, dev's
+# values) for this dataset, each with the measurement that earned it; a key
+# the base does not have is refused (rapidpipe.foundation.layers). Locations
+# and per-run values are not here: `intake.source_root` (the L2 prefix) and
+# `reference.selection.before_mjd` (the bound) come by `--set` at `run
+# create`. The measurements are runbook part 13 step flight-first's, the
+# four F158 WFI02 epochs of observation 2 visit 1 (2026-10-24 10:56 to 11:02
+# UTC, 60 s each), r0104901001001002001_000N_wfi02_f158.
+#
+# Read by the `soc-l2` reader unchanged: the same stem grammar, meta tree and
+# DQ flag definitions as the SOC simulations, meta.photometry present (ZPTMAG
+# 25.801), each file naming its CRDS ePSF (roman_wfi_epsf_0239 on all four).
+# No WCS key: the file's gWCS (tweakreg against Gaia, 31 to 39 matches, rmse
+# 0.013 to 0.015 px) puts Gaia DR3's stars at (-0.09 to -0.04, -0.06 to
+# -0.04) px once their proper motions carry them to the frames' epoch
+# (2026.81); at Gaia's own epoch 2016.0, which the intake's gaia_dx_px /
+# gaia_dy_px read, they sit at (-0.08 to +0.16, -0.56 to -0.35) px, the
+# field's median proper motion (-4.2, -3.7 mas/yr) over 10.8 years, not the
+# WCS.
+
+[intake]
+# meta.observation.program; the exposures row's program_id is the
+# producer's program number, negative only for the simulations.
+program_id = 1049
+# HLWAS's mask (#238's bits without SATURATED): the files carry the same
+# roman_datamodels pixel flags, so the bits mean the same. Per file it masks
+# 0.231% of the pixels (DO_NOT_USE 0.039%, DEAD 0.097%, HOT 0.100%,
+# NONLINEAR 0.105%, NO_LIN_CORR 0.116%, UNRELIABLE_FLAT 0.011%); 1.36% carry
+# any flag, the largest unmasked GW_AFFECTED_DATA 0.370% (the guide window),
+# UNRELIABLE_SLOPE 0.362% and OTHER_BAD_PIXEL 0.274%. SATURATED is on 0.001%
+# to 0.002%. Of the 3,116 pixels above 10 sigma of their local background at
+# the same detector position in all four frames (hot pixels: the sky moved
+# with the dithers), this mask removes 2,644; of the 472 left, 341 carry no
+# flag and no one more bit removes more than 72 (WARM), so no value here
+# masks them.
+dq_mask_bits = 0x2110C01
