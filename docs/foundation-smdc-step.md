@@ -8635,6 +8635,40 @@ Check, held:
 
 Raw evidence: the brief directory's `t1/`.
 
+### Step dead-trim: acceptance failed, 180 packets against 181: the code nothing called is deleted (rapid PR 467), and run 140 is CLEAN, but its reference ran on Intel where run 136's ran on AMD
+
+Brief `dead-trim`, task 1.
+
+**The change** (rapid PR 467, `3cbd4f44`; rapid_docs PR 129, `9f5bbea`). Deleted, each confirmed uncalled at `85596aa3` with the tests that only exercised it:
+- `products/manifest.py` and `products/l2image.py`, whole;
+- `db/ids.py`'s `is_valid_ulid`;
+- `products/diffimage.py`'s registration validators (`validate_difference_entry`, `validate_source_catalog_entry`, `check_finalize_provenance`, the provenance fields) and the chain only they entered (`DifferenceImageRegistration`, `check_bundle_roles`, `roles_for`, `DIFFERENCERS`). The outcome bits and source flags the difference and packet stages read stay;
+- `log.py`'s `configure`, `get_logger` and `RuntimeLogger`. The CLI's `configure_root` uses none of them and stays;
+- `science/alerts/crossmatch.py`'s NED reader and matcher: `AstroqueryNedReader`, `ned_table_to_columns`, `build_nedcat`, `match_nedcat`, `chip_cone` and the `NED_*` constants, with `select_host_candidates`, `bounding_cone` and the `NedSliceReader` alias. `NedCatalog` (the Gaia match's) and the packet stage's `ned_matches=None` stay.
+
+Unit suite 652 passed. 18 files, −2,377 lines.
+
+**The first proof, not CLEAN, and not this change.** Run **138** (`r00342-dt`) ran on `rapid-rebuild:86` (my deploy of `3cbd4f44`, digest `64250546…`). Its difference job 23276 failed, exit 70, with `KeyError: (slice(None, None, None), 2)` in `metrics.ring_count`. The cause was PR 465 (gate-sci-psf), not this change. `_quality_metrics` rebound `found` to `quality.residuals`' dict and passed it to `ring_count`, which broke every measured-mode difference on `:85` and `:86`. PR 468 (`9f4c54f6`) fixed it while this proof ran. `check_run.sh --run 138`: FAIL, validate 5/6 (`counts`: 1 difference job failed), no packet set.
+
+**The proof.** The image is `rebuild-9f4c54f6…` (digest `8ae845df…`), `rapid-rebuild:87`, which holds this change and PR 468. gate-sci-psf had already pushed that immutable tag, so this proof uses the revision whose image is that digest. It is not this session's deploy. Run **140** (`r00342-dt2`, a second dataset because run 138 holds `r00342-dt` live) covers HLWAS `001_0001`, SCA 8, F146, passes 1 to 4, with the shipped settings, the HLWAS overlay and the bound 61591.4056. Gaia came from its own import job.
+
+```sh
+t1/proof2.sh 9f4c54f68ede2c92715f40a69f5d4a04563d443e rapid-rebuild:87   # run create, live, Gaia import, loop, check_run
+```
+
+- **The drain.** 04:04:00 to 04:19:30 UTC, loop exit 0, `failed` empty. Every job published on one Batch submission.
+- `check_run.sh --run 140`: **CLEAN**, validate 6/6, reader 1/1, consumer 180/180. The set holds **180 packets** against run 136's 181: **acceptance failed**.
+- **The difference** (job 23297, m6a.2xlarge, 215 s), beside run 136:
+
+  | run | job definition | reference instance | core fraction | ring fraction | candidates / kept | S/N > 20 | packets |
+  |---|---|---|---|---|---|---|---|
+  | 136 | `:84` (mig-contracts) | m6a.2xlarge | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
+  | 140 | `:87` (this change + PR 468) | **r6i.2xlarge** | −0.0010314 | +0.0017105 | 829 / 500 | 26 | 180 |
+
+**Why the counts moved.** The first row to differ is upstream of every changed line. The four intake jobs match run 136's on every recorded metric (Gaia offsets and star counts). The reference job (23296) ran on `r6i.2xlarge`, Intel, where run 136's (23249) ran on `m6a.2xlarge`, AMD. Its `coverage_lt3` reads 0.2596 against 0.2597, and no reference code changed between `:84` and `:87`. This is the plan's Determinism line (Intel and AMD differ). The difference read a different reference, which moved one candidate across the threshold and one packet out of the set. Every other column agrees to the fourth significant figure. Measured mode's metric-star code (PRs 465, 468) and this change's deletions do not touch the difference image. That is shown by reading the code, not by a run, because no matched-instance run on `:87` exists. The run was not repeated to get 181.
+
+Raw evidence: the brief directory's `t1/` (`proof/` for run 140, `proof-138/` for run 138, `proof/job-*.json`).
+
 ## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
