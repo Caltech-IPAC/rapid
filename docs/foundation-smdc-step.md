@@ -8569,6 +8569,41 @@ Check, held:
 
 Raw evidence: the brief directory's `t1/`.
 
+### Step rts-f213-core: `[difference] reference_psf = "science"` on RimTimSim F213 epoch 4571 brings the core inside its bound (−0.0694 → −0.0044) but the ring further outside (−0.0339 → −0.0557); not taken
+
+Brief `rts-f213-core`, task 1.
+
+**The question.** F213 over-subtracts the stars' cores: −0.050 to −0.075 on run 99's five epochs, outside the gate's ±0.025, so every F213 set holds. The one existing key that changes which PSF ZOGY is given for the reference is `[difference] reference_psf`. One arm measured `"science"` (GBTDS's value) against `"measured"`.
+
+**The arm.** It used diff-trim's arm method (the brief's `t1/arm.sh`) on RimTimSim 260622 lite F213, field 4682737 SCA 2, epoch 4571:
+- run 133 under its own dataset `rts-f213-sci`;
+- created from a worktree at `6681cdd5` and run on `rapid-rebuild:79`, the same as run 124;
+- run 124's `--set` layer plus `--set 'difference.reference_psf="science"'`;
+- the difference and packet jobs hand-submitted against run 99's `refimages` and `psfs` rows (reference job 22939, PSF job 22921).
+
+Every job ran on its first attempt. **`Check run 133: CLEAN validate 6/6 reader 1/1 consumer 494/494`**.
+- **Settings**: of the 554 resolved leaves, only `difference.reference_psf` differs from run 124's (`rp run show` on both). The base and overlay layer hashes are equal.
+- **Inputs**: the science PSF, reference image, coverage map, uncertainty and catalog hash equal to run 124's. The science L2 is the run's own intake product.
+
+**How core and ring were read.** Under `"science"` the job records no `core_fraction`, `ring_fraction` or registration offset. Their stars come from the measured reference PSF's detections, and that mode measures nothing. Both runs were therefore read with the stage's own `metrics.residuals` on run 124's 30 residual stars (its manifest), on each run's published gain-matched reference and ZOGY difference. On run 124 this gives the job's own −0.0694 / −0.0339 exactly.
+
+| | run 124, `measured` | run 133, `science` | bound |
+|---|---|---|---|
+| core fraction | −0.0694 | **−0.0044** | ±0.025 |
+| ring fraction | −0.0339 | **−0.0557** | ±0.015 |
+| uncapped ZOGY candidates + / − | 20,144 / 86,288 | 14,701 / 1,283 | |
+| uncapped S/N > 20 + / − | 529 / 11,910 | 495 / 863 | |
+| candidates / kept / kept S/N > 20 | 19,798 / 500 / 500 | 14,211 / 500 / 495 | |
+| packets | 349 | 494 | |
+| difference s | 2,643 | 1,716 | |
+| usable fraction | 0.9998 | 0.9998 | ≥ 0.9 |
+
+**Result: not taken.** The science PSF (1.30 px) given for a reference whose stars measure 1.39 px removes the negative cores: 86k negative candidates fall to 1.3k. The mismatch reappears as a negative ring the gate holds. The overlay records the measurement as a comment and keeps `"measured"` (rapid PR 462, `e674d8d7`). F087 was not run, because the brief runs it only when both F213 fractions pass.
+
+**Seen, not changed.** Under `"science"` the gate cannot hold on core, ring or registration, because none is recorded. This already applies to every GBTDS run.
+
+Raw evidence: the brief directory's `t1/`.
+
 ## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
