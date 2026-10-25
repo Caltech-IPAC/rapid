@@ -8725,14 +8725,21 @@ Check, held: the loop drained in **26.0 min** (03:57:58 to 04:23:58 UTC) with ex
 
 Left in place, nothing deleted: datasets `r00340-gsp` (run 137 live, failed differences, its intakes and reference) and `r00340-gsp2` (run 139 live, 1,196 packets on the alerts topic). Raw evidence is in the brief's `t1/`: `collect.json`, `run139.json`, `jobs/`, `loop.log`, `check.log`, `inspect/`, `run137/` (with the failed jobs' records) and `scripts/`.
 
-## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
+## Results of part 13 so far (2026-10-25 04:55 UTC, through rapid PR 471)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
 each, several in parallel, and every brief's task wrote `TASK DONE` on
-its first attempt. The error-handling ledger's fixes 1 to 10 are in: a tool's
-failure, an empty product, a missing input and a transient fault each
-end where they should, with the reason on the job row and an exit code
-the loop and Batch read correctly. The reference converges on `dev`
+its first attempt but dead-trim's, which passed on its second. The
+error-handling ledger's fixes 1 to 10 are in, and its 49 edge and cut
+rows each have a disposition: a tool's failure, an empty product, a
+missing input, a transient fault, a failed catalog write and a rejected
+declared input each end where they should, with the reason on the job
+row and an exit code the loop and Batch read correctly, and
+`check_run.sh` reads a run that sent no packet as FAIL. The older stage
+contract and the code nothing called are deleted; `run(job)` is the one
+contract. Under `reference_psf = "science"` the core, ring and
+registration stars come from the reference catalog, so GBTDS records
+all three. The reference converges on `dev`
 (point-source FWHM, SExtractor 0.25 / 32, 9100 px, InfoBits and status).
 SFFT was published, measured worse than ZOGY on the same bytes, and the
 published differencer is now the setting `[difference] diff_flavor`,
@@ -8753,7 +8760,7 @@ frame's epoch (flight only); the naive subtraction makes no PSF-fit
 catalog. Two OpenUniverse overlay changes failed their acceptance and the
 overlay is unchanged. Every live run's inputs are in the inputs bucket.
 Every run below is CLEAN by `check_run.sh` except run 83, which failed on
-purpose.
+purpose, and runs 137 and 138, which failed on PR 465's regression.
 
 | step | before | after | where |
 |---|---|---|---|
@@ -8784,6 +8791,12 @@ purpose.
 | gaia-pm | the intake's Gaia offset at Gaia's 2016.0: flight dy −0.56 to −0.35 px of proper motion read as WCS offset | `[intake] gaia_proper_motion` carries each star to the frame's mid-exposure, shipped `false`, `flight-1049.toml` `true`; run 128 on `:81`: flight dy −0.060 to −0.038, dx −0.0909 to −0.045, every file the hand propagation to three decimals; **acceptance failed** on e4's dx −0.0909 against the brief's 0.09, PR 445's two-decimal summary of the same −0.091, the propagation left in force; HLWAS unchanged (+0.007 / +0.003 under the overlay, run 129); GBTDS SCA 2's dy +0.232 → +0.297 propagated, so its offset is not proper motion | PRs 453, 454 |
 | forced-growth | `forced` "about 400 MB after about 5,000 epochs" | 4.83 M rows, 1.02 GB, 211 B a row, 81% on HLWAS breadth runs 36 to 38; a set's rows are its objects times its window images (median ratio 1.000, packets flat); breadth fields span under 10 days, so the 30-day window never closes and a field's cumulative rows grow quadratically in epoch over 1 to 26; copies 0.57 of run 38's rows, and copies cross runs of one dataset (run 38 from 27 and 33); past a 30-day span unmeasured | PR 455 |
 | diff-trim | the naive subtraction's positive and negative PSF-fit catalogs made, unpublished and unread | not made; the naive image and its SExtractor catalogs stay, naive catalog bits 4 and 5 never set; RimTimSim F213 epoch 4571 on the same bytes (runs 122 on `:78`, 124 on `:79`): difference 4,169 → 2,645 s, `sources` equal in all 27 columns, `diffimages` equal but `checksum` (the file's job-id and timestamp cards; pixels equal), 349 packets both | PRs 446, 456; rapid_docs 126 |
+| err-edges-ops | the operations paths' 36 edge and cut rows open: a stage's `KeyError` exited 64 with no traceback, a missing dependency read "not implemented", the Kafka send's failure logged without its class, a run that sent nothing read CLEAN | each row binned (Fix, Already fixed, Left, Cut candidate); only `foundation.NotFound` exits 64, a stage's `KeyError` or `IndexError` and a missing dependency take 70 with the traceback; `PublishError` names every failed set and class; `check_run.sh` FAILs a run with no stamped packet set or none holding a packet; `launch.run_locally` and two of science-drift's three never-fail layers gone; run 134 (`r00342-ee`, `:82`) CLEAN 181 packets, run 85 (no packet set) CLEAN → FAIL | PRs 458, 460 |
+| err-edges-sci | the science code's 13 edge and cut rows open: `psfcat.py`'s three catch-alls published a failed write, an unreadable required ASDF node was skipped, an empty background gave an all-NaN error, a rejected declared input exited 70 | 8 fixed, 2 already fixed (PRs 407, 408), 3 cut candidates; a failed PSF-fit catalog, parquet or residual write raises (70, the writer's class on the row), an unreadable required node and an empty background raise, a declared-input rejection in difference, reference or import exits 65; the uncalled NED fetch and match deleted; run 135 (`r00342-es`, `:83`) CLEAN 181 packets, every column equal to run 134 | PRs 459, 461 |
+| rts-f213-core | RimTimSim F213 epoch 4571 under `measured`: core −0.0694, ring −0.0339 on 30 stars, every set held (run 124) | **a measurement, not taken**: `reference_psf = "science"` alone (run 133, `rts-f213-sci`, `:79`, CLEAN, 494 packets): core −0.0044 inside ±0.025, ring −0.0557 further outside ±0.015, negative candidates 86,288 → 1,283; read with the stage's own residuals on run 124's 30 stars, since `science` then recorded none; the overlay carries the measurement as a comment, no key changed; F087 not run | PRs 462, 463 |
+| mig-contracts | two stage contracts: the older `--run --unit --attempt` one (`admit`, `finalize`, `run_stage`) beside the loop's | the older contract retired: `admit`, `finalize`, `stages/contract.py`, `stagectl`, the `stage` and `selftest` verbs, `selftest/`, `stages/settings.py`, `revision.py`, `Storage` deleted (+150 / −6,591); test doubles under `tests/support/`; `loop --help` gives `_loop`'s exits; `database/README.md` states the dated files' rule; run 136 (`r00342-mc`, `:84`) CLEAN 181 packets, equal to run 135 | PRs 464, 466; rapid_docs 128 |
+| gate-sci-psf | under `science` no core, ring or registration recorded (the refpsf finder's stars, and the science mode measures none), so the gate judged GBTDS on usable fraction alone | the stars are the reference mosaic's SExtractor catalog mapped onto the science grid (`measured` unchanged); PR 465's `found` rebinding broke every difference with residual stars on `:85` and `:86` (`KeyError` in `ring_count`, run 137 failed), fixed by PR 468; run 139 (`r00340-gsp2`, `:87`) CLEAN: core −0.0485 / −0.0434 / −0.0362, ring −0.0386 / −0.0379 / −0.0385, registration ≤ 0.012, 0.015 px, 29 stars each; `judge` at `min_epochs` holds every epoch on core (bound ±0.025, HLWAS-derived; the ruling is Ben's); 1,196 packets against run 112's 1,278 at equal kept sources, cause unread | PRs 465, 468, 470; rapid_docs 130 |
+| dead-trim | code with no caller outside tests: `products/manifest.py`, `products/l2image.py`, `is_valid_ulid`, diffimage's validators, log's `configure` / `get_logger` / `RuntimeLogger`, the NED reader and matcher | deleted (+54 / −2,377), `nedMatches` null in every packet as before; first attempt: run 138 (`:86`) failed on PR 465's regression, run 140 (`r00342-dt2`, `:87`) CLEAN but 180 packets, its reference on r6i (Intel) against run 136's m6a; second attempt: run 141 (`r00342-dt3`, `:87`, every job on m6a) CLEAN 181 packets, core, ring and counts equal to run 136 | PRs 467, 469, 471; rapid_docs 129 |
 
 **The current procedure**, where these steps changed it:
 
@@ -8798,7 +8811,20 @@ purpose.
   that admitted nothing among them; 75 transient, start it again.
   `job wait`: 0 all published, 1 one failed, 2 timed out.
 - A failed run is not clean: `check_run.sh` now fails any run with a
-  failed job, so a run that fails on purpose (run 83) reads FAIL.
+  failed job, so a run that fails on purpose (run 83) reads FAIL, and
+  any run with no stamped packet set or none holding a packet, so a run
+  whose sets the gate holds reads FAIL too (run 85, step err-edges-ops).
+- A job's exit: 64 only for the foundation's `NotFound`; 65 for a
+  rejected declared input (difference, reference, import); 70 with the
+  traceback for a stage's own error, a missing dependency or a failed
+  product write; 75 transient. Batch retries 75 and a task that failed to start, nothing else.
+- A one-epoch acceptance that asks packet equality names the reference
+  job's instance type: an r6i reference read 180 packets against m6a's
+  181 at equal image (runs 140, 141).
+- The image takes the foundation verbs only (`run`, `job`, `official`,
+  `publish`, `loop`); `stage` and `selftest` are gone, and test doubles
+  import from `tests.support`. Never prove on `rapid-rebuild:85` or
+  `:86`: both carry PR 465's `ring_count` regression.
 - A comparison of differencers runs on the same bytes: a dataset of its
   own, the loop for PSF and intake only, the difference and packet jobs
   submitted against the baseline difference job's own `refimages` and
@@ -8837,10 +8863,17 @@ The live runs the part made: 83 (`r00342-et-fail`), 84
 and 120 created and never live), 122 and 124 (`rts-dt-before`,
 `rts-dt-after`), 125 (`ou-zp`), 126 (`flight-1049-ro`), 127
 (`r00342-ro-inj`), 128 (`flight-1049-pm`), 129 (`r00342-pm`) and 130
-(`r00340-gb3-pm`; 131 and 132 never live). Job definitions
-`rapid-rebuild:65` to `:81` were registered; `:77` is `a761ae23` (PR
-435), `:78` `1e2af61a` (PR 439), `:79` `6681cdd5` (PR 446), `:80`
-`d7e67597` (PR 450) and `:81`, the latest, `a5e8a872` (PR 453). The one
+(`r00340-gb3-pm`; 131 and 132 never live), 133 (`rts-f213-sci`), 134
+(`r00342-ee`), 135 (`r00342-es`), 136 (`r00342-mc`), 137
+(`r00340-gsp`, failed) and 139 (`r00340-gsp2`), 138 (`r00342-dt`,
+failed), 140 (`r00342-dt2`) and 141 (`r00342-dt3`, the accepted
+dead-trim proof). Job definitions `rapid-rebuild:65` to `:87` were
+registered; `:77` is `a761ae23` (PR 435), `:78` `1e2af61a` (PR 439),
+`:79` `6681cdd5` (PR 446), `:80` `d7e67597` (PR 450), `:81`
+`a5e8a872` (PR 453), `:82` `3dd33b19` (PR 458), `:83` `ff025a1b` (PR
+459), `:84` `5262a62b` (PR 464), `:85` `7f436c63` (PR 465) and `:86`
+`3cbd4f44` (PR 467), both with the regression, and `:87`, the latest,
+`9f4c54f6` (PR 468, image digest `8ae845df…`). The one
 schema statement was PR 422's `ALTER TABLE sources ADD COLUMN`. Every
 live run's inputs are in the inputs bucket (step self-contained).
 Nothing was deleted.
@@ -8859,12 +8892,24 @@ Nothing was deleted.
   finder, about 0.6% of SCA 7's sources (PR 439).
 - **The gate is inert on a sample run**: it judges a set only once the
   run has `min_epochs` differences, so the five-epoch RimTimSim runs and
-  the three-epoch GBTDS run sent unjudged sets; on GBTDS under
-  `reference_psf = "science"` only `usable_fraction` exists to judge
-  (PRs 437, 438).
+  the three-epoch GBTDS runs sent unjudged sets (PRs 437, 438). GBTDS
+  now records core, ring and registration under `science`, and replayed
+  at `min_epochs` the gate holds every run 139 epoch on the core
+  (−0.036 to −0.048 against the HLWAS-derived ±0.025), so a GBTDS run
+  of five or more epochs would hold every set; whether GBTDS gets bounds
+  of its own is Ben's ruling (PRs 465, 470).
+- **GBTDS gb3's packets fell 1,278 → 1,196** (run 112 on `:77` against
+  run 139 on `:87`) at equal kept sources; PR 465 does not touch them,
+  and the cause is unread (PR 470). The reference catalog the metric
+  stars come from includes galaxies; only too-sharp rows are dropped
+  (PR 465).
 - **RimTimSim completeness** waits on a 260622 truth from the
-  simulator's authors; F213's core over-subtraction (−0.075 to −0.050)
-  is that dataset's next measurement (PR 437).
+  simulator's authors (PR 437). F213's core over-subtraction (−0.075 to
+  −0.050) is a reference-against-science width mismatch (1.39 against
+  1.30 px): neither the transposed science PSF (PR 437) nor
+  `reference_psf = "science"` (core −0.0044 but ring −0.0557, PR 462)
+  clears both core and ring; the next lever is the reference PSF itself
+  or a matched-width kernel, a code knob.
 - **GBTDS SCA 2's constant `gaia_dy_px` +0.27 px** is not proper motion
   (propagated it reads +0.297); SCA 2's distortion or the Gaia sample
   remain, unread; the reference at 27% memory margin on GBTDS (PRs 438,
@@ -8901,7 +8946,8 @@ Nothing was deleted.
   view's `t.*` was expanded at creation and re-creating it needs a
   `DROP VIEW` grant (step dev-columns).
 - **The dated SQL files fail after a fresh `schema.sql`** (step
-  mig-quickstart); the README applies `schema.sql` alone.
+  mig-quickstart); the README applies `schema.sql` alone, and
+  `database/README.md` states the rule once (PR 464).
 - **The publisher binds an expected key no loaded row holds** (a dry-run
   typo, caught afterwards by `validate_run.py`'s lineage check), and no
   setting turns the packet job's Kafka send off (step mig-quickstart).
@@ -8910,9 +8956,18 @@ Nothing was deleted.
   (PRs 426, 431).
 - **`job wait` ends 0 for a job published with a refusal**, where the
   loop counts it failed (PRs 409, 420).
-- **A stage's own `KeyError` exits 64** as a usage error with no
-  traceback (PR 420, queue item `err-edges`), and `ToolRunner` has no
-  timeout (PR 407).
+- **`ToolRunner` has no timeout** (PR 407).
+- **The error-handling ledger's cut candidates**, each a mechanism for a
+  failure not seen, are listed and not built: rows 47, 49, 68, 69, 70,
+  130, 132, 133 (PR 458) and 26, 66, 67 (PR 459); the reference's
+  MAGZP-missing check and import's PSFKIND mismatch still exit 70, not
+  65 (PR 459).
+- **Code with no caller outside tests** remains: `db/ids.py`
+  (`new_ulid`) and `products/ids.py`, the latter not even tested
+  (PR 467).
+- **A one-epoch packet-equality acceptance depends on placement**: the
+  compute environment mixes m6a and r6i, and an Intel reference moved
+  one packet (runs 140, 141); nothing pins the instance (PRs 469, 471).
 - **OpenUniverse 28737's ZOGY reproduction shares 323 of 500 ids**,
   Intel against Intel, cause unread (step differencer-measure).
 
@@ -8965,6 +9020,24 @@ from in brackets):
 - forced-growth: a self-join of `forced` on `forced_id`, which has no
   index of its own, ran on after its client was killed and was cancelled
   by `pg_cancel_backend` (455).
+- err-edges-ops: the brief's Fix list carried two rows PR 420 had
+  already closed; the planner's sort read the audit's line text, not
+  the tip (458).
+- rts-f213-core: `rp run show`'s `revision` is whatever `run create
+  --revision` was given, a full sha on one run and a short one on
+  another for the same commit (462).
+- mig-contracts: moving a module to a shallower directory moved its
+  `Path(__file__).parents[n]` anchor with it, which the unit suite would
+  not catch with `RAPID_CFG` set (464).
+- gate-sci-psf and dead-trim deployed from one tip minutes apart; the
+  second build failed on the immutable tag, so "the revision your own
+  deploy printed" cannot always hold, and the digest check on the job
+  definition is the substitute (469). A one-digit slip started a loop
+  on another brief's live run, stopped within seconds with no
+  submission; a launch line reading the run id from the file it just
+  wrote would remove it (470).
+- dead-trim: the first attempt's BLOCKED line named its own cause and
+  fix, so the second needed one run and no code (471).
 
 ## Validation
 
