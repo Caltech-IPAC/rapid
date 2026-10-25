@@ -43,6 +43,7 @@ from psycopg2.extras import RealDictCursor
 
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation import attempts as submissions
+from rapidpipe.foundation.official import NotFound
 from rapidpipe.foundation.prefix import attempts, local_path, put
 from rapidpipe.foundation.publish import publish
 
@@ -164,7 +165,7 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
                         " FROM jobs j JOIN runs r ON r.id = j.run WHERE j.id = %s", (job_id,))
             job = cur.fetchone()
             if job is None:
-                raise LookupError(f"job {job_id} does not exist")
+                raise NotFound(f"job {job_id} does not exist")
             if job["state"] == "published":
                 conn.commit()
                 return {"job": job_id, "attempt": job["published_attempt"], "published": False,

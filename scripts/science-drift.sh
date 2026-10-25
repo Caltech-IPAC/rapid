@@ -14,9 +14,11 @@
 # of the pin map -- so a header edited in a later pull request is
 # picked up automatically, with nothing here to keep in sync.
 #
-# It never fails the build: every step degrades to a report line rather
-# than a nonzero exit, and the script always exits 0 (the CI workflow
-# also wraps the call in `|| true`). Run it from anywhere inside the
+# It never fails the build on what it finds: every step degrades to a
+# report line rather than a nonzero exit, and the script exits 0 whenever
+# it wrote a report; with --out, it exits 1 only when that file was not
+# written (a crash or a syntax error before any report line), the one
+# failure CI is meant to see. Run it from anywhere inside the
 # repository; it finds the repository root itself.
 #
 # Usage:
@@ -56,6 +58,9 @@ set -uo pipefail
 dev_ref="origin/dev"
 out_file=""
 watch_file="scripts/science-drift-watch.txt"
+
+# The exit status: 1 only when --out names a file this left absent or empty.
+trap 'if [ -n "$out_file" ] && [ ! -s "$out_file" ]; then exit 1; fi; exit 0' EXIT
 
 while [ $# -gt 0 ]; do
   case "${1:-}" in

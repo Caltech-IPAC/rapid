@@ -296,7 +296,9 @@ def _run_stage_command(name: str | None, stage_argv: list[str]) -> int:
     module_name = f"rapidpipe.stages.{name.replace('-', '_')}"
     try:
         module = importlib.import_module(module_name)
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
+        if exc.name != module_name:     # a dependency of the stage is missing, not the stage
+            raise
         sys.stderr.write(
             f"rapidpipe stage: {name!r} is a known stage name but "
             f"{module_name} is not implemented yet; known stages: "
@@ -350,7 +352,9 @@ def _stage_run(stage: str):
     module_name = f"rapidpipe.stages.{_STAGE_MODULES.get(stage, stage.replace('-', '_'))}"
     try:
         stage_run = getattr(importlib.import_module(module_name), "run", None)
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
+        if exc.name != module_name:     # a dependency of the stage is missing, not the stage
+            raise
         stage_run = None
     if stage_run is None:
         raise CommandExit(int(ExitCode.USAGE), f"stage {stage!r} has no run(job) in {module_name}")
@@ -426,8 +430,8 @@ def _send_own_set(connect_job, job_id: int) -> dict:
             finally:
                 producer.close(timeout=publish_kafka.ACK_TIMEOUT_S)
     except Exception as error:  # noqa: BLE001 - the sweep sends what this could not
-        logger.error("packet set %d: not produced (%s); left unstamped for the loop's publish sweep",
-                     job_id, error)
+        logger.exception("packet set %d: not produced (%s: %s); left unstamped for the loop's publish sweep",
+                         job_id, type(error).__name__, error)
         return {"error": str(error)}
 
 
@@ -573,7 +577,9 @@ def exit_code(exc: BaseException) -> int:
     """The exit code of a failure, the one classification: the process's and a failed job row's.
 
     A :class:`CommandExit`'s own code; a refused change 1; a missing run, job
-    or group (``LookupError``) and a database configuration error 64; a
+    or group (the foundation's :class:`~rapidpipe.foundation.NotFound`) and a
+    database configuration error 64, while any other ``KeyError`` or
+    ``IndexError`` is a bug and takes the 70 path with its traceback; a
     transient failure 75, so Batch repeats the job: the database unavailable,
     ``psycopg2.OperationalError`` mid-query, or a storage or AWS error
     :func:`rapidpipe.products.storage.is_transient` names (a connection
@@ -583,7 +589,7 @@ def exit_code(exc: BaseException) -> int:
         return exc.code
     if isinstance(exc, foundation.Refused):
         return int(ExitCode.FAILURE)
-    if isinstance(exc, (LookupError, ConnectionConfigError)):
+    if isinstance(exc, (foundation.NotFound, ConnectionConfigError)):
         return int(ExitCode.USAGE)
     if isinstance(exc, (ConnectionUnavailable, psycopg2.OperationalError)) or storage.is_transient(exc):
         return int(ExitCode.TRANSIENT_FAILURE)
@@ -629,8 +635,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stderr.write(f"rapidpipe {where}: database configuration error: {exc}\n")
         elif isinstance(exc, ConnectionUnavailable):
             sys.stderr.write(f"rapidpipe {where}: database unavailable: {exc}\n")
-        elif isinstance(exc, LookupError):
-            sys.stderr.write(f"rapidpipe {where}: {exc.args[0] if exc.args else exc}\n")
+        elif isinstance(exc, foundation.NotFound):
+            sys.stderr.write(f"rapidpipe {where}: {exc}\n")
         else:
             logging.getLogger("rapidpipe.cli").exception(
                 "rapidpipe %s: %s error", where, "transient" if code == ExitCode.TRANSIENT_FAILURE else "unexpected")

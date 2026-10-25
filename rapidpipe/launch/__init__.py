@@ -1,4 +1,4 @@
-"""Running one job on AWS Batch, or one old-contract stage as a local subprocess.
+"""Running one job on AWS Batch.
 
 Foundation plan v5, Part 5 item 1: the launcher is reduced to submitting a
 job under a run. The job row and its recorded inputs are written first by
@@ -19,10 +19,6 @@ database otherwise, ``rapidpipe.db.connection``), and optionally
 ``RAPIDPIPE_BATCH_JOB_NAME_PREFIX`` (default ``rapid``). ``boto3`` is
 imported only by :func:`batch_client`, the one indirection a test replaces.
 
-:func:`run_locally` runs a stage still on the old ``--run/--unit/--attempt``
-contract (``admit``, ``finalize``) as a
-subprocess, until its port to ``run(job)``.
-
 This subpackage may import ``rapidpipe.stages`` and the layers below it,
 and is never imported by a stage module.
 """
@@ -30,16 +26,14 @@ and is never imported by a stage module.
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
-from typing import Any, Sequence
+from typing import Any
 
 from rapidpipe.db.connection import parameter_tree_environment
 from rapidpipe.foundation import attempts, publish_kafka
 from rapidpipe.foundation.local import failure_reason
 from rapidpipe.stages.contract import STAGE_NAMES
 
-__all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "run_locally", "spot", "submit"]
+__all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "spot", "submit"]
 
 
 class LaunchError(Exception):
@@ -153,9 +147,3 @@ def spot(settings: dict) -> dict | None:
 def memory_mib(settings: dict, stage: str) -> int | None:
     """The run's ``[batch.memory_mib]`` value for ``stage``; ``None`` (the job definition's) without one."""
     return settings.get("batch", {}).get("memory_mib", {}).get(stage)
-
-
-def run_locally(stage: str, stage_argv: Sequence[str], *, python: str = sys.executable) -> int:
-    """Run the stage as ``python -m rapidpipe.stages.<stage>``; return its exit code."""
-    argv = [python, "-m", f"rapidpipe.stages.{_stage(stage)}", *stage_argv]
-    return subprocess.run(argv).returncode
