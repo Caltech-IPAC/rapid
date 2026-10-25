@@ -24,6 +24,7 @@ import pyarrow.parquet as pq
 import pytest
 from astropy.io import fits
 
+from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.science.spatial import healpix_indexes, tessellation_field
 from rapidpipe.stages import import_products
@@ -123,13 +124,14 @@ def fake_connect(psf_filename: str):
     return lambda: contextlib.nullcontext(Connection())
 
 
-def run_import(tmp_path: Path, source: Path, scope: dict, name: str) -> Path:
+PSF_INPUT = {"kind": "input", "product": "psfs", "key": {}, "source_job": 9, "binding": None}
+
+
+def run_import(tmp_path: Path, source: Path, scope: dict, name: str, inputs=(PSF_INPUT,)) -> Path:
     prefix = tmp_path / "outputs" / name
     prefix.mkdir(parents=True)
     job = JobContext(job=1, run=1, stage="import", scope={"source_dir": str(source), **scope},
-                     survey="S", dataset="D", settings=SETTINGS,
-                     inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
-                              "binding": None}],
+                     survey="S", dataset="D", settings=SETTINGS, inputs=list(inputs),
                      attempt=1, prefix=prefix.as_uri() + "/",
                      connect=fake_connect((source / "psf.fits").as_uri()))
     import_products.run(job)
@@ -205,6 +207,13 @@ def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
 def test_an_import_job_takes_at_most_one_epoch(tmp_path, source):
     with pytest.raises(ValueError, match="at most one epoch"):
         run_import(tmp_path, source, {"epochs": EPOCHS}, "both")
+
+
+def test_an_epoch_without_its_psfs_input_is_rejected_65_with_its_reason(tmp_path, source):
+    with pytest.raises(CommandExit, match="psfs input") as stopped:
+        run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "nopsf", inputs=())
+    assert stopped.value.code == 65
+    assert not (tmp_path / "outputs" / "nopsf" / "manifest.json").exists()
 
 
 # dev's two PSF files on the 20260821 night carry PSFKIND 'sciimage_psf'

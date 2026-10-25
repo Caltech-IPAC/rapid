@@ -58,6 +58,7 @@ import pyarrow.parquet as pq
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.products.filters import rapid_filter_name
@@ -151,17 +152,22 @@ def _footprint(header) -> dict:
     return footprint
 
 
+def _rejected(reason: str) -> CommandExit:
+    """A declared input the job cannot use: exit 65, input rejected, the reason on its row."""
+    return CommandExit(int(ExitCode.INPUT_REJECTED), reason)
+
+
 def _science_psf(job: JobContext, fid: int, sca: int) -> Path:
     """The science PSF file of the ``psfs`` set the job names as an input."""
     psf_jobs = [i["source_job"] for i in job.inputs if i["kind"] == "input" and i["product"] == "psfs"]
     if not psf_jobs:
-        raise ValueError("an epoch's import names its science-image PSF as a psfs input")
+        raise _rejected("an epoch's import names its science-image PSF as a psfs input")
     with job.connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT filename FROM psfs WHERE job = ANY(%s) AND fid = %s AND sca = %s"
                     " AND kind = 'science'", (psf_jobs, fid, sca))
         row = cur.fetchone()
     if row is None:
-        raise ValueError(f"no science psfs row for fid {fid} sca {sca} in jobs {psf_jobs}")
+        raise _rejected(f"no science psfs row for fid {fid} sca {sca} in jobs {psf_jobs}")
     return get(row[0])
 
 

@@ -483,3 +483,30 @@ def test_the_shipped_setting_reads_the_copy_as_it_is_and_flight_propagates():
     flight = tomllib.loads((REPO / "rapidpipe/settings/datasets/flight-1049.toml").read_text())
     assert shipped["intake"]["gaia_proper_motion"] is False
     assert flight["intake"]["gaia_proper_motion"] is True
+
+
+class _Nodes:
+    """A datamodel-shaped mapping whose ``unreadable`` nodes raise on access."""
+
+    def __init__(self, nodes: dict, unreadable: set):
+        self.nodes, self.unreadable = nodes, unreadable
+
+    def keys(self):
+        return list(self.nodes)
+
+    def __getitem__(self, key):
+        if key in self.unreadable:
+            raise OSError(f"block of {key} is corrupt")
+        return self.nodes[key]
+
+
+def test_an_unreadable_masked_node_fails_intake_and_an_unknown_extra_is_skipped():
+    from rapidpipe.science.intake import asdf_image_nodes, asdf_table_nodes
+
+    image = np.zeros((4, 4), dtype=np.float32)
+    nodes = {"meta": {}, "data": image, "err": image, "extra": image}
+    for read in (asdf_image_nodes, asdf_table_nodes):
+        with pytest.raises(OSError, match="err"):
+            read(_Nodes(nodes, {"err"}))
+    assert [name for name, _ in asdf_image_nodes(_Nodes(nodes, {"extra"}))] == ["data", "err"]
+    assert asdf_table_nodes(_Nodes(nodes, {"extra"})) == []

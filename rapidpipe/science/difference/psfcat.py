@@ -7,8 +7,10 @@ and sign in ``awsBatchSubmitJobs_runSingleSciencePipeline.py``. DAOStarFinder
 detects above ``n_thresh_sigma`` times the image's clipped standard
 deviation; PSFPhotometry fits the given PSF with the uncertainty image as
 error, the image's non-finite pixels filled for the finder and masked
-(not dev). When the fit cannot be made the catalog is absent and the caller
-sets that difference image's catalog-outcome bit.
+(not dev). When no source survives the finder the catalog is absent and
+the caller sets that difference image's catalog-outcome bit; any other
+failure (the constructor, the fit, a product write) raises and fails the
+job (not dev, whose bare excepts logged and continued; err-edges-sci).
 
 photutils, pandas and pyarrow are imported inside the functions that use
 them: only the stage's own run needs them, and the unit-test job does not
@@ -44,7 +46,11 @@ def compute_psf_catalog(n_clip_sigma,
                         roundhi=1.0,
                         min_separation=0.0,
                         seed: int | None = None):
-    """`dev` ``compute_psf_catalog``: returns ``(psfcat_flag, phot, psfphot)``."""
+    """`dev` ``compute_psf_catalog``: returns ``(phot, psfphot)``, ``phot`` ``None`` when empty.
+
+    `dev` returns ``(psfcat_flag, phot, psfphot)``; its flag was false only
+    when its bare except caught a constructor error, which now propagates.
+    """
     import photutils
     photutils.future_column_names = True
     from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
@@ -86,18 +92,11 @@ def compute_psf_catalog(n_clip_sigma,
                            roundhi=roundhi,
                            min_separation=min_separation)
 
-    try:
-        psfphot = PSFPhotometry(psf_model=psf_model, fit_shape=fit_shape, finder=finder,
-                                aperture_radius=aperture_radius)
-        psfcat_flag = True
-    except Exception:  # noqa: BLE001 - dev: a bare except
-        logger.warning("*** Warning: Could not make psf-fit catalog (perhaps no sources were "
-                       "detected); continuing...")
-        psfcat_flag = False
-        psfphot = None
-
-    # dev reads psfphot.__dict__ here unconditionally, which raises when the
-    # constructor failed; kept.
+    # dev wraps the constructor in a bare except whose warning was dead: its
+    # next line read psfphot.__dict__ and raised AttributeError on None. The
+    # constructor's own error now propagates (err-edges-sci).
+    psfphot = PSFPhotometry(psf_model=psf_model, fit_shape=fit_shape, finder=finder,
+                            aperture_radius=aperture_radius)
     logger.info("psfphot_attributes = %s", psfphot.__dict__.keys())
 
     # dev catches every exception here. photutils 3.0 returns None for every
@@ -117,59 +116,54 @@ def compute_psf_catalog(n_clip_sigma,
     filled[~np.isfinite(filled)] = 0.0
     phot = psfphot(data=filled, mask=nonfinite, error=data_uncert)
 
-    if psfcat_flag:
-        try:
-            resid = psfphot.make_residual_image(data_image)
-            fits.PrimaryHDU(data=resid.astype(np.float32)).writeto(
-                output_psfcat_residual_filename, overwrite=True, checksum=True)
-        except Exception:  # noqa: BLE001 - dev: a bare except
-            logger.warning("*** Warning: Could not make residual image (perhaps no sources were "
-                           "detected); continuing...")
+    # dev's bare except here hid both the empty case (photutils raises "No
+    # results available" for a residual of an empty fit) and a failed write;
+    # the empty case writes no residual, a failed write raises (err-edges-sci).
+    if phot is not None:
+        resid = psfphot.make_residual_image(data_image)
+        fits.PrimaryHDU(data=resid.astype(np.float32)).writeto(
+            output_psfcat_residual_filename, overwrite=True, checksum=True)
 
-    return psfcat_flag, phot, psfphot
+    return phot, psfphot
 
 
 def write_psf_catalog_products(phot, psfphot, sky_coords_image, output_psfcat_filename,
-                               output_psfcat_finder_filename, output_psfcat_parquet_filename,
-                               label: str) -> None:
+                               output_psfcat_finder_filename, output_psfcat_parquet_filename) -> None:
     """`dev`'s catalog-writing block: formats, RA/Dec, text catalogs, and parquet.
 
     ``output_psfcat_parquet_filename`` is ``None`` for the naive catalogs,
-    which `dev` writes without a parquet file. Any error is logged and
-    swallowed, as `dev` does.
+    which `dev` writes without a parquet file. `dev` logs and swallows any
+    error here; an error now propagates and fails the job, so a catalog the
+    stage records is a catalog on disk (err-edges-sci).
     """
     from astropy.io import ascii
     from astropy.table import join
 
-    try:
-        phot["x_init"].info.format = ".4f"
-        phot["y_init"].info.format = ".4f"
-        phot["flux_init"].info.format = ".6f"
-        phot["flux_fit"].info.format = ".6f"
-        phot["x_err"].info.format = ".4f"
-        phot["y_err"].info.format = ".4f"
-        phot["flux_err"].info.format = ".5f"
-        phot["qfit"].info.format = ".4f"
-        phot["cfit"].info.format = ".4f"
+    phot["x_init"].info.format = ".4f"
+    phot["y_init"].info.format = ".4f"
+    phot["flux_init"].info.format = ".6f"
+    phot["flux_fit"].info.format = ".6f"
+    phot["x_err"].info.format = ".4f"
+    phot["y_err"].info.format = ".4f"
+    phot["flux_err"].info.format = ".5f"
+    phot["qfit"].info.format = ".4f"
+    phot["cfit"].info.format = ".4f"
 
-        ra, dec = compute_sky_coords_from_pixel_coords(
-            sky_coords_image, list(phot["x_fit"]), list(phot["y_fit"]))
+    ra, dec = compute_sky_coords_from_pixel_coords(
+        sky_coords_image, list(phot["x_fit"]), list(phot["y_fit"]))
 
-        phot["x_fit"].info.format = ".4f"
-        phot["y_fit"].info.format = ".4f"
-        phot.add_column(ra, name="ra")
-        phot.add_column(dec, name="dec")
+    phot["x_fit"].info.format = ".4f"
+    phot["y_fit"].info.format = ".4f"
+    phot.add_column(ra, name="ra")
+    phot.add_column(dec, name="dec")
 
-        ascii.write(phot, output_psfcat_filename, overwrite=True)
-        ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
+    ascii.write(phot, output_psfcat_filename, overwrite=True)
+    ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
 
-        if output_psfcat_parquet_filename is not None:
-            joined_table_inner = join(phot, psfphot.finder_results, keys="id", join_type="inner")
-            logger.info("nrows in PSF-fit catalog = %s", len(joined_table_inner))
-            joined_table_inner.to_pandas().to_parquet(output_psfcat_parquet_filename, engine="pyarrow")
-    except Exception as e:  # noqa: BLE001 - dev swallows every error here
-        logger.warning("PSF-fit PSFPhotometry and DAOStarFinder catalogs (%s): An unexpected "
-                       "error occurred: %s", label, e)
+    if output_psfcat_parquet_filename is not None:
+        joined_table_inner = join(phot, psfphot.finder_results, keys="id", join_type="inner")
+        logger.info("nrows in PSF-fit catalog = %s", len(joined_table_inner))
+        joined_table_inner.to_pandas().to_parquet(output_psfcat_parquet_filename, engine="pyarrow")
 
 
 def compute_sky_coords_from_pixel_coords(filename_sciimage_image, x_list, y_list, hdu_index=0):
@@ -244,31 +238,24 @@ def psf_catalog(settings: PsfCatalogSettings,
                 label: str,
                 seed: int | None = None) -> PsfCatalogResult:
     """One `dev` catalog block: fit, then write the products when the fit was made."""
-    psfcat_flag, phot, psfphot = compute_psf_catalog(
+    phot, psfphot = compute_psf_catalog(
         settings.n_clip_sigma, settings.n_thresh_sigma, settings.fwhm, settings.fit_shape,
         settings.aperture_radius, image, uncertainty, psf, residual,
         sharplo=settings.sharplo, sharphi=settings.sharphi, roundlo=settings.roundlo,
         roundhi=settings.roundhi, min_separation=settings.min_separation, seed=seed)
-    logger.info("psfcat_flag = %s", psfcat_flag)
-    if not psfcat_flag:
-        return PsfCatalogResult(produced=False, nsources=None)
     # photutils' PSFPhotometry.__call__ returns None, not an exception, when
     # DAOStarFinder detects candidate sources but none survive its
     # sharpness/roundness filter (a real, valid outcome on a near-empty
-    # image -- confirmed live, LEDGER-fixture-real.md 2026-09-23). `dev`'s
-    # own pattern here is "could not make a catalog -> log, mark the
-    # outcome, continue" (the bare excepts above); this is the same
-    # outcome via photutils' non-exception path, so it takes the same
-    # branch rather than the docstring's promised
-    # "the catalog is absent and the caller sets that difference image's
-    # catalog-outcome bit" turning into a crash instead.
+    # image -- confirmed live, LEDGER-fixture-real.md 2026-09-23): the
+    # catalog is absent and the caller sets that difference image's
+    # catalog-outcome bit.
     if phot is None:
         logger.warning("*** Warning: Could not make psf-fit catalog (no sources passed "
                        "filtering); continuing...")
         return PsfCatalogResult(produced=False, nsources=None)
     nsources = len(phot)
     logger.info("npsfcatsources (%s) = %s", label, nsources)
-    write_psf_catalog_products(phot, psfphot, sky_coords_image, catalog, finder, parquet, label)
+    write_psf_catalog_products(phot, psfphot, sky_coords_image, catalog, finder, parquet)
     return PsfCatalogResult(produced=True, nsources=nsources)
 
 

@@ -27,6 +27,7 @@ import pytest
 from astropy.io import fits
 
 import rapidpipe.stages.reference as reference
+from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.selftest.support import fakereftools
 from rapidpipe.selftest.support.fakedifftools import cdf_dir
@@ -165,10 +166,9 @@ def test_frames_past_max_frames_are_not_coadded_and_are_named(tmp_path, frames):
     assert json.loads((prefix / "manifest.json").read_text())["reference"]["not_coadded"] == [7002]
 
 
-@pytest.mark.parametrize("case", ["too few", "another filter", "outside the scope"])
+@pytest.mark.parametrize("case", ["too few", "another filter"])
 def test_bad_inputs_fail_before_a_manifest(tmp_path, frames, case):
-    kwargs = {"too few": {"order": (0,)},
-              "outside the scope": {"key_override": {"fid": FID + 1}}}.get(case, {})
+    kwargs = {"too few": {"order": (0,)}}.get(case, {})
     if case == "another filter":
         with fits.open(frames[1]) as hdul:
             hdul = fits.HDUList([h.copy() for h in hdul])
@@ -176,6 +176,13 @@ def test_bad_inputs_fail_before_a_manifest(tmp_path, frames, case):
         hdul.writeto(frames[1], overwrite=True)
     with pytest.raises(ValueError):
         run_reference(tmp_path, frames, **kwargs)
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_an_input_outside_the_scope_is_rejected_65_with_its_reason(tmp_path, frames):
+    with pytest.raises(CommandExit, match="is not the scope's fid") as stopped:
+        run_reference(tmp_path, frames, key_override={"fid": FID + 1})
+    assert stopped.value.code == 65
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 

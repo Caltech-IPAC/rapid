@@ -376,6 +376,11 @@ def _beside(url: str, name: str) -> Path:
     return get(url.rsplit("/", 1)[0] + "/" + name)
 
 
+def _rejected(reason: str) -> CommandExit:
+    """A declared input the job cannot use: exit 65, input rejected, the reason on its row."""
+    return CommandExit(int(ExitCode.INPUT_REJECTED), reason)
+
+
 def read_inputs(job: JobContext) -> Inputs:
     """Read the named rows in one short transaction, fetch their files and draw a ``pid``."""
     key = {"dataset": job.dataset, "expid": int(job.scope["expid"]),
@@ -386,18 +391,18 @@ def read_inputs(job: JobContext) -> Inputs:
         by_product.setdefault(item["product"], []).append(item)
     others = sorted(set(by_product) - {"l2files", "refimages", "psfs"})
     if others:
-        raise ValueError(f"job {job.job}: difference reads l2files, refimages and psfs, not {others}")
+        raise _rejected(f"job {job.job}: difference reads l2files, refimages and psfs, not {others}")
     counts = {p: len(by_product.get(p, [])) for p in ("l2files", "refimages")}
     psf_kinds = sorted((i["key"].get("kind") for i in by_product.get("psfs", [])), key=str)
     if counts != {"l2files": 1, "refimages": 1} or psf_kinds != sorted(PSF_KINDS):
-        raise ValueError(f"job {job.job}: difference names one l2files, one refimages and one "
-                         f"psfs input of key kind {PSF_KINDS}, got {counts} and psfs "
-                         f"kinds {psf_kinds}")
+        raise _rejected(f"job {job.job}: difference names one l2files, one refimages and one "
+                        f"psfs input of key kind {PSF_KINDS}, got {counts} and psfs "
+                        f"kinds {psf_kinds}")
     (l2_in,), (ref_in,) = by_product["l2files"], by_product["refimages"]
     if l2_in["key"] != key:
-        raise ValueError(f"job {job.job}: l2files input {l2_in['key']} is not the epoch {key}")
+        raise _rejected(f"job {job.job}: l2files input {l2_in['key']} is not the epoch {key}")
     if int(ref_in["key"]["fid"]) != key["fid"]:
-        raise ValueError(f"job {job.job}: refimages input {ref_in['key']} is not the scope's fid")
+        raise _rejected(f"job {job.job}: refimages input {ref_in['key']} is not the scope's fid")
 
     with job.connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT rid, filename, exptime, mjdobs, infobits FROM l2files WHERE job = %s"
@@ -405,36 +410,36 @@ def read_inputs(job: JobContext) -> Inputs:
                     (l2_in["source_job"], key["dataset"], key["expid"], key["sca"], key["fid"]))
         l2 = cur.fetchone()
         if l2 is None:
-            raise ValueError(f"job {job.job}: no l2files row {key} in job {l2_in['source_job']}")
+            raise _rejected(f"job {job.job}: no l2files row {key} in job {l2_in['source_job']}")
         ref_key = ref_in["key"]
         cur.execute("SELECT rfid, filename, infobits FROM refimages WHERE job = %s"
                     " AND dataset = %s AND field = %s AND fid = %s",
                     (ref_in["source_job"], ref_key["dataset"], ref_key["field"], ref_key["fid"]))
         ref = cur.fetchone()
         if ref is None:
-            raise ValueError(f"job {job.job}: no refimages row {ref_key} in job "
-                             f"{ref_in['source_job']}")
+            raise _rejected(f"job {job.job}: no refimages row {ref_key} in job "
+                            f"{ref_in['source_job']}")
         cur.execute("SELECT filename FROM refimcatalogs WHERE job = %s AND rfid = %s"
                     " AND cattype = %s ORDER BY rfcatid DESC LIMIT 1",
                     (ref_in["source_job"], ref[0], REFERENCE_CATALOG_TYPE))
         refcat = cur.fetchone()
         if refcat is None:
-            raise ValueError(f"job {job.job}: reference rfid {ref[0]} has no mosaic catalog "
-                             f"(refimcatalogs cattype {REFERENCE_CATALOG_TYPE})")
+            raise _rejected(f"job {job.job}: reference rfid {ref[0]} has no mosaic catalog "
+                            f"(refimcatalogs cattype {REFERENCE_CATALOG_TYPE})")
         psf_urls = {}
         for item in by_product["psfs"]:
             psf_key = item["key"]
             if (int(psf_key["fid"]), int(psf_key["sca"])) != (key["fid"], key["sca"]):
-                raise ValueError(f"job {job.job}: psfs input {psf_key} is not the scope's fid "
-                                 f"and sca")
+                raise _rejected(f"job {job.job}: psfs input {psf_key} is not the scope's fid "
+                                f"and sca")
             cur.execute("SELECT filename FROM psfs WHERE job = %s AND dataset = %s AND fid = %s"
                         " AND sca = %s AND kind = %s",
                         (item["source_job"], psf_key["dataset"], psf_key["fid"], psf_key["sca"],
                          psf_key["kind"]))
             row = cur.fetchone()
             if row is None:
-                raise ValueError(f"job {job.job}: no psfs row {psf_key} in job "
-                                 f"{item['source_job']}")
+                raise _rejected(f"job {job.job}: no psfs row {psf_key} in job "
+                                f"{item['source_job']}")
             psf_urls[psf_key["kind"]] = row[0]
         cur.execute("SELECT nextval(pg_get_serial_sequence('diffimages', 'pid'))")
         pid = int(cur.fetchone()[0])
@@ -443,8 +448,8 @@ def read_inputs(job: JobContext) -> Inputs:
     ref_url = ref[1]
     image_name = ref_url.rsplit("/", 1)[-1]
     if not image_name.endswith("_image.fits"):
-        raise ValueError(f"job {job.job}: reference mosaic {image_name} is not awaicgen's "
-                         f"*_image.fits")
+        raise _rejected(f"job {job.job}: reference mosaic {image_name} is not awaicgen's "
+                        f"*_image.fits")
     return Inputs(
         rid=int(l2[0]), exptime=float(l2[2]), mjdobs=float(l2[3]), infobits_science=int(l2[4] or 0),
         rfid=int(ref[0]), infobits_reference=int(ref[2] or 0),
