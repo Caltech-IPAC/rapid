@@ -8109,6 +8109,93 @@ Check, held:
 
 Raw evidence is in the brief's `t1/`: `read_scale.*`, `job*.json`, `run*.json`, `loop-*.log`, `check-*.log`, `comp-*/`, `pr447-body.md`.
 
+### Step self-contained: every input the live runs of each SMDC dataset read is in the inputs bucket under `g0008-selfcontained/` or a prefix already there; no run on SMDC names an IMSS bucket
+
+**What.** This step is operations only, with no code, overlay, settings or deploy change. Ben's aim from the weekend plan is SMDC datasets self-contained and independent of IMSS. For every live run of each dataset, the inputs it read are its L2 files, the truth its checks read and its Gaia catalog. Each of those is now copied byte for byte into the inputs bucket, or verified as already there. Then one query over every run on SMDC lists any run that names an IMSS bucket.
+
+**The live runs.** The plan's operations facts name HLWAS fixes 46 to 50, 53 and 54, and ops 82. The injected footprint has 72, 73 and 81. OpenUniverse has 80. GBTDS has 79 and 112, RimTimSim 99 and 100, and flight 118 (flight-first's only run, from the runs table at 00:44 UTC).
+
+**The inventory, from the database** (read-only; the queries and their output are in the brief's `t1/`):
+
+- `paths.sql` lists every `s3://` URI or absolute path in each run's resolved settings body. Two keys hold data: `intake.source_root` and one run's ePSF cache (CRDS references, out of scope). The rest are code paths in the image (`/code`, `/opt/rapid`), a checkout's paths under `[difference.paths]`, and SSM parameter names.
+- `jobsweep.sql` lists every `s3://` URI or absolute path in every job's scope and manifest outside the job's own output prefix. Three stages record external inputs: `intake`'s `source`, `psf`'s `source` (the same L2 file) and `import`'s `source_dir`. No `job_inputs` key holds a URI; the keys name products. `l2files.filename` is always the intake's own output under the scratch bucket.
+- `live_inputs.sql` walks the live runs' jobs and every job they consumed through `job_inputs.source_job`, transitively. That reaches run 79's inputs, which were built under run 75, and run 53's and 54's, built under runs 51 and 52. For each published intake, psf and import job it gives the source read.
+- Truth comes from the checks: `completeness.py --truth` reads `r00342-inj1/catalog/` (runs 72, 73, 81), and `completeness_ou.py` reads IRSA's `Roman_TDS_index_H158_<pointing>_10.txt` for each of run 80's 16 images. The loop also read OpenUniverse's observing sequence. Runs 99 and 100's compatibility check read `rimtimsim-250513/metadata/`. HLWAS null, GBTDS and flight have no truth.
+
+| dataset (live runs) | input | source class | inputs-bucket prefix | objects | bytes |
+|---|---|---|---|---|---|
+| HLWAS (46–50, 53, 54, 82) | L2 | public (`stpubdata`) | `g0008-selfcontained/stpubdata/roman/nexus/soc_simulations/r00342/l2/` | 82 | 16,787,121,507 |
+| HLWAS and injected | Gaia | host path | `g0008-selfcontained/host/…/gaia-dr3-hlwas-r00342-box.parquet` | 1 | 16,319,583 |
+| HLWAS injected (72, 73, 81) | L2 | inputs bucket | `r00342-inj1/l2/` | 426 | 87,032,607,901 |
+| HLWAS injected | truth | inputs bucket | `r00342-inj1/catalog/` | 2 | 1,496,295 |
+| GBTDS (79, 112) | L2 | scratch bucket | `g0008-selfcontained/$SCRATCH_BUCKET/rapidpipe/foundation/samples/r00340-gb1/l2/`, `…/r00340-gb3/l2/` | 18 | 3,649,116,048 |
+| GBTDS (79) | Gaia | host path | `g0008-selfcontained/host/…/gaia-dr3-gbtds-r00340-gb1-box.parquet` | 1 | 102,402,835 |
+| GBTDS (112) | Gaia | scratch bucket (the host file is gone) | `g0008-selfcontained/$SCRATCH_BUCKET/rapidpipe/foundation/112/import/23051/1/gaia-dr3-gbtds-r00340-gb3-box.parquet` | 1 | 12,763,163 |
+| OpenUniverse (80) | L2 | public (`stpubdata`) | `g0008-selfcontained/stpubdata/roman/nexus/open_universe/TDS/simple_model/H158/` | 16 | 4,327,718,810 |
+| OpenUniverse | truth | public (`nasa-irsa-simulations`) | `g0008-selfcontained/nasa-irsa-simulations/openuniverse2024/roman/full/RomanTDS/` (16 index files and the observing sequence) | 17 | 69,226,104 |
+| OpenUniverse | star catalog (its Gaia) | host path | `g0008-selfcontained/host/…/openuniverse-tds-h158-sca10-stars.parquet` | 1 | 103,402 |
+| RimTimSim (99, 100) | L2 | inputs bucket | `g0007-rimtimsim/rimtimsim-260622-lite/` (the 30 files read) | 30 | 1,773,552,915 |
+| RimTimSim | truth | inputs bucket | `g0007-rimtimsim/rimtimsim-250513/metadata/` | 27 | 9,893,566,363 |
+| RimTimSim | Gaia | host path | `g0008-selfcontained/host/…/gaia-dr3-rimtimsim-260622-box.parquet` | 1 | 24,666,930 |
+| Flight (118) | L2 | inputs bucket | `flight-1049/` | 4 | 833,586,295 |
+| Flight | Gaia | host path | `g0008-selfcontained/host/…/gaia-dr3-flight-1049-box.parquet` | 1 | 354,810 |
+
+No source is IMSS and none is external. Every live run's L2, truth and Gaia now has a copy in the inputs bucket.
+
+**The copy.** Each source is downloaded and its sha256 computed. It then goes up with `put-object --if-none-match '*'` and its `ChecksumSHA256` to `g0008-selfcontained/<source bucket>/<source key>`, the `g0007-rimtimsim/` grammar, or to `g0008-selfcontained/host/<path>` for a host file. `_manifest.json` goes up last and records key, size, ETag, sha256, source, kind, datasets and runs for each object. A Gaia box was copied from its host file only where the file's sha256 equals that of the `catalogs.location` copy each run read; that copy is listed in the manifest as `read_by_runs_as`. The `catalogs` rows hold locations, not stars, so no export from rows was needed. The objects already in the inputs bucket were not copied again. The manifest's `reused` section lists all 489 of them, compared with a fresh listing: `g0007-rimtimsim/` against its own manifest by size and ETag (57, all equal), `flight-1049/` against its own by size (4, equal), and `r00342-inj1/` by presence and size alone, since that prefix has no manifest (428).
+
+Check, held:
+
+```sh
+aws s3 ls --recursive --summarize "s3://$INPUTS_BUCKET/g0008-selfcontained/"
+```
+
+The listing gives **Total Objects: 140**, the 139 objects of the manifest plus `_manifest.json`, and **Total Size: 24,990,023,048**. That is the manifest's `total_bytes` 24,989,793,192 plus the manifest's own 229,856. Every key's size equals its manifest entry and no object is unlisted. The 17 single-part sources have ETags equal to their copies'. The other 116 are multipart at their source, so they are compared by size and the sha256 is recorded. The manifest's `incomplete` list is empty.
+
+**The check.** The query is `imss_check.psql.sql`, run read-only with `psql -X -v ON_ERROR_STOP=1 -v inputs_bucket="$INPUTS_BUCKET" -v scratch_bucket="$SCRATCH_BUCKET" -f imss_check.psql.sql`:
+
+```sql
+WITH texts(run, t) AS (
+  SELECT id, settings::text FROM runs
+  UNION ALL SELECT run, scope::text || coalesce(manifest::text, '') FROM jobs
+  UNION ALL SELECT j.run, ji.key::text FROM job_inputs ji JOIN jobs j ON j.id = ji.job
+  UNION ALL SELECT j.run, c.location FROM catalogs c JOIN jobs j ON j.id = c.job
+  UNION ALL SELECT j.run, l.filename FROM l2files l JOIN jobs j ON j.id = l.job
+),
+buckets AS (
+  SELECT DISTINCT run, m[1] AS bucket FROM texts, regexp_matches(t, 's3://([a-z0-9.-]+)', 'g') m
+),
+classed AS (
+  SELECT run, bucket,
+    CASE WHEN bucket IN ('rimtimsim-20260401-lite', 'rimtimsim-250513', 'rimtimsim-250513-lite',
+                         'rimtimsim-251210', 'rimtimsim-260622', 'rimtimsim-260622-lite') THEN 'imss'
+         WHEN bucket IN (:'inputs_bucket', :'scratch_bucket', 'stpubdata', 'nasa-irsa-simulations') THEN 'known'
+         ELSE 'external' END AS class
+  FROM buckets
+)
+SELECT r.id AS run, r.dataset,
+  string_agg(c.bucket, ',' ORDER BY c.bucket) FILTER (WHERE c.class = 'imss') AS imss_buckets,
+  string_agg(c.bucket, ',' ORDER BY c.bucket) FILTER (WHERE c.class = 'external') AS external_not_imss
+FROM runs r JOIN classed c ON c.run = r.id
+GROUP BY r.id, r.dataset
+HAVING count(*) FILTER (WHERE c.class IN ('imss', 'external')) > 0
+ORDER BY r.id;
+SELECT count(*) AS runs, min(id) AS first_run, max(id) AS last_run, now() AS at FROM runs;
+```
+
+The IMSS buckets are the six source buckets of `g0007-rimtimsim/_manifest.json`. The runbook names no other IMSS bucket; it names dev's pipeline-files bucket only as unreadable from this account.
+
+Result, held: **0 rows**, over **124 runs (1 to 124) at 2026-10-25 00:51:07 UTC**. No run names an IMSS bucket and none names an external one. In fact the runs name only three buckets: the inputs bucket (24 runs), the scratch bucket (121) and `stpubdata` (82). As a control, the same query with `inputs_bucket=none` lists exactly those 24 runs with the inputs bucket under `external_not_imss`, so the match works. Runs 1 to 11 read their field from a host directory (`source_dir`), which came from IMSS. A bucket match cannot see that, and the step does not count it; those runs' field is in the inputs bucket under `foundation/`.
+
+**What the inventory corrected.**
+
+- The brief's evidence named a root-level `_manifest.json` and root-level `rimtimsim-*` prefixes in the inputs bucket. Neither exists. The 346,521-byte manifest is `g0007-rimtimsim/_manifest.json`, and the six RimTimSim copies are under `g0007-rimtimsim/`.
+- Runs 53 and 54 read Gaia catalogs that run 51's and 52's import jobs wrote, and those scratch prefixes were deleted on 2026-10-24. Their copy is the host file that both imports name in `source_dir`. Its bytes cannot be compared with what those runs read; the manifest marks the two locations "(deleted; unverified)". The other nine HLWAS runs' copies equal the host file.
+- GBTDS gb3's host Gaia file is gone. Its copy is the scratch object run 112 read.
+- IRSA's bucket is read by `completeness_ou.py`, a check script, and by no run. It appears in no run's record.
+
+Left in place, nothing deleted: the scratch samples, the host files, `r00342-inj1/` and every other existing prefix. No live run or overlay is re-pointed to the copies. A run's `intake.source_root` is set at `run create`, and the copies' prefixes are what a new run's `--set` would name. The raw evidence is in the brief's `t1/`: `runs.tsv`, `paths.tsv`, `jobsweep.tsv`, `live_inputs.tsv`, `plan.tsv`, `copied.tsv`, `reused-verified.tsv`, `g0008_manifest.json`, `g0008-listing.txt`, `imss_check.psql.out` and `imss_control.out`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
