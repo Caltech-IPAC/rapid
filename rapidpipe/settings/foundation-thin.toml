@@ -482,7 +482,10 @@ xy_fit_max_offset = 0.5
 # ruled divergence, decisions.md 2026-10-24) measures it on the resampled
 # reference's stars; "science" hands ZOGY the science PSF for both images,
 # as run 17 did, for a field whose stars cannot be measured that way (a
-# confusion-limited one: the GBTDS overlay's comment).
+# confusion-limited one: the GBTDS overlay's comment). The quality metrics'
+# stars (core and ring residuals, the ring count, registration): "measured"
+# takes the measurement's finder stars, "science" the reference mosaic's
+# SExtractor catalog mapped onto the science grid.
 reference_psf = "measured"
 
 [difference.paths]

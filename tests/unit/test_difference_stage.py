@@ -599,3 +599,32 @@ def test_reference_psf_science_measures_nothing_and_gives_zogy_the_science_psf_f
     recorded = manifest(prefix)
     assert recorded["difference"]["refpsf"]["mode"] == "science"
     assert not {"refpsf_stars", "refpsf_sigma_px", "ref_sci_sigma_ratio"} & set(recorded["metrics"])
+
+
+def test_reference_psf_science_takes_the_metrics_stars_from_the_reference_catalog():
+    from astropy.wcs import WCS
+
+    from rapidpipe.science.difference import metrics as quality
+    from tests.support.fakedifftools import _gaussian, wcs_header
+
+    n = 160
+    stars = [(50.0, 60.0, 900.0), (110.0, 52.0, 700.0), (80.0, 105.0, 500.0)]
+    reference = np.zeros((n, n))
+    for x, y, flux in stars:
+        reference += flux * _gaussian(n, x, y, 1.5) / (2 * np.pi * 1.5 ** 2)
+    science = np.roll(reference, 1, axis=1)               # one pixel in x
+    header = wcs_header(n, sip=False)
+    ra, dec = WCS(header).all_pix2world([s[0] for s in stars] + [400.0],
+                                        [s[1] for s in stars] + [400.0], 0)
+    catalog = [[r, d, flux, flux, 1.0] for r, d, flux in zip(ra, dec, [900.0, 700.0, 500.0, 999.0])]
+
+    found, stars_xy = difference._catalog_stars(catalog, header, reference)
+
+    assert found[:, :2] == pytest.approx(np.array(stars)[:, :2], abs=1e-6)   # off the image: dropped
+    assert found[:, 2].tolist() == [900.0, 700.0, 500.0]                     # FLUX_AUTO
+    assert len(stars_xy) == 3
+    recorded = quality.registration(science, reference, stars_xy)
+    recorded.update(quality.residuals(reference, 0.1 * reference,
+                                      quality.residual_stars(found, reference.shape, reference)))
+    assert recorded["registration_dx_px"] == pytest.approx(1.0, abs=0.05)
+    assert {"core_fraction", "ring_fraction", "registration_dy_px"} <= set(recorded)

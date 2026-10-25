@@ -54,7 +54,10 @@ reason (``refpsf: N stars, 10 needed``) on the job row; there is no
 fallback. ``[difference] reference_psf = "science"`` is a dataset's
 explicit choice instead (the GBTDS overlay's): no measurement, the science
 PSF written as ``refimage_psf.fits``, the manifest's ``refpsf`` saying so,
-and the metrics that need the reference's stars absent. `dev` uses a static offline-compiled reference PSF per detector
+the reference PSF's own metrics absent, and the residual, ring and
+registration stars taken from the reference mosaic's SExtractor catalog
+mapped onto the science grid (:func:`_catalog_stars`) instead of the
+measurement's finder. `dev` uses a static offline-compiled reference PSF per detector
 instead, so this is a recorded divergence (rapid_docs ``decisions.md``,
 2026-10-24: the empirical PSF was 15% wider than the science ePSF the
 ``psf`` stage had handed ZOGY for both, run 17).
@@ -652,20 +655,25 @@ def run(job: JobContext) -> None:
     refpsf_record, metrics, measured_psf = _measure_reference_psf(
         kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
         w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"])
-    # Registration, before the subpixel offset corrects it; the science stars' own width beside
-    # the ePSF's; the reference catalog's sky positions.
+    # The reference catalog's sky positions; the metrics' stars, the measurement's finder stars
+    # or, under reference_psf = "science", the catalog's own (_catalog_stars).
+    reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
+        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", REFERENCE_CATALOG_COLUMNS)
     science_pixels = fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float)
-    metrics.update(quality.registration(
-        science_pixels, fits.getdata(w(output_resampled_reference_image), 0).astype(float),
-        measured_psf.stars_xy))
-    sci_star_sigma = quality.star_sigma(science_pixels, measured_psf.stars_xy)
+    reference_pixels = fits.getdata(w(output_resampled_reference_image), 0).astype(float)
+    found, stars_xy = measured_psf.found, measured_psf.stars_xy
+    if settings["reference_psf"] == "science":
+        found, stars_xy = _catalog_stars(
+            reference_sky, fits.getheader(w(filename_bkg_subbed_science_image), 0), reference_pixels)
+    # Registration, before the subpixel offset corrects it; the science stars' own width beside
+    # the ePSF's.
+    metrics.update(quality.registration(science_pixels, reference_pixels, stars_xy))
+    sci_star_sigma = quality.star_sigma(science_pixels, stars_xy)
     if sci_star_sigma is not None:
         metrics["sci_star_sigma_px"] = sci_star_sigma
         if metrics["sci_psf_sigma_px"] > 0:
             metrics["sci_star_psf_sigma_ratio"] = sci_star_sigma / metrics["sci_psf_sigma_px"]
-    del science_pixels
-    reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
-        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", REFERENCE_CATALOG_COLUMNS)
+    del science_pixels, reference_pixels
 
     # Gain matching, with the reference zero point the reference was built on.
     zero_point, zero_point_source = _resolve_zero_point(settings, w(staged["reference"]))
@@ -862,7 +870,7 @@ def run(job: JobContext) -> None:
                    job.path / "diffimages.parquet")
     pq.write_table(sources, job.path / "sources.parquet")
     residual_stars = _quality_metrics(
-        metrics, measured_psf, thresh=thresh, candidates=candidates, sources=sources,
+        metrics, found, thresh=thresh, candidates=candidates, sources=sources,
         catalog=catalog, in_footprint=in_footprint,
         gainmatched_reference=w(output_resampled_gainmatched_reference_image + ".gz"),
         difference=w(filename_diffimage_published),
@@ -1051,15 +1059,38 @@ def flag_bright_footprint(sources: pa.Table, reference_xy: np.ndarray, reference
     return sources.set_column(index, sources.schema.field(index), flagged), inside
 
 
-def _quality_metrics(metrics: dict, measured: refpsf.ReferencePsf, *, thresh: float,
+def _catalog_stars(reference_sky: list, header, reference: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The metrics' star rows under ``reference_psf = "science"``, from the reference mosaic's catalog.
+
+    ``reference_sky`` rows are :data:`REFERENCE_CATALOG_COLUMNS`, mapped onto
+    the science grid of ``header`` (:func:`_reference_on_grid`) and kept on
+    ``reference``'s pixels. Returns ``(found, stars_xy)`` as
+    :class:`~rapidpipe.science.difference.refpsf.ReferencePsf` has them:
+    ``(x, y, FLUX_AUTO)`` rows, and the registration stars, the ones
+    :func:`~rapidpipe.science.difference.metrics.residual_stars` chooses on
+    ``reference``, the resampled reference. The refpsf finder gives a
+    confusion-limited field no stars (the GBTDS overlay's comment); its
+    catalog still has them. Both empty when no row maps.
+    """
+    xy, rows = _reference_on_grid(reference_sky, header)
+    ny, nx = reference.shape
+    on = (xy[:, 0] >= 0) & (xy[:, 0] < nx) & (xy[:, 1] >= 0) & (xy[:, 1] < ny)
+    found = np.column_stack([xy[on], rows[on, 2]])
+    stars = quality.residual_stars(found, reference.shape, reference)
+    return found, np.asarray(stars, dtype=float).reshape(-1, 2)
+
+
+def _quality_metrics(metrics: dict, found: np.ndarray, *, thresh: float,
                      candidates: int, sources: pa.Table, catalog: pa.Table, in_footprint: np.ndarray,
                      gainmatched_reference: Path, difference: Path, coverage: Path,
                      reference_xy: np.ndarray) -> list[dict]:
     """Add :mod:`rapidpipe.science.difference.metrics`' numbers to ``metrics``.
 
     Reads the job's own published files back from its work directory, all
-    on the science grid; ``reference_xy`` is the reference mosaic catalog
-    mapped onto it, ``catalog`` the uncapped PSF-fit catalog and
+    on the science grid; ``found`` the star rows ``(x, y, flux)`` the
+    residual stars and the ring count read (the reference PSF measurement's
+    finder stars, or :func:`_catalog_stars`'), ``reference_xy`` the reference
+    mosaic catalog mapped onto it, ``catalog`` the uncapped PSF-fit catalog and
     ``in_footprint`` the kept sources' bright-footprint mask. Returns the
     residual stars with their positions, which the manifest records beside
     the metrics for a reader's gallery.
@@ -1069,7 +1100,7 @@ def _quality_metrics(metrics: dict, measured: refpsf.ReferencePsf, *, thresh: fl
     gainmatched = fits.getdata(gainmatched_reference, 0).astype(float)
     metrics["usable_fraction"] = quality.usable_fraction(diff, cov, thresh)
     metrics["n_candidates"] = int(candidates)
-    stars = quality.residual_stars(measured.found, diff.shape, gainmatched)
+    stars = quality.residual_stars(found, diff.shape, gainmatched)
     found = quality.residuals(gainmatched, diff, stars)
     metrics.update(found)
     columns = sources.to_pydict()
@@ -1082,7 +1113,7 @@ def _quality_metrics(metrics: dict, measured: refpsf.ReferencePsf, *, thresh: fl
     ux, uy, uflux, uerr = (catalog.column(n).to_numpy().astype(float)
                            for n in ("x_fit", "y_fit", "flux_fit", "flux_err"))
     metrics["n_sources_near_bright_px"] = quality.near_bright_count(ux, uy, gainmatched)
-    ring = quality.ring_count(ux, uy, uflux, uerr, measured.found)
+    ring = quality.ring_count(ux, uy, uflux, uerr, found)
     if ring is not None:
         metrics["n_sources_ring_snr_gt20"] = ring
     return [{"x": round(x, 2), "y": round(y, 2)} for x, y in stars]
