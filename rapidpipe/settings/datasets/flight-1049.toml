@@ -16,10 +16,9 @@
 # No WCS key: the file's gWCS (tweakreg against Gaia, 31 to 39 matches, rmse
 # 0.013 to 0.015 px) puts Gaia DR3's stars at (-0.09 to -0.04, -0.06 to
 # -0.04) px once their proper motions carry them to the frames' epoch
-# (2026.81); at Gaia's own epoch 2016.0, which the intake's gaia_dx_px /
-# gaia_dy_px read, they sit at (-0.08 to +0.16, -0.56 to -0.35) px, the
-# field's median proper motion (-4.2, -3.7 mas/yr) over 10.8 years, not the
-# WCS.
+# (2026.81); at Gaia's own epoch 2016.0 they sit at (-0.08 to +0.16, -0.56
+# to -0.35) px, the field's median proper motion (-4.2, -3.7 mas/yr) over
+# 10.8 years, not the WCS: hence gaia_proper_motion below.
 
 [intake]
 # meta.observation.program; the exposures row's program_id is the
@@ -37,3 +36,9 @@ program_id = 1049
 # flag and no one more bit removes more than 72 (WARM), so no value here
 # masks them.
 dq_mask_bits = 0x2110C01
+# The sky moves: the intake's gaia_dx_px / gaia_dy_px carry Gaia DR3's stars
+# by their proper motions to each frame's mid-exposure (runbook part 13 step
+# gaia-pm). Without it run 118's intake read the field's proper motion,
+# (-0.08 to +0.16, -0.56 to -0.35) px, as WCS offset; by hand the
+# propagation puts the WCS at (-0.09 to -0.04, -0.06 to -0.04) px.
+gaia_proper_motion = true
