@@ -7,8 +7,7 @@ id and attempt, and declares its catalog outputs in ``<prefix>/manifest.json``::
                   "checksum": "sha256:<64 hex digits>"}, ...]}
 
 ``table`` is one of :data:`PRODUCT_TABLES`; ``path`` is relative to the
-prefix; ``checksum`` is the file's SHA-256 in the ``sha256:`` form of
-``rapidpipe.products.manifest``. Each Parquet file's columns are the
+prefix; ``checksum`` is the file's SHA-256 in the ``sha256:`` form. Each Parquet file's columns are the
 table's column names, without ``job``, which the publisher sets.
 
 Two optional manifest keys, written by a stage that reads at execution

@@ -24,9 +24,8 @@ class Identifier(str):
     """A product or unit identifier.
 
     A thin string subclass rather than a bare ``str`` alias: it lets type
-    signatures in ``manifest.py`` and callers elsewhere say ``Identifier``
-    instead of ``str`` for values that name a run, unit, stage, attempt or
-    product, without imposing a parsed structure this PR does not define.
+    signatures say ``Identifier`` instead of ``str`` for values that name a
+    run, unit, stage, attempt or product, without imposing a parsed structure this PR does not define.
     Identifier vocabulary (exposure, detector image, field, processing date)
     is specification work tracked separately; this type only marks the role.
     """
