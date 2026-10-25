@@ -540,8 +540,10 @@ def test_too_few_reference_stars_stop_the_job_with_exit_65_and_the_reason(tmp_pa
                            "binding": None, "key": {**KEY, "expid": 1}}), "is not the epoch"),
 ])
 def test_inputs_the_stage_does_not_take_fail(tmp_path, files, fakes, inputs, message):
-    with pytest.raises(ValueError, match=message):
+    # A declared input the stage cannot use is exit 65, input rejected, with its reason.
+    with pytest.raises(CommandExit, match=message) as stopped:
         run_difference(tmp_path, files, inputs=inputs)
+    assert stopped.value.code == 65
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
@@ -549,8 +551,9 @@ def test_two_science_psfs_fail(tmp_path, files, fakes):
     science_twice = named_inputs(refpsf={
         "kind": "input", "product": "psfs", "source_job": 21, "binding": None,
         "key": {"dataset": "D", "fid": 1, "sca": 7, "kind": "science"}})
-    with pytest.raises(ValueError, match="one psfs input"):
+    with pytest.raises(CommandExit, match="one psfs input") as stopped:
         run_difference(tmp_path, files, inputs=science_twice)
+    assert stopped.value.code == 65
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 

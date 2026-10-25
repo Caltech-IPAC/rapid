@@ -341,7 +341,12 @@ def build_science_header(primary_hdr, wcs_header, shape, extname: str, sip_degre
 
 
 def asdf_image_nodes(dm) -> list[tuple[str, Any]]:
-    """Every image array of two or more dimensions, the science image first."""
+    """Every image array of two or more dimensions, the science image first.
+
+    An unreadable node of :data:`DQ_MASKED_NODE_NAMES` raises, as in
+    :func:`asdf_table_nodes`; any other is skipped with a warning (not dev,
+    which skipped them all; err-edges-sci).
+    """
     nodes = []
     for key in dm.keys():
         if key == "meta":
@@ -349,6 +354,8 @@ def asdf_image_nodes(dm) -> list[tuple[str, Any]]:
         try:
             value = dm[key]
         except Exception as exc:  # noqa: BLE001
+            if key in DQ_MASKED_NODE_NAMES:
+                raise
             log.warning("could not read ASDF node %s (%s); skipping", key, exc)
             continue
         if not is_array_like(value) or is_table_like(value) or value.ndim < 2:
@@ -370,6 +377,8 @@ def asdf_table_nodes(dm) -> list[tuple[str, Any]]:
         try:
             value = dm[key]
         except Exception as exc:  # noqa: BLE001
+            if key in DQ_MASKED_NODE_NAMES:
+                raise
             log.warning("could not read ASDF node %s (%s); skipping", key, exc)
             continue
         if is_table_like(value):

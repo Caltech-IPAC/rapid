@@ -717,3 +717,50 @@ def test_photutils_catalog_finds_a_star_beside_a_masked_pixel(tmp_path):
     phot = ascii.read(tmp_path / "c.txt")
     near = (abs(phot["x_fit"] - 30.0) < 1.0) & (abs(phot["y_fit"] - 30.0) < 1.0)
     assert near.sum() == 1 and np.isfinite(phot["flux_fit"][near][0])
+
+
+def _two_star_catalog_inputs(tmp_path):
+    from rapidpipe.selftest.support.fakedifftools import _gaussian
+
+    rng = np.random.default_rng(11)
+    n = 64
+    data = rng.normal(0.0, 1.0, size=(n, n))
+    for x0, y0 in ((20.0, 20.0), (44.0, 40.0)):
+        data += 400.0 * _gaussian(n, x0, y0, sigma=1.5) / (2 * np.pi * 2.25)
+    image = _write(tmp_path / "d.fits", data.astype(np.float32), wcs_header(n, sip=False))
+    unc = _write(tmp_path / "u.fits", np.ones((n, n), dtype=np.float32))
+    kernel = _gaussian(17, 8, 8, sigma=1.5)
+    psf_path = _write(tmp_path / "p.fits", (kernel / kernel.sum()).astype(np.float32))
+    return {"image": str(image), "uncertainty": str(unc), "psf": str(psf_path),
+            "sky_coords_image": str(image), "catalog": str(tmp_path / "c.txt"),
+            "finder": str(tmp_path / "f.txt"), "residual": str(tmp_path / "r.fits"),
+            "parquet": str(tmp_path / "c.parquet"), "label": "test", "seed": 1}
+
+
+@pytest.mark.parametrize("product", ["catalog", "parquet", "residual"])
+def test_a_failed_catalog_product_write_raises_its_own_error(tmp_path, product):
+    """A product of a nonempty catalog that cannot be written fails the job with the writer's error.
+
+    `dev` logged and swallowed it, and the stage then recorded a catalog
+    that was not on disk (err-edges-sci).
+    """
+    pytest.importorskip("photutils")
+    pytest.importorskip("pyarrow")
+    from rapidpipe.science.difference import psfcat
+
+    paths = _two_star_catalog_inputs(tmp_path)
+    paths[product] = str(tmp_path / "absent" / Path(paths[product]).name)
+    settings = psfcat.PsfCatalogSettings(3.0, 5.0, 2.0, (17, 17), 8.0, 0.2, 1.0, -1.0, 1.0, 1.0)
+    with pytest.raises(OSError):
+        psfcat.psf_catalog(settings, **paths)
+
+
+def test_a_photometry_constructor_error_propagates_with_its_own_message(tmp_path):
+    """photutils' refusal of an even fit shape reaches the job, not `dev`'s dead "continuing" warning."""
+    pytest.importorskip("photutils")
+    from rapidpipe.science.difference import psfcat
+
+    paths = _two_star_catalog_inputs(tmp_path)
+    settings = psfcat.PsfCatalogSettings(3.0, 5.0, 2.0, (16, 16), 8.0, 0.2, 1.0, -1.0, 1.0, 1.0)
+    with pytest.raises(ValueError, match="odd"):
+        psfcat.psf_catalog(settings, **paths)

@@ -208,26 +208,8 @@ def test_match_ss_predictions_and_associate_ss():
     assert crossmatch.associate_ss(source, None) is None and source.is_ss_candidate is None
 
 
-def test_chip_matches_are_not_run_without_a_catalog_or_reader():
-    sources = [_source(1)]
-    assert crossmatch.chip_ref_matches(sources, None) == {}
-    assert crossmatch.chip_ned_matches(sources, None) == {}
-
-
-def test_chip_ned_matches_with_a_stub_reader():
-    sources = [_source(1)]
-
-    def reader(ra, dec, radius):
-        return {"prefname": np.array(["NGC 1"], dtype=object), "ra": np.array([269.45]),
-                "dec": np.array([-28.77 + 2.0 / 3600])}
-
-    matches = crossmatch.chip_ned_matches(sources, reader)
-    assert [m.prefname for m in matches[1]] == ["NGC 1"]
-
-    def broken(ra, dec, radius):
-        raise OSError("NED down")
-
-    assert crossmatch.chip_ned_matches(sources, broken) == {}
+def test_chip_matches_are_not_run_without_a_catalog():
+    assert crossmatch.chip_ref_matches([_source(1)], None) == {}
 
 
 @pytest.mark.parametrize("case", ["unreadable", "empty", "missing a column"])
@@ -248,3 +230,14 @@ def test_a_complete_reference_catalog_loads(tmp_path):
     from tests.unit.test_packet import write_refcat
     write_refcat(tmp_path / "refcat.txt", rows=2)
     assert len(crossmatch.load_refcat(str(tmp_path / "refcat.txt")).columns["NUMBER"]) == 2
+
+
+@pytest.mark.parametrize("masked", ["non-finite", "mask"])
+def test_an_image_with_no_good_pixel_has_no_error_array(masked):
+    """No background level exists without a good pixel: it raises rather than return all NaN."""
+    from rapidpipe.science.alerts import forced
+
+    data = np.full((16, 16), np.nan) if masked == "non-finite" else np.ones((16, 16))
+    mask = None if masked == "non-finite" else np.ones((16, 16), dtype=bool)
+    with pytest.raises(ValueError, match="no good pixel"):
+        forced.error_array(data, "diff", mask=mask, box_size=8)

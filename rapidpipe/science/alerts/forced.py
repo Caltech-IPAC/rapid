@@ -293,10 +293,15 @@ def error_array(data, product, gain=None, mask=None, box_size=ERROR_BOX_PX):
         variance = bkg.background_rms.astype(np.float64) ** 2
     except ValueError as exc:
         # e.g. an image too small or too masked for any box: one global
-        # robust level and rms, which still gives sane fit weights
+        # robust level and rms, which still gives sane fit weights. With no
+        # good pixel there is no level, and an all-NaN error would leave
+        # every forced row without a value: it raises (err-edges-sci).
         from astropy.stats import mad_std
         good = data[~bad]
-        level, rms = (float(np.median(good)), float(mad_std(good))) if good.size else (0.0, np.nan)
+        if good.size == 0:
+            raise ValueError(f"error_array: no good pixel for a background in a "
+                             f"{data.shape} image") from exc
+        level, rms = float(np.median(good)), float(mad_std(good))
         logger.warning("error_array: Background2D failed (%s); using a global level %.3g, rms %.3g",
                        str(exc).split("(")[0].strip(), level, rms)
         background = np.full(data.shape, level)

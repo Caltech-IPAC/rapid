@@ -87,6 +87,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.science.difference.sextractor import parse_ascii_text_sextractor_catalog
@@ -241,29 +242,34 @@ class Frame:
     header: prep.FrameHeader
 
 
+def _rejected(reason: str) -> CommandExit:
+    """A declared input the job cannot use: exit 65, input rejected, the reason on its row."""
+    return CommandExit(int(ExitCode.INPUT_REJECTED), reason)
+
+
 def _read(job: JobContext) -> tuple[str, list[tuple[int, str]], int]:
     """The scope's filter name, each named L2 row's ``(rid, filename)``, and a new ``rfid``."""
     fid = int(job.scope["fid"])
     l2_inputs = [i for i in job.inputs if i["kind"] == "input" and i["product"] == "l2files"]
     others = sorted({i["product"] for i in job.inputs if i["kind"] == "input"} - {"l2files"})
     if others:
-        raise ValueError(f"job {job.job}: reference reads l2files inputs only, not {others}")
+        raise _rejected(f"job {job.job}: reference reads l2files inputs only, not {others}")
     rows = []
     with job.connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT filter FROM filters WHERE fid = %s", (fid,))
         found = cur.fetchone()
         if found is None:
-            raise ValueError(f"job {job.job}: fid {fid} is not in filters")
+            raise _rejected(f"job {job.job}: fid {fid} is not in filters")
         for item in l2_inputs:
             key = item["key"]
             if int(key["fid"]) != fid:
-                raise ValueError(f"job {job.job}: l2files input {key} is not the scope's fid {fid}")
+                raise _rejected(f"job {job.job}: l2files input {key} is not the scope's fid {fid}")
             cur.execute("SELECT rid, filename FROM l2files WHERE job = %s AND dataset = %s"
                         " AND expid = %s AND sca = %s AND fid = %s",
                         (item["source_job"], key["dataset"], key["expid"], int(key["sca"]), fid))
             row = cur.fetchone()
             if row is None:
-                raise ValueError(f"job {job.job}: no l2files row {key} in job {item['source_job']}")
+                raise _rejected(f"job {job.job}: no l2files row {key} in job {item['source_job']}")
             rows.append((int(row[0]), row[1]))
         cur.execute("SELECT nextval(pg_get_serial_sequence('refimages', 'rfid'))")
         rfid = int(cur.fetchone()[0])
