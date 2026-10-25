@@ -8058,6 +8058,57 @@ The measured signature, per frame:
 
 Left in place, nothing deleted: dataset `flight-1049` with run 118 live, its two references, the difference, its 328 packets on the alerts topic and the Gaia box. Raw evidence is in the brief's `t1/`: `dq_fractions.json`, `conv/wcs_check.json`, `wcs_pm.json`, `hot_pixels.json`, `star_shapes.json`, `overlap.txt`, `overlapfields.txt`, `snr.txt`, `gate-answers.txt`, `loop1.log`, `check.log`, `stages.md`, `jobs/`, `inspect/` and `scripts/`.
 
+### Step ou-gain: OpenUniverse's `scalefacref` of 2.2 is the socsim reference zero point, not a gain; on the science's own it reads 1.018, outside the window, so the overlay stays
+
+**The read** (run 80's rows and products, nothing re-run; the brief's `t1/read_scale.py`, `t1/read_scale.out`). The scale comes from the reference stage. `reference/prep.py` divides every frame by EXPTIME and scales it by 10^(0.4 (zprefimg − ZPTMAG)). The science side, `difference/reformat.py`, only divides by EXPTIME.
+- The shipped `[reference.awaicgen] zprefimg_h158` is 25.6549, the socsim median. The OpenUniverse reader writes ZPTMAG 26.5113 (the overlay's `nominal_zptmag`, dev's `galsim_roman_ab_zeropoints`; both L2 files' BUNIT is DN, EXPTIME 302.275 s).
+- Each reference frame is therefore scaled by 0.4544, and gain matching restores 10^(0.4 × 0.8564) = **2.2006**. Dev's ini says the same: "an OpenUniverse frame coadds at a scale factor near 0.46; set these to galsim_roman_ab_zeropoints instead to put that data set at unity".
+- Epoch 28737 (difference job 22008, reference job 22003):
+  - 124 isolated stars on the same grid give science / resampled reference **2.214** (16–84%: 2.201 to 2.231).
+  - The job's `scalefacref` is 2.2343; run 80's ten epochs read 2.165 to 2.273.
+  - The coadd sky is 0.2245 against the L2's 153.0 DN / 302.275 s × 0.4544 = 0.2300.
+- **`sca_gain` is not the factor.** It enters only the uncertainty images (`prep.py`, `reformat.py`), never a pixel value.
+
+**The pair** (`rapid-rebuild:78`, `1e2af61a`). H158 SCA 10, run 80's six reference frames (pointings 247 to 2172, `before_mjd` 62026.3) and epoch 28737. Each arm has its own dataset, live run, reference and truth-star Gaia import (run 80's catalog). The after arm is the candidate overlay value by `--set`:
+
+```sh
+rp run create ... --revision 1e2af61aee4eb495bb02c805c2be48c44b16cfe5 --overlay rapidpipe/settings/datasets/openuniverse-tds.toml \
+  --set "intake.source_root=\"$OU_ROOT\"" --set reference.selection.before_mjd=62026.3 \
+  [--set reference.awaicgen.zprefimg_h158=26.5113] --survey HLTDS --dataset ou-gain-{before,after}   # runs 121, 123
+rp official change --group live-<arm>.json ...; rp job local --run N --stage import ...                # live; truth stars
+rp loop --run N --filters F158 --scas 10 --pointings 247,632,1017,1402,1787,2172,28737 \
+  --job-definition rapid-rebuild:78 --interval 60                                                       # 00:27 to 00:40 UTC, exit 0
+scripts/check_run.sh --run N --inspect DIR; python scripts/completeness_ou.py --run N
+```
+
+Runs 119 and 120 were created first and never made live; their import jobs were refused ("not live") and nothing else ran under them.
+
+Check, held:
+- Both arms ran 12 jobs each (1 import, 1 psf, 7 intake, 1 reference, 1 difference, 1 packet), each published on its first attempt.
+- `check_run.sh` is **CLEAN** for both runs: validate 6/6, reader 1/1, consumer 496/496.
+
+| | before (run 121) | after (run 123, zprefimg_h158 26.5113) |
+|---|---|---|
+| reference MAGZP; sky median; median uncertainty | 25.6549; 0.2248; 0.00670 | 26.5113; 0.4947; 0.01475 (× 2.20) |
+| **`scalefacref`** | 2.2343 | **1.0178** |
+| core, ring | −0.0217, +0.0130 | −0.0229, +0.0121 |
+| `n_candidates`, kept, kept above S/N 20 | 2,620, 500, 400 | 2,616, 500, 399 |
+| evaluated, detected, alerted | 56, 4, 4 | 56, 4, 4 |
+| false positives (bright, galaxy, other) | 492 (32, 8, 452) | 492 (31, 7, 454) |
+| difference container | 271 s | 273 s |
+
+**The acceptance fails on one line.** `scalefacref` 1.0178 is outside 0.94 to 1.01. Detected is not fewer, false positives are not more, and core and ring are inside the gate's bounds. The overlay PR (rapid PR 447, the eight `zprefimg_<filter>` at the science zero points) is **closed unmerged**, and the overlay keeps the shipped values.
+- The 1.8% left is the gain-match estimate's own offset from the zero-point ratio, not a settings value. Run 80's bytes show it as 2.2343 / 2.2006 = 1.0153, and HLWAS F213 as 0.939 against 0.972 (PR 397).
+- Moving the reference onto the science zero point changed nothing but the scale: the reference pixels and uncertainties are × 2.20; detected, alerted and false positives are equal, and candidates 2,616 against 2,620.
+
+**The uncertainty images.** `sca_gain = 2.0` (shipped, both instrument blocks) against OpenUniverse's gain of 1:
+- On epoch 28737's sky (151 counts) the measured standard deviation is 15.17 counts. The simple model predicts 9.88 at gain 2 (measured / model 1.535) and 15.47 at gain 1 (0.980).
+- The reference coadd's pixel std / median uncertainty is 1.63 (run 80).
+- The ZOGY difference's std / uncertainty is 0.98.
+- An overlay value, as RimTimSim's `[difference.instrument] sca_gain = 1.0`; recorded, not changed.
+
+Raw evidence is in the brief's `t1/`: `read_scale.*`, `job*.json`, `run*.json`, `loop-*.log`, `check-*.log`, `comp-*/`, `pr447-body.md`.
+
 ## Results of part 13 so far (2026-10-25 00:21 UTC)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
