@@ -8604,6 +8604,37 @@ Every job ran on its first attempt. **`Check run 133: CLEAN validate 6/6 reader 
 
 Raw evidence: the brief directory's `t1/`.
 
+### Step mig-contracts: the older stage contract retired; `run(job)` is the one contract, and run 136 is CLEAN with 181 packets on the image without it
+
+Brief `mig-contracts`, task 1.
+
+**The change** (rapid PR 464, `5262a62b`; `rapid-rebuild:84`; rapid_docs PR 128, `9b00d2b`). The older `--run --unit --attempt` contract is deleted: `admit`, `finalize`, `run_stage` and `stages/contract.py`; the per-stage settings files and their resolver; the `rapidpipe stage` and `rapidpipe selftest` commands; the selftest subpackage; and the finalize fixture with its Makefile. The code only the contract called goes with it (`Storage`, `revision.git_revision`, the per-stage log helpers). The loop never ran either stage. The two live test doubles move to `tests/support/`. What else changed:
+- `loop --help` gives `_loop`'s exits: 0; 1 on failed or refused jobs; 64 when the first pass admits nothing.
+- `database/README.md` states the dated SQL files' rule once: `schema.sql` builds a fresh database whole; a dated file is the one granted statement that brought SMDC's existing database to it, applied once and recorded in its runbook step; it is never applied after a fresh `schema.sql`.
+- The container workflow's `stage list` roster check becomes a check that `--help` exits 0.
+- On the docs side, `finalize`'s page is retired, `stage` and `selftest` leave the tool page, and one decisions line records that the post-processing question stays migration question 11.
+- Error-handling ledger row 72 is moot.
+
+**The proof.** Image `rebuild-5262a62b…` (digest `f115ef68…`), `rapid-rebuild:84`. Its `--help` lists `{run,job,official,publish,loop}`, with no `stage` and no `selftest`. Run **136** (`r00342-mc`, HLWAS, live) covers `001_0001`, SCA 8, F146, passes 1 to 4, with the shipped settings, the HLWAS overlay and the bound 61591.4056. Gaia came from import job 23243.
+
+```sh
+t1/proof.sh 5262a62b05b8c3c68132117318e33d6fa1ff9e6d rapid-rebuild:84   # run create, live, Gaia import, loop, check_run
+```
+
+Check, held:
+- **The drain.** 03:08:32 to 03:22:02 UTC, 14 passes, loop exit 0, `failed` empty. Jobs 23244 to 23250 and 23253 each published on one Batch submission, every one with `refusal` null.
+- `check_run.sh --run 136`: **CLEAN**, validate 6/6, reader 1/1, consumer 181/181. The set holds **181 packets**, as run 135's did.
+- **The difference** (job 23250, m6a.2xlarge, 212 s), beside run 135:
+
+  | run | job definition | core fraction | ring fraction | candidates / kept | S/N > 20 | packets |
+  |---|---|---|---|---|---|---|
+  | 135 | `:83` (err-edges-sci) | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
+  | 136 | `:84` (this change) | −0.0010316 | +0.0017106 | 828 / 500 | 25 | 181 |
+
+  The two runs agree on every column: the code the deletion removed was not on the loop's path.
+
+Raw evidence: the brief directory's `t1/`.
+
 ## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
