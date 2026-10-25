@@ -8508,6 +8508,35 @@ What the change does not reach: ZOGY's negative and SFFT's positive catalogs are
 
 Raw evidence: the brief directory's `t1/`.
 
+### Step err-edges-ops: the operations paths' edge and cut rows closed; a failure names its class and cause on the right exit code, and `check_run.sh` reads a run that sent no packet as FAIL
+
+Brief `err-edges-ops`, task 1.
+
+**The change** (rapid PR 458, `3dd33b19`; `rapid-rebuild:82`). This closes the 36 edge and cut rows of the error-handling ledger that sit outside `rapidpipe/science/` and `stages/difference.py`. Each row ends in one bin, and PR 458's body holds the table: 11 fixed here, 9 already fixed (PRs 409, 420), 6 left, 1 deferred to mig-contracts (row 72), 8 cut candidates not built, and 1 for err-edges-sci (row 103). What changed:
+- `rapidpipe.foundation.NotFound(LookupError)` is raised at the foundation's ten lookup sites, and only it maps to 64. A `KeyError` or `IndexError` from stage code now takes the 70 path with its traceback.
+- A stage module whose import fails on a missing dependency re-raises (70). The message "not implemented yet" (64) is kept for the stage's own module missing.
+- The packet job's own Kafka send and the sweep's acknowledgement loop log with tracebacks. `PublishError` names every failed set with its error class.
+- `consume_packets.py` fails a run with no stamped packet set, or whose stamped sets hold no packet (`produced()`). `check_run.sh` reads FAIL through it and prints the reason.
+- Deleted: `launch.run_locally` (no caller), `Storage.read_manifest` (no caller), and science-drift's `continue-on-error` and `|| true`. The script now exits 1 only when it wrote no report.
+
+**The proof.** Image `rebuild-3dd33b19…`, `rapid-rebuild:82`. Run **134** (`r00342-ee`, HLWAS, live) covers `001_0001`, SCA 8, F146, passes 1 to 4, with the shipped settings, the HLWAS overlay and the bound 61591.4056. Its Gaia came from import job 23224.
+
+```sh
+t1/proof.sh 3dd33b19f39dd6bd99a9fac4590941052663bcb1 rapid-rebuild:82   # run create, live, Gaia import, loop, check_run
+t1/zero-run.sh                                                            # check_run.sh on run 85, tip's scripts then PR 458's
+```
+
+Check, held:
+- **The drain.** 15 passes, 02:09:13 to 02:23:43 UTC, loop exit 0, `failed` empty. Jobs 23225 to 23231 and 23234 each published on their one Batch submission, with `refusal` null.
+- `check_run.sh --run 134`: **CLEAN**, validate 6/6, reader 1/1, consumer 181/181. The set holds **181 packets** (500 sources, 181 objects, 180 forced rows).
+- **A run with no packet set.** Run 85 (`r00342-dt-f146`, live) has every job published (3 intake, psf, reference) and no packet stage. Read-only, `check_run.sh --run 85` gives:
+  - at the tip's scripts: **CLEAN**, validate 6/6, reader 0/0, consumer 0/0, exit 0;
+  - at PR 458's: **FAIL**, same counts, exit 1, with `- no stamped packet set: the run produced nothing to read`.
+
+A consequence for later checks: a run whose every set the gate holds now reads FAIL on `check_run.sh`, because nothing was sent.
+
+Raw evidence: the brief directory's `t1/`.
+
 ## Results of part 13 so far (2026-10-25 02:00 UTC, through rapid PR 456)
 
 The weekend planner's briefs ran unattended from 19:22 UTC, one task
