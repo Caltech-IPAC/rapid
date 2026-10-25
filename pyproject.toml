@@ -35,17 +35,13 @@ rapidpipe = "rapidpipe.cli.main:main"
 packages.find = {include = ["rapidpipe*", "modules*", "database*"]}
 
 [tool.setuptools.package-data]
-# rapidpipe/settings/ holds non-Python stage-defaults data (admit.toml and
-# siblings to come), not an importable subpackage, so it needs an explicit
-# package-data entry rather than being picked up by packages.find above.
-# rapidpipe/selftest/fixtures/ is the packaged copy of each stage
-# fixture's expected.json and settings.toml (rapidpipe.selftest.runner),
-# needed so `rapidpipe selftest` can read them inside the pipeline image,
-# which excludes tests/ at build time (containers/rapid-pipeline/build.sh).
+# rapidpipe/settings/ holds non-Python settings data (foundation-thin.toml
+# and the dataset overlays under datasets/), not an importable subpackage,
+# so it needs an explicit package-data entry rather than being picked up by
+# packages.find above.
 # rapidpipe/science/alerts/schema/ holds the alert schema's .avsc files
 # (dev's alerts/schema/<major>/<minor>/), read by rapidpipe.science.alerts.
-rapidpipe = ["settings/*.toml", "settings/datasets/*.toml", "selftest/fixtures/*/*.json", "selftest/fixtures/*/*.toml",
-             "science/alerts/schema/*/*/*.avsc"]
+rapidpipe = ["settings/*.toml", "settings/datasets/*.toml", "science/alerts/schema/*/*/*.avsc"]
 
 [tool.pytest.ini_options]
 # The test directories are not named after the import package: tests/unit

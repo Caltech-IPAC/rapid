@@ -1,24 +1,18 @@
 """Logging for rapidpipe: UTC formatter, run/attempt/stage/unit on every line.
 
 Ported from ``origin/smdc:pipeline/runtime/logging_setup.py`` -- the UTC
-formatter, identifiers on every line via an adapter, and the
-stdout/per-stage-file handler split are kept; the old attempt schema this
-module imported (``job_id`` naming a Batch job, not a rapidpipe run/attempt
-pair) is dropped in favour of the run and attempt identifiers ``run_stage``
-already carries.
+formatter and identifiers on every line via an adapter are kept; the old
+attempt schema this module imported (``job_id`` naming a Batch job) is
+dropped.
 
-``stage_log_context`` (used by ``rapidpipe.stages.contract.run_stage``)
-configures this module's root logger for one stage invocation and returns
-a :class:`RuntimeLogger` bound to that invocation's run, attempt, stage
-and unit ids. The console handler writes to stderr (a command whose
-stdout carries data logs to stderr, the project's Unix convention);
-:func:`add_stage_file_handler` adds a second handler writing the same
-formatted lines to a per-stage file, used by ``run_stage`` for
-``<outputs>/log/<stage>.log``. :func:`configure_root` configures Python's
-real root logger the same way, for ``rapidpipe.cli.main``, so a library's
-bare ``logging.getLogger(__name__).warning(...)`` gets this module's line
-shape instead of Python's last-resort handler (no timestamp, no run
-context).
+:func:`configure_root` configures Python's real root logger with this
+module's line shape, for ``rapidpipe.cli.main``, so a library's bare
+``logging.getLogger(__name__).warning(...)`` gets it instead of Python's
+last-resort handler (no timestamp, no run context). The console handler
+writes to stderr (a command whose stdout carries data logs to stderr, the
+project's Unix convention). :func:`configure` does the same for the
+``rapidpipe`` logger alone and returns a :class:`RuntimeLogger` bound to
+a run, attempt, stage and unit.
 """
 
 from __future__ import annotations
@@ -27,7 +21,6 @@ import logging
 import os
 import sys
 import time
-from pathlib import Path
 from typing import Any
 
 # UTC everywhere, per the ported module's rationale: `logging`'s own
@@ -44,7 +37,7 @@ LOG_FORMAT = (
 DEFAULT_LEVEL = logging.INFO
 
 #: The environment variable a caller may set to override the default log
-#: level: ``stage_log_context`` (stages) defaults to ``DEFAULT_LEVEL``
+#: level: ``configure`` defaults to ``DEFAULT_LEVEL``
 #: (INFO) when unset; ``configure_root`` (the CLI) defaults to INFO for
 #: rapidpipe's own loggers and WARNING for every other library's.
 #: Either way this variable, when set, wins for all of them.
@@ -209,37 +202,6 @@ def configure_root(level: int | str | None = None, stream: Any = None) -> None:
     root.addHandler(handler)
 
 
-def add_stage_file_handler(log_path: Any, *, run_id: str = "-", attempt_id: str = "-",
-                            stage: str = "-", unit_id: str = "-",
-                            level: int | str | None = None) -> logging.Handler:
-    """Attach a file handler at ``log_path``, formatted the same as the
-    console handler, to the ``rapidpipe`` logger; return it so the caller
-    can remove it (:func:`remove_file_handler`) once the invocation ends.
-
-    Used by ``rapidpipe.stages.contract.run_stage`` for the per-stage log
-    file at ``<outputs>/log/<stage>.log``. Creates ``log_path``'s parent
-    directory. ``level`` defaults the same way as :func:`configure`.
-    """
-    resolved_level = resolve_level(level, DEFAULT_LEVEL)
-    path = Path(log_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(str(path), encoding="utf-8")
-    handler.setLevel(resolved_level)
-    handler.setFormatter(_UTCFormatter(LOG_FORMAT, datefmt=_DATE_FORMAT))
-    handler.addFilter(_IdentityFilter(
-        run_id=str(run_id), attempt_id=str(attempt_id),
-        stage=str(stage), unit_id=str(unit_id)))
-    handler._rapidpipe_owned = True
-    logging.getLogger(ROOT_LOGGER_NAME).addHandler(handler)
-    return handler
-
-
-def remove_file_handler(handler: logging.Handler) -> None:
-    """Detach and close a handler :func:`add_stage_file_handler` returned."""
-    logging.getLogger(ROOT_LOGGER_NAME).removeHandler(handler)
-    handler.close()
-
-
 def get_logger(name: str, adapter: RuntimeLogger | None = None) -> Any:
     """Get a module logger under the rapidpipe root.
 
@@ -251,19 +213,3 @@ def get_logger(name: str, adapter: RuntimeLogger | None = None) -> Any:
     if adapter is None:
         return logger
     return RuntimeLogger(logger, dict(adapter.extra or {}))
-
-
-def stage_log_context(stage_name: str, run_id: str, attempt_id: str,
-                       unit_id: Any = None) -> RuntimeLogger:
-    """Configure logging for one stage invocation; return its logger.
-
-    Used by :func:`rapidpipe.stages.contract.run_stage` at the start of
-    every invocation, so every stage logs its start, its exit code and its
-    manifest path with the run, attempt, stage and unit ids on every line.
-    ``unit_id`` is optional (kept working for a caller with none yet);
-    unset, the field prints ``-``.
-    """
-    resolved_unit = "-" if unit_id is None else unit_id
-    adapter = configure(run_id=run_id, attempt_id=attempt_id, stage=stage_name,
-                        unit_id=resolved_unit)
-    return get_logger(f"stages.{stage_name}", adapter)

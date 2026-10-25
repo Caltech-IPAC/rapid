@@ -47,7 +47,7 @@ def test_configure_default_stream_is_stderr_not_stdout():
     err = io.StringIO()
     # configure()'s own default is sys.stderr; pass explicit streams here
     # only to assert the *un*passed one gets nothing, not to override it.
-    logger = rapidpipe_log.stage_log_context("admit", "R1", "A1", unit_id="U1")
+    logger = rapidpipe_log.configure(run_id="R1", attempt_id="A1", stage="difference", unit_id="U1")
     handler = logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME).handlers[0]
     assert handler.stream is __import__("sys").stderr
 
@@ -61,19 +61,19 @@ def test_configure_default_stream_is_stderr_not_stdout():
 
 def test_line_shape_has_run_attempt_stage_unit():
     stream = io.StringIO()
-    logger = rapidpipe_log.stage_log_context(
-        "admit", "R1", "A1", unit_id="e1/SCA07")
+    logger = rapidpipe_log.configure(
+        run_id="R1", attempt_id="A1", stage="difference", unit_id="e1/SCA07")
     logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME).handlers[0].stream = stream
-    logger.info("stage=admit start")
+    logger.info("stage=difference start")
 
     line = stream.getvalue().strip()
     match = _LINE_RE.match(line)
     assert match is not None, line
     assert match.group("run") == "R1"
     assert match.group("attempt") == "A1"
-    assert match.group("stage") == "admit"
+    assert match.group("stage") == "difference"
     assert match.group("unit") == "e1/SCA07"
-    assert match.group("message") == "stage=admit start"
+    assert match.group("message") == "stage=difference start"
 
 
 def test_identity_filter_defaults_are_dashes_for_a_plain_logger():
@@ -87,46 +87,6 @@ def test_identity_filter_defaults_are_dashes_for_a_plain_logger():
     assert match is not None, line
     assert (match.group("run"), match.group("attempt"),
             match.group("stage"), match.group("unit")) == ("-", "-", "-", "-")
-
-
-def test_stage_log_context_unit_id_optional_defaults_to_dash():
-    stream = io.StringIO()
-    logger = rapidpipe_log.stage_log_context("admit", "R1", "A1")  # no unit_id
-    logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME).handlers[0].stream = stream
-    logger.info("x")
-    match = _LINE_RE.match(stream.getvalue().strip())
-    assert match.group("unit") == "-"
-
-
-def test_file_handler_writes_the_same_shaped_lines(tmp_path):
-    log_path = tmp_path / "log" / "admit.log"
-    handler = rapidpipe_log.add_stage_file_handler(
-        log_path, run_id="R1", attempt_id="A1", stage="admit", unit_id="U1")
-    try:
-        logger = rapidpipe_log.get_logger(
-            "stages.admit",
-            rapidpipe_log.RuntimeLogger(
-                logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME),
-                {"run_id": "R1", "attempt_id": "A1", "stage": "admit", "unit": "U1"}))
-        logger.info("from the file handler")
-    finally:
-        rapidpipe_log.remove_file_handler(handler)
-
-    assert log_path.exists()
-    contents = log_path.read_text()
-    assert "from the file handler" in contents
-    match = _LINE_RE.match(contents.strip().splitlines()[-1])
-    assert match is not None
-    assert match.group("run") == "R1" and match.group("stage") == "admit"
-
-
-def test_remove_file_handler_detaches_it(tmp_path):
-    log_path = tmp_path / "admit.log"
-    handler = rapidpipe_log.add_stage_file_handler(log_path)
-    root = logging.getLogger(rapidpipe_log.ROOT_LOGGER_NAME)
-    assert handler in root.handlers
-    rapidpipe_log.remove_file_handler(handler)
-    assert handler not in root.handlers
 
 
 def test_resolve_level_env_var_overrides_default(monkeypatch):

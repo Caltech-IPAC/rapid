@@ -15,7 +15,7 @@ from datetime import datetime
 
 from rapidpipe.cli import main as cli
 from rapidpipe.foundation import change, create_job, create_run, publish
-from rapidpipe.selftest.support.fakedifftools import (
+from tests.support.fakedifftools import (
     CRVAL,
     FakePsfCatalog,
     FakeReferencePsf,

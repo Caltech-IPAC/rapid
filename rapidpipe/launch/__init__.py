@@ -31,25 +31,18 @@ from typing import Any
 from rapidpipe.db.connection import parameter_tree_environment
 from rapidpipe.foundation import attempts, publish_kafka
 from rapidpipe.foundation.local import failure_reason
-from rapidpipe.stages.contract import STAGE_NAMES
 
 __all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "spot", "submit"]
 
 
 class LaunchError(Exception):
-    """A job that could not be started: an unknown stage or a missing setting."""
+    """A job that could not be started: a missing or unusable setting."""
 
 
 def batch_client() -> Any:
     import boto3
 
     return boto3.client("batch")
-
-
-def _stage(stage: str) -> str:
-    if stage not in STAGE_NAMES:
-        raise LaunchError(f"unknown stage {stage!r}; known stages: {', '.join(STAGE_NAMES)}")
-    return stage
 
 
 def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None,

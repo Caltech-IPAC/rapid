@@ -10,7 +10,7 @@ nearest output pixel, and writes the mean stack (``-o1``), a coverage map
 of input-pixel counts (``-o2``) and the uncertainty of the mean,
 ``sqrt(sum sigma^2) / n`` (``-o3``); uncovered pixels are NaN in the image
 and uncertainty and 0 in the coverage. The fake ``sex`` is the difference
-stage's (:class:`rapidpipe.selftest.support.fakedifftools.FakeToolRunner`):
+stage's (:class:`tests.support.fakedifftools.FakeToolRunner`):
 5-sigma peaks written in the params file's columns, ``FWHM_IMAGE`` 2.4.
 The outputs are shaped like the tools' (same files, headers, catalog
 columns), not their science. Every call is recorded.
@@ -34,7 +34,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS, FITSFixedWarning
 
-from rapidpipe.selftest.support.fakedifftools import FakeToolRunner
+from tests.support.fakedifftools import FakeToolRunner
 
 # ----------------------------------------------------------------------
 # The fixture's frames

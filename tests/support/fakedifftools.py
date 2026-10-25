@@ -36,7 +36,7 @@ from rapidpipe.science.difference.psfcat import PsfCatalogResult
 from rapidpipe.science.difference.refpsf import ReferencePsf, TooFewStars
 from rapidpipe.science.difference.tools import ToolFailed
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 #: The env var an operator can point at an arbitrary cdf/ checkout, read
 #: by :func:`cdf_dir`. Not set by the pipeline image itself (which relies
 #: on the /code/cdf fallback below) -- an escape hatch for a checkout
@@ -45,20 +45,11 @@ CDF_DIR_ENV = "RAPID_CFG"
 
 
 def cdf_dir() -> Path:
-    """Resolve the SExtractor parameter directory the selftest fixture needs.
+    """Resolve the SExtractor parameter directory the stages' tests need.
 
-    In a source checkout (``pip install -e``, or the test suite, where
-    this module's package still lives under the repository's own
-    ``rapidpipe/``) ``REPO_ROOT / "cdf"`` is correct, as it always was.
-    Inside the pipeline image, ``rapidpipe`` is installed into the conda
-    environment's ``site-packages`` (``containers/rapid-pipeline/
-    Containerfile``: ``pip install --no-deps /code``) and ``tests/`` is
-    excluded from the image (``build.sh``'s archive filter) -- the
-    repository's own ``cdf/`` never lands under ``REPO_ROOT`` there, so
-    ``REPO_ROOT / "cdf"`` does not exist. The image copies the whole
-    filtered source tree to ``/code`` (kept explicitly: "cdf/" -- the
-    Containerfile's own comment), so ``/code/cdf`` is the fallback, the
-    same directory the stage's own default ``cfg_path`` setting names
+    In a checkout ``REPO_ROOT / "cdf"``; inside the pipeline image the
+    source tree is copied to ``/code``, so ``/code/cdf``, the same directory
+    the stage's own default ``cfg_path`` setting names
     (``rapidpipe/settings/foundation-thin.toml`` (``[difference.*]``)).
 
     Tried in order, first that exists wins: ``REPO_ROOT / "cdf"`` (a

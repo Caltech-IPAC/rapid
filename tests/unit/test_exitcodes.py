@@ -1,6 +1,5 @@
-"""``rapidpipe.exitcodes``: the one exit-code vocabulary, the stage subset,
-the parser class every entrypoint uses, and the unexpected-error boundary
-of both command-line entrypoints (tool.md §Exit codes)."""
+"""``rapidpipe.exitcodes``: the one exit-code vocabulary, the parser class
+every entrypoint uses, and the command line's unexpected-error boundary (tool.md §Exit codes)."""
 
 from __future__ import annotations
 
@@ -19,14 +18,10 @@ from rapidpipe.cli import main as cli
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable
 from rapidpipe.exitcodes import ArgumentParser, ExitCode
 from rapidpipe import foundation
-from rapidpipe.selftest import _report
-from rapidpipe.selftest.runner import Checks, FixtureResult
-from rapidpipe.stages import contract
-from rapidpipe.stages.contract import STAGE_EXIT_CODES, StageDeclaration
 
 
 # ======================================================================
-# The vocabulary and the stage subset
+# The vocabulary
 # ======================================================================
 
 def test_the_eight_values():
@@ -40,36 +35,6 @@ def test_the_eight_values():
         "STAGE_ERROR": 70,
         "TRANSIENT_FAILURE": 75,
     }
-
-
-def test_contract_reexports_the_one_enum():
-    assert contract.ExitCode is ExitCode
-
-
-def test_stage_exit_codes_are_exactly_the_six():
-    assert STAGE_EXIT_CODES == (
-        ExitCode.SUCCESS, ExitCode.USAGE, ExitCode.INPUT_REJECTED,
-        ExitCode.NOT_IMPLEMENTED, ExitCode.STAGE_ERROR, ExitCode.TRANSIENT_FAILURE)
-
-
-def _declaration(codes):
-    return StageDeclaration(
-        name="admit", unit="exposure", settings_schema_path=None,
-        consumes=(), produces=("exposure",), database_access="none",
-        supported_exit_codes=codes)
-
-
-@pytest.mark.parametrize("code", [ExitCode.INCOMPLETE, ExitCode.FAILURE])
-def test_a_declaration_with_a_command_line_only_code_is_rejected(code):
-    with pytest.raises(ValueError, match="unsupported exit codes"):
-        _declaration((ExitCode.SUCCESS, code)).validate()
-
-
-def test_the_default_declaration_and_the_full_subset_validate():
-    StageDeclaration(
-        name="admit", unit="exposure", settings_schema_path=None,
-        consumes=(), produces=("exposure",), database_access="none").validate()
-    _declaration(STAGE_EXIT_CODES).validate()
 
 
 def test_the_module_imports_only_the_standard_library():
@@ -112,11 +77,6 @@ def test_every_parser_in_the_tree_is_ours():
     assert len(parsers) > 1
     strays = [p.prog for p in parsers if not isinstance(p, ArgumentParser)]
     assert strays == []
-
-
-def test_the_stage_parser_is_ours():
-    declaration = _declaration(STAGE_EXIT_CODES)
-    assert isinstance(contract._build_parser(declaration), ArgumentParser)
 
 
 def test_a_parse_failure_exits_64_in_argparse_shape(capsys):
@@ -225,50 +185,3 @@ def test_cli_classifies_a_connection_error_at_the_boundary(
     err = capsys.readouterr().err
     assert f"rapidpipe {command}: database {word}: boom" in err
     assert "Traceback" not in err
-
-
-# ======================================================================
-# selftest's own exit sites
-# ======================================================================
-
-def _fixture_result(tmp_path, *, exit_code, failures):
-    checks = Checks()
-    for label in failures:
-        checks.check(False, label)
-    return FixtureResult(
-        stage="difference", tools="fake", exit_code=exit_code, checks=checks,
-        work_dir=tmp_path, output_location=str(tmp_path / "outputs"),
-        output_is_local=True)
-
-
-def test_selftest_a_stage_exiting_0_when_69_was_expected_is_a_failure(tmp_path, capsys):
-    result = _fixture_result(
-        tmp_path, exit_code=0, failures=["exit code: expected 69, got 0"])
-    assert _report("difference", result) == int(ExitCode.FAILURE)
-
-
-def test_selftest_an_unexpected_nonzero_stage_exit_propagates(tmp_path, capsys):
-    result = _fixture_result(
-        tmp_path, exit_code=70, failures=["exit code: expected 0, got 70"])
-    assert _report("difference", result) == int(ExitCode.STAGE_ERROR)
-
-
-@pytest.mark.parametrize("failures, expected", [
-    ([], ExitCode.SUCCESS),
-    (["manifest: outputs differ"], ExitCode.FAILURE),
-])
-def test_selftest_pass_and_fixture_mismatch(tmp_path, capsys, failures, expected):
-    result = _fixture_result(tmp_path, exit_code=0, failures=failures)
-    assert _report("difference", result) == int(expected)
-
-
-def test_selftest_an_existing_work_dir_is_a_usage_error(monkeypatch, tmp_path, capsys):
-    import rapidpipe.selftest as selftest
-
-    def exists(*_a, **_k):
-        raise FileExistsError(f"{tmp_path} already exists")
-
-    monkeypatch.setattr(selftest, "run_fixture", exists)
-    rc = selftest.run(stage="finalize", real_tools=False, work_dir=str(tmp_path),
-                      output_location=None)
-    assert rc == int(ExitCode.USAGE)

@@ -29,9 +29,9 @@ from astropy.io import fits
 import rapidpipe.stages.reference as reference
 from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation.local import JobContext
-from rapidpipe.selftest.support import fakereftools
-from rapidpipe.selftest.support.fakedifftools import cdf_dir
-from rapidpipe.selftest.support.fakereftools import FRAMES, RTID, write_frames
+from tests.support import fakereftools
+from tests.support.fakedifftools import cdf_dir
+from tests.support.fakereftools import FRAMES, RTID, write_frames
 
 REPO = Path(__file__).resolve().parents[2]
 THIN = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())

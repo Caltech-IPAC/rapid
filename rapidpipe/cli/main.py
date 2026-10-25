@@ -1,11 +1,5 @@
 """The ``rapidpipe`` command-line tool.
 
-``rapidpipe stage <name> ...`` imports ``rapidpipe.stages.<name>`` and calls
-its ``main(argv)``, per the stage contract's "Invocation" section; it is
-the ``stage run`` command of the ``stage`` group, with ``stage list`` and
-``stage describe`` (``rapidpipe.cli.stagectl``). ``rapidpipe selftest``
-runs one stage's packaged fixture (``rapidpipe.selftest``).
-
 The five foundation verbs (foundation plan v5, milestone 0) wrap
 ``rapidpipe.foundation``:
 
@@ -100,14 +94,10 @@ import psycopg2
 from rapidpipe import __version__
 from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
-from rapidpipe.cli import stagectl
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
 from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
-from rapidpipe.selftest import run as run_selftest
-from rapidpipe.selftest.runner import STAGE_NAMES as SELFTEST_STAGE_NAMES
-from rapidpipe.stages.contract import STAGE_NAMES
 
 
 #: The shipped settings body; ``publish`` reads its ``[kafka]`` table by default.
@@ -121,31 +111,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--version", action="version", version=f"rapidpipe {__version__}")
 
     subparsers = parser.add_subparsers(dest="command")
-
-    stagectl.add_parsers(subparsers)
-
-    selftest_parser = subparsers.add_parser(
-        "selftest",
-        description="Run one stage's own packaged fixture and check its outputs.",
-        help="Run one stage's own packaged fixture and check it.")
-    selftest_parser.add_argument(
-        "--stage", required=True, choices=SELFTEST_STAGE_NAMES, help="Which stage's fixture to run.")
-    selftest_parser.add_argument(
-        "--real-tools", action="store_true",
-        help="Run the pipeline image's own tools instead of the packaged fakes "
-             "(the default). Needs the pipeline image, or a checkout with the "
-             "same tools on PATH.")
-    selftest_parser.add_argument(
-        "--work-dir", default=None,
-        help="An empty or new directory to prepare the fixture in "
-             "(default: a fresh temporary directory).")
-    selftest_parser.add_argument(
-        "--output-location", default=None,
-        help="Where the stage's manifest and products end up: a local path "
-             "or an s3:// prefix (default: <work-dir>/outputs). Every check "
-             "runs against a local copy; an s3:// location is uploaded to "
-             "only afterwards.")
-    selftest_parser.add_argument("--python", default=sys.executable)
 
     run_parser = subparsers.add_parser("run", help="Create or show a run.",
                                        description="Create or show a run.")
@@ -258,7 +223,8 @@ def _build_parser() -> argparse.ArgumentParser:
                     "each pass by producing the run's newly official packet sets to the topic. "
                     "Repeat every --interval seconds until a pass finds nothing new, pending or "
                     "to submit: exit 0, or 1 when a job of the run has failed or was published "
-                    "with its binding refused; the work that does not depend on it drains first.")
+                    "with its binding refused; the work that does not depend on it drains first. "
+                    "Exit 64 when the first pass admits nothing.")
     loop_parser.add_argument("--run", required=True, type=int)
     loop_parser.add_argument("--filters", required=True, help="Comma-separated, e.g. F146.")
     loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
@@ -276,54 +242,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="At most this many intake jobs per pass (default 100).")
     loop_parser.add_argument("--interval", type=float, default=120.0,
                              help="Seconds between passes (default 120).")
-    loop_parser.add_argument("--once", action="store_true", help="Run one pass and exit 0.")
+    loop_parser.add_argument("--once", action="store_true",
+                             help="Run one pass and exit: 0, or 1 when a job of the run failed or was "
+                                  "refused its binding; 64 when the first pass admits nothing.")
 
     return parser
-
-
-def _run_stage_command(name: str | None, stage_argv: list[str]) -> int:
-    if not name:
-        sys.stderr.write(
-            "rapidpipe stage: a stage name is required; known stages: "
-            f"{', '.join(STAGE_NAMES)}\n")
-        return int(ExitCode.USAGE)
-    if name not in STAGE_NAMES:
-        sys.stderr.write(
-            f"rapidpipe stage: unknown stage {name!r}; known stages: "
-            f"{', '.join(STAGE_NAMES)}\n")
-        return int(ExitCode.USAGE)
-
-    module_name = f"rapidpipe.stages.{name.replace('-', '_')}"
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as exc:
-        if exc.name != module_name:     # a dependency of the stage is missing, not the stage
-            raise
-        sys.stderr.write(
-            f"rapidpipe stage: {name!r} is a known stage name but "
-            f"{module_name} is not implemented yet; known stages: "
-            f"{', '.join(STAGE_NAMES)}\n")
-        return int(ExitCode.USAGE)
-
-    stage_main = getattr(module, "main", None)
-    if stage_main is None:
-        sys.stderr.write(
-            f"rapidpipe stage: {module_name} has no main(argv)\n")
-        return int(ExitCode.USAGE)
-
-    return stage_main(stage_argv)
-
-
-def _run_selftest_command(args: argparse.Namespace) -> int:
-    """``rapidpipe selftest``: run one stage's own packaged fixture.
-
-    A thin wrapper over :func:`rapidpipe.selftest.run`. Exit codes: 0 on a
-    full pass, 1 on a fixture mismatch, and the stage's own exit code on a
-    stage failure.
-    """
-    return run_selftest(
-        stage=args.stage, real_tools=args.real_tools, work_dir=args.work_dir,
-        output_location=args.output_location, python=args.python)
 
 
 def _read(path: Path, what: str) -> Any:
@@ -607,11 +530,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"rapidpipe: invalid {rapidpipe_log.LEVEL_ENV_VAR}: {exc}\n")
         return int(ExitCode.USAGE)
     parser = _build_parser()
-    # "rapidpipe stage <name> ..." (the form a Batch job runs) is
-    # "rapidpipe stage run <name> ...": rewritten before argparse sees it.
-    argv_list = stagectl.rewrite_legacy_argv(
-        list(argv) if argv is not None else sys.argv[1:])
-    args = parser.parse_args(argv_list)
+    args = parser.parse_args(list(argv) if argv is not None else sys.argv[1:])
     where = " ".join(filter(None, (args.command, getattr(args, "verb", None))))
 
     # The classified-error boundary (exit_code): a named stop prints its
@@ -619,10 +538,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     # traceback and exits 75 or 70. SystemExit and KeyboardInterrupt are not
     # Exception subclasses and pass through.
     try:
-        if args.command == "stage":
-            return stagectl.dispatch(args, _run_stage_command)
-        if args.command == "selftest":
-            return _run_selftest_command(args)
         if args.command in ("run", "job", "official", "publish", "loop"):
             return _foundation_command(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary

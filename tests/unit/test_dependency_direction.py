@@ -3,11 +3,10 @@
 The units are every subpackage and every top-level module under
 ``rapidpipe/`` (``settings/`` holds TOML only and is not a unit). They
 sit in layers, and a unit may import only units strictly below its own
-(stage-contract.md §The package):
+(``rapidpipe/__init__.py``):
 
-    leaves (exitcodes, log, revision: no rapidpipe import)
-    < products < {db, science, foundation} < stages < launch
-    < selftest < cli
+    leaves (exitcodes, log: no rapidpipe import)
+    < products < {db, science, foundation} < stages < launch < cli
 
 ``db``, ``science`` and ``foundation`` share a layer and may not import
 one another. :data:`ALLOWED` is that rule as one table. ``rapidpipe/__init__.py`` belongs to no unit but is scanned too,
@@ -33,22 +32,19 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "rapidpipe"
 
-LEAVES = frozenset({"exitcodes", "log", "revision"})
+LEAVES = frozenset({"exitcodes", "log"})
 
 #: The layer order as a table: unit -> the units it may import.
 ALLOWED: dict[str, frozenset[str]] = {
     "exitcodes": frozenset(),
     "log": frozenset(),
-    "revision": frozenset(),
     "products": LEAVES,
     "db": LEAVES | {"products"},
     "science": LEAVES | {"products"},
     "foundation": LEAVES | {"products"},
     "stages": LEAVES | {"products", "db", "science", "foundation"},
     "launch": LEAVES | {"products", "db", "science", "foundation", "stages"},
-    "selftest": LEAVES | {"products", "db", "science", "foundation", "stages", "launch"},
-    "cli": LEAVES | {"products", "db", "science", "foundation", "stages", "launch",
-                     "selftest"},
+    "cli": LEAVES | {"products", "db", "science", "foundation", "stages", "launch"},
 }
 
 #: The source name edges from ``rapidpipe/__init__.py`` carry, and what it
@@ -260,9 +256,8 @@ def test_nothing_imports_cli(edges):
 
 
 def test_stage_modules_do_not_import_each_other():
-    shared = {"rapidpipe.stages", "rapidpipe.stages.contract", "rapidpipe.stages.settings"}
-    stage_modules = {p.stem for p in (PACKAGE_ROOT / "stages").glob("*.py")} - {
-        "__init__", "contract", "settings"}
+    shared = {"rapidpipe.stages", "rapidpipe.stages.settings"}
+    stage_modules = {p.stem for p in (PACKAGE_ROOT / "stages").glob("*.py")} - {"__init__", "settings"}
     for name in sorted(stage_modules):
         path = PACKAGE_ROOT / "stages" / f"{name}.py"
         for dotted, line in imported_modules(path.read_text(), ["rapidpipe", "stages", name],
@@ -288,7 +283,7 @@ def _targets(source: str, module: str, is_package: bool = False) -> set[str]:
 def test_scanner_resolves_a_relative_import_to_another_unit():
     assert _targets("from ..stages import repository\n", "rapidpipe.launch.x") == {"stages"}
     assert _targets("from .. import stages\n", "rapidpipe.launch.x") == {"stages"}
-    assert _targets("from ...stages.contract import f\n", "rapidpipe.launch.sub.x") == {"stages"}
+    assert _targets("from ...stages.settings import f\n", "rapidpipe.launch.sub.x") == {"stages"}
 
 
 def test_scanner_resolves_a_relative_import_inside_a_package_init():

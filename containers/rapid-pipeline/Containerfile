@@ -9,10 +9,9 @@
 # `rapid_systems` (containers/rapid-pipeline/Containerfile there), and
 # `dev`'s per-repo `docker/Dockerfile_ubuntu_runSingleSciencePipeline` and
 # its siblings under `docker/`, which are not carried on this branch.
-# There is no `pipeline.entrypoints.job` entrypoint here — the current stage contract
-# (rapid_docs/system/stage-contract.md, "Invocation") is `rapidpipe stage
-# <name> --run ... --unit ... --attempt ... --inputs ... --outputs ...`,
-# and that is the only invocation this image knows.
+# There is no `pipeline.entrypoints.job` entrypoint here — a Batch job
+# runs `rapidpipe job run --job <id>` (rapidpipe.launch.submit), and that
+# is the only invocation this image knows.
 #
 # Base contract: RAPID_BASE_IMAGE must be a UBI10 image (or compatible)
 # carrying the `rapid-pipeline` RPM group's C tools under /opt/rapid, and
@@ -96,6 +95,4 @@ RUN printf '#!/bin/sh\nexec "%s" -m rapidpipe.cli.main "$@"\n' "${RAPID_PYTHON}"
 
 ENTRYPOINT ["/usr/local/bin/rapidpipe-entrypoint"]
 CMD ["--help"]
-# The Batch job supplies the real invocation:
-#   stage <name> --run <run-id> --unit <unit-id> --attempt <attempt-id> \
-#       --inputs <dir-or-s3-prefix> --outputs <dir-or-s3-prefix>
+# The Batch job supplies the real invocation: job run --job <job-id>
