@@ -12,6 +12,7 @@ associated post-processing pipeline for the same exposure-SCA image (indexed by 
 
 
 import boto3
+from botocore.exceptions import ClientError
 import os
 import ast
 import configparser
