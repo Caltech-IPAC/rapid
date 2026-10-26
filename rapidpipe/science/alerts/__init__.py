@@ -4,7 +4,7 @@
 Source: `origin/dev`'s ``alerts/`` package (``param_registry.py``,
 ``produce.py``, ``providers.py``, ``forced_phot.py``) and
 ``alerts/schema/00/07/``. The port
-principle (lead, 2026-09-22): minimise differences to `dev`; improvements
+principle (2026-09-22): minimise differences to `dev`; improvements
 come later. What changed is where the data comes from: `dev`'s
 ``AlertDataProvider`` queries RAPIDDB and stages S3 files itself; here the
 stage reads the rows and files and passes plain records in.

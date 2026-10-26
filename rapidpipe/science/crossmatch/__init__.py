@@ -2,7 +2,7 @@
 """The crossmatch stage's science: exposure ordering, CSV lines, the pass-2 cone.
 
 Source: `origin/dev`'s ``pipeline/crossMatchSources.py``. The port
-principle (lead, 2026-09-22): minimise differences to `dev`. Each helper
+principle (2026-09-22): minimise differences to `dev`. Each helper
 keeps its `dev` counterpart's arithmetic and text format.
 
 - ``catalog``: `dev`'s ascending-MJD exposure order (stage 1), the

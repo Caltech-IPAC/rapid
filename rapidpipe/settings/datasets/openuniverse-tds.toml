@@ -3,7 +3,7 @@
 # `rapidpipe run create --overlay`. It holds only the keys whose value
 # differs from the shipped defaults (foundation-thin.toml, dev's values) for
 # this dataset, each with the measurement that earned it (runbook part 11
-# step 2, LEDGER-openuniverse). `intake.source_root` (the `simple_model/`
+# step 2). `intake.source_root` (the `simple_model/`
 # prefix) comes by `--set` at `run create`.
 
 [intake]

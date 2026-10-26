@@ -5,7 +5,8 @@ New, not `dev`'s: the interpolating kernel of the per-epoch SWarp resample
 correlates the reference's noise across neighbouring pixels, and a
 difference whose noise is correlated has fewer independent pixels than its
 per-pixel sigma says, so detections at a fixed per-pixel threshold rise
-(the fixes ledger's caveat on LANCZOS3, fixes task 4, 2026-10-24).
+(rapid_docs ``system/measurements.md``, reference PSF: the LANCZOS3
+caveat).
 
 :func:`noise_correlation` is ``BLOCK x sigma_block / sigma_pixel``: the
 3-sigma-clipped standard deviation of the means of ``BLOCK x BLOCK`` blocks

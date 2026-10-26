@@ -625,7 +625,7 @@ def test_photutils_catalog_none_when_no_sources_pass_filtering(tmp_path):
     sharpness/roundness filter (``NoDetectionsWarning``) -- a real, valid
     outcome on a near-empty image, found live on the difference stage's
     negative-image catalog against the fixture's synthetic data
-    (LEDGER-fixture-real.md, 2026-09-23). psf_catalog() reports it as
+    (2026-09-23). psf_catalog() reports it as
     not produced, not a crash: the empty catalog.
     """
     pytest.importorskip("photutils")

@@ -13,7 +13,7 @@
 unsigned = true
 # #238's default mask 0x2110C03 without SATURATED 0x2: DO_NOT_USE 0x1, DEAD
 # 0x400, HOT 0x800, NONLINEAR 0x10000, NO_LIN_CORR 0x100000, UNRELIABLE_FLAT
-# 0x2000000 (LEDGER-fixes, run 17 pass 4, F146 SCA 8). Every isolated pixel
+# 0x2000000 (run 17 pass 4, F146 SCA 8; rapid_docs measurements.md, DQ mask). Every isolated pixel
 # above 1000 DN/s carries one of these bits and the reference-only spikes are
 # all UNRELIABLE_FLAT, wild in all three reference frames, so no median or
 # clip could reject them; SATURATED sits on the core of every star above
@@ -24,7 +24,7 @@ dq_mask_bits = 0x2110C01
 # predicted: the simulation's own input catalog (Gaia DR3 positions at epoch
 # 2016.0) through the file's gWCS, 30 stars, scatter 0.03 px, no trend
 # across the frame, identical through the intake's SIP (F146 SCA 8 pass 4,
-# 001_0001, LEDGER-wcs-input-catalog, 2026-10-24). The intake's
+# 001_0001, 2026-10-24; rapid_docs measurements.md, WCS against the stars). The intake's
 # gaia_dx_px / gaia_dy_px read it on every file.
 crpix_shift = [0.12, -0.99]
 

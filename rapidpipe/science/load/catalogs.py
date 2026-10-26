@@ -13,7 +13,7 @@ tessellation id is looked up per row, and every row is stamped with the
 difference image's ``pid``, the sign as ``isdiffpos``, and the exposure's
 ``expid``, ``fid``, ``sca`` and ``mjdobs``.
 
-Two things differ from `dev`, both recorded in the port's ledger:
+Two things differ from `dev`:
 
 - The tessellation id comes from ``RomanTessellationClosedForm`` (the
   certified closed form already in this tree, rapidpipe.science.spatial),

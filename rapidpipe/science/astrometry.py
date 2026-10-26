@@ -1,7 +1,8 @@
 # ported-from: none
 """The offset of a frame's stars from a Gaia copy, through the frame's own WCS.
 
-New, not `dev`'s: the WCS ledger's measurement (``LEDGER-wcs-input-catalog.md``,
+New, not `dev`'s: the hand measurement of the WCS against the stars
+(rapid_docs ``system/measurements.md``, WCS against the stars,
 2026-10-24), made at intake so every dataset's value is seen without a
 reader. Each Gaia star the WCS puts on the frame, :data:`MARGIN_PX` from
 an edge and with no other Gaia star within :data:`ISOLATION_PX`, is
@@ -11,14 +12,14 @@ star whose window holds a NaN, whose peak is under :data:`PEAK_SIGMA`
 times the clipped noise, or whose centroid moved more than
 :data:`MAX_MOVE_PX` is dropped. The offset is the median of measured minus
 predicted, in 0-based pixels, x along columns. On HLWAS F146 SCA 8 pass 4
-(``001_0001``) the ledger measured (+0.116, -0.989) over 30 stars; this
+(``001_0001``) that measurement found (+0.116, -0.989) over 30 stars; this
 reads (+0.127, -0.986) over 34.
 
 Positions are the caller's: the intake passes the copy's own (Gaia DR3
 at epoch 2016.0, as the SOC simulations place their stars), or, under
 ``[intake] gaia_proper_motion``, the copy carried by its proper motions to
 the frame's epoch (:mod:`rapidpipe.stages.intake`). The
-constants are the ledger's, not settings. This module may import leaf
+constants are that measurement's, not settings. This module may import leaf
 modules only.
 """
 

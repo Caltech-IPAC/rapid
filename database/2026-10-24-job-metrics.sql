@@ -1,4 +1,4 @@
--- The jobs' quality numbers (fixes-2026-10-23 task 5): one row per job and
+-- The jobs' quality numbers (PR 350): one row per job and
 -- metric, read from `jobs.manifest -> 'metrics'`, so a query per run and
 -- stage answers without reading files. schema.sql carries the view for a
 -- fresh database; this file brings an existing one to it, applied once.

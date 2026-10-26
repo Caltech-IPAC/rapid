@@ -616,7 +616,7 @@ JOIN official o ON o.closed_at IS NULL AND o.product = 'catalogs' AND o.job = t.
     AND o.key = jsonb_build_object('dataset', t.dataset, 'name', t.name, 'version', t.version)
 JOIN jobs j ON j.id = t.job;
 
--- The jobs' quality numbers, one row per job and metric (fixes-2026-10-23 task 5).
+-- The jobs' quality numbers, one row per job and metric (PR 350).
 CREATE VIEW job_metrics AS
 SELECT j.run, j.id AS job, j.stage, r.dataset, r.survey, j.state, j.scope,
        (j.scope ->> 'expid')::integer AS expid,

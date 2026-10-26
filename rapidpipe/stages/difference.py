@@ -314,7 +314,7 @@ def _zero_point_override(settings: dict[str, Any]) -> float | None:
     """``[awaicgen] zprefimg``: empty (the default) means no override, so
     the reference zero point comes from the reference image's own MAGZP
     header keyword; otherwise the number to use instead, unconditionally
-    (the lead, 2026-09-26)."""
+    (ruling of 2026-09-26)."""
     value = settings["awaicgen"]["zprefimg"]
     if value == "":
         return None

@@ -14,7 +14,7 @@ Every number below names the run and conditions that produced it. Where
 a later part superseded a number, the earlier part points to the later
 one, which alone states the current value.
 
-A planner step's record goes into part 13's table as one row (what
+An unattended step's record goes into part 13's table as one row (what
 stands, its runs, its PRs), and into Current procedure and What remains,
 edited in place, where it changes them; its commands and raw tables stay
 in its pull request.
@@ -169,7 +169,7 @@ passes 3 and 4 at `001_0001`:
 
 ## Part 10: the null test's artefacts fixed on one pointing
 
-Brief `fixes-2026-10-23`, pointing `001_0001`, SCA 8, all seven filters.
+The fixes of 2026-10-23, pointing `001_0001`, SCA 8, all seven filters.
 Step 1 (PR 341): settings in layers, `run create` resolving base,
 `--overlay` and `--set`s once and recording them in `runs.layers`.
 Step 2 (PR 343): the DQ mask at intake, which removed the defects, most
@@ -198,7 +198,7 @@ products for the others. The healthy ranges read across these runs
 
 ## Part 11: the second iteration
 
-Brief `night-2026-10-24`, ten tasks, each CLEAN by `check_run.sh` on its
+The night of 2026-10-24, ten steps run unattended, each CLEAN by `check_run.sh` on its
 first attempt.
 
 | step | what stands | where |
@@ -222,7 +222,7 @@ gate-metrics added lost sky and misregistration.
 
 ## Part 12: the day
 
-Brief `day-2026-10-24`, eight tasks, each CLEAN by `check_run.sh` on its
+The day of 2026-10-24, eight steps run unattended, each CLEAN by `check_run.sh` on its
 first attempt.
 
 | step | what stands | where |
@@ -240,11 +240,10 @@ The night's grants closed the same day: the Spot interruption capture,
 the three identity sequences past their imported ids, the job role's
 idempotent write (Ben, 2026-10-24 14:02 UTC).
 
-## Part 13: the weekend planner
+## Part 13: the unattended steps
 
-From 2026-10-24 19:22 UTC each step is one planner-written brief, run
-unattended beside others (the queue is the state vault's
-`rapid-queue.md`). Every run named is CLEAN by `check_run.sh` but run 83
+From 2026-10-24 19:22 UTC each step is one task run unattended beside
+others, with its pull requests as its record. Every run named is CLEAN by `check_run.sh` but run 83
 (failed on purpose) and runs 137 and 138 (failed on PR 465's
 regression). A row whose finding a later row superseded says so.
 
@@ -504,8 +503,8 @@ items no later part closed; each names where its numbers are.
   `min_epochs` differences, so the five-epoch RimTimSim and three-epoch
   GBTDS runs sent unjudged sets (PRs 437, 438). Replayed at `min_epochs`
   it holds every run 139 epoch on the core (−0.036 to −0.048 against the
-  HLWAS-derived ±0.025), so whether GBTDS gets bounds of its own is Ben's
-  ruling (PRs 465, 470).
+  HLWAS-derived ±0.025), so whether GBTDS gets bounds of its own is the team's
+  open question (rapid_docs `decisions.md`, open questions; PRs 465, 470).
 - **GBTDS gb3's packets fell 1,278 → 1,196** (run 112 on `:77`, run 139
   on `:87`) at equal kept sources, cause unread (PR 470); the reference
   catalog the metric stars come from includes galaxies (PR 465). GBTDS's
@@ -522,7 +521,8 @@ items no later part closed; each names where its numbers are.
 - **The OpenUniverse overlay** stays on the socsim zero points and
   `sca_gain` 2; the candidate on branch `ou-zp/1-overlay` fails only on
   false positives 493 against 492 inside the capped 500, and a tolerance
-  from the count's own spread is Ben's ruling (PR 451). Every OpenUniverse
+  from the count's own spread is the team's open question (rapid_docs
+  `decisions.md`, open questions; PR 451). Every OpenUniverse
   difference keeps 500 of 2,077 to 3,682 candidates, so its count below
   AB 25 measures the cap (part 12 step 3).
 - **Flight program 1049**: 341 unflagged recurrent hot pixels, 472 not
@@ -570,7 +570,8 @@ items no later part closed; each names where its numbers are.
   stays `launched` and a loop counts it pending (part 12 step 7). **Runs
   72's eight and 73's one official sets are unstamped**, cause unread
   (part 12 step 7).
-- **The error-handling ledger's cut candidates**, each a mechanism for a
+- **The error-handling audit's cut candidates** (the rows of PRs 458's
+  and 459's tables), each a mechanism for a
   failure not seen, listed and not built: rows 47, 49, 68, 69, 70, 130,
   132, 133 (PR 458) and 26, 66, 67 (PR 459); the reference's
   MAGZP-missing check and import's PSFKIND mismatch still exit 70, not 65

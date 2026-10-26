@@ -211,7 +211,7 @@ def _sources(sid, ra, dec):
 
 
 def test_two_jobs_founding_either_side_of_a_boundary_share_a_lock_and_end_with_one_object(tmp_path):
-    """Astra's case: jobs A and B each see an empty catalog and found one object, 0.4 arcseconds
+    """The boundary race: jobs A and B each see an empty catalog and found one object, 0.4 arcsec
     apart on opposite sides of a field boundary; A publishes, then B. B's locked fields include
     A's object's field, so they serialise, and B's reconcile reads A's object and attaches."""
     field_a = 4662268

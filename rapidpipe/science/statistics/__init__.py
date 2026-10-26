@@ -3,7 +3,7 @@
 
 Source: `origin/dev`'s ``pipeline/computeStatisticsForAstroObjects.py`` and
 ``modules/utils/rapid_pipeline_subs.py`` (``compute_radec_statistics``).
-The port principle (lead, 2026-09-22): minimise differences to `dev`;
+The port principle (2026-09-22): minimise differences to `dev`;
 improvements come later.
 
 - ``lightcurve``: `dev`'s ``compute_radec_statistics`` verbatim, the

@@ -5,7 +5,7 @@ Foundation plan v5, "Stages read, compute in memory": the branch's
 crossmatch matched exposure k in SQL against the objects it had itself
 written for exposure k-1 inside one open transaction; with outputs going
 to Parquet there is nothing for q3c to query mid-job, so the match runs
-here with the same semantics (``LEDGER-associate-code.md`` 2), exposure
+here with the same semantics (rapid_docs ``system/measurements.md``, association), exposure
 by exposure in ascending MJD
 (:func:`~rapidpipe.science.crossmatch.catalog.expid_order`): a source
 matches **every** object within ``match_radius``, not the nearest, so a
