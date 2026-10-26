@@ -1,6 +1,6 @@
 """The packet stage's assembly (``write_set``) on a synthetic object set and two small images.
 
-Contracts: every record is valid 00.06; a member detected after the
+Contracts: every record is valid 00.07; a member detected after the
 trigger is not a previous detection and is not counted in nDiaSources;
 each index row's offset and length hold exactly its record; the three
 cutouts are (2 half width + 1) pixels square with off-chip pixels zero;

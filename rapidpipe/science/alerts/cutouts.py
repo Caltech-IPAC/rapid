@@ -1,13 +1,13 @@
-# ported-from: alerts/providers.py @ c740f3e3
+# ported-from: alerts/providers.py @ 883e3876
 """Cutout stamps, ported from `dev`'s ``alerts/providers.py`` onto ``astropy.io.fits``.
 
-`dev`'s ``extract_stamp`` (providers.py L497-565) and ``load_fits_image``
-(L465-494), with ``fitsio`` replaced by ``astropy.io.fits`` (the rebuild reads
+`dev`'s ``extract_stamp`` (providers.py L676-745) and ``load_fits_image``
+(L644-673), with ``fitsio`` replaced by ``astropy.io.fits`` (the rebuild reads
 and writes FITS through astropy only). The geometry is `dev`'s, unchanged:
 
 - the stamp is ``2 * half_width + 1`` pixels square (`dev`: 64, so 129x129),
   centred on the 1-based FITS position ``(xfit + 1, yfit + 1)`` -- the caller
-  adds the one, as `dev`'s ``get_cutouts`` does (L1956-1961), because
+  adds the one, as `dev`'s ``get_cutouts`` does (L2866-2871), because
   ``sources.xfit/yfit`` are 0-based photutils positions;
 - pixels beyond the chip edge are :data:`STAMP_FILL_VALUE` (0.0);
 - a stamp that would not overlap the chip at all is ``None``;
@@ -54,7 +54,7 @@ CUTOUT_FILES = {
 # Header cards copied from the parent image into each cutout, so every clip
 # is a self-describing FITS image with a valid WCS. CRPIX1/2 are shifted by
 # the stamp's corner offset; everything else copies unchanged. (`dev`,
-# providers.py L456-462.)
+# providers.py L635-641.)
 WCS_CARD_PREFIXES = (
     "CTYPE", "CUNIT", "CRVAL", "CRPIX", "CDELT", "CD1_", "CD2_",
     "PC1_", "PC2_", "PV1_", "PV2_",

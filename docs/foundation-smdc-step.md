@@ -446,9 +446,14 @@ deleted on 2026-10-24: `validate_run.py` fails on them by design.
 
 ## If a step fails
 
-- Bring-up: stop. Before the drop nothing has changed. After it there is
-  no backup to restore, by decision: the rollback is the previous schema,
-  rebuilt from git.
+- Bring-up: stop. Before the drop nothing has changed. After it the
+  replace kept no copy of the old schema's rows, by decision: the
+  rollback is the previous schema, rebuilt from git. The database's
+  standing backups are rapid_systems': one crash-consistent EBS snapshot
+  set a day, 14 kept (`cloudformation/rapid-db-dlm.yaml`), and
+  pgBackRest's WAL archive with a daily base backup, four fulls kept
+  (`cloudformation/rapid-db-backup-schedule.yaml`,
+  `rpms/rapid-db-tools/pgbackrest.conf.in`).
 - The inputs bucket refuses overwrites and deletes: a file that went up
   stays, and a second upload's 412 means it is present, not wrong.
 - Anything later: nothing is deleted. A failed job is read (`rp job show

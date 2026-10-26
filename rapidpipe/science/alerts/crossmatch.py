@@ -1,4 +1,4 @@
-# ported-from: alerts/providers.py @ 54fd7ea8
+# ported-from: alerts/providers.py @ 883e3876
 """The alert's cross-matches, ported from `dev`'s ``alerts/providers.py``.
 
 Copied from `origin/dev` unchanged: the solar-system association against
@@ -7,7 +7,7 @@ KONA predictions (``match_ss_predictions``), the reference-catalog match
 use (``_nearest_within``, `dev`'s 2026-09-23 replacement of the
 ``nthneighbor`` loop, which returned one row per rank at tied positions)
 and the Gaia DR3 matcher (``propagate_positions`` to ``match_gaiacat``,
-schema 00.06). Pure functions over positions and column arrays; nothing
+schema 00.07). Pure functions over positions and column arrays; nothing
 here reaches a database.
 
 KONA: the stage loads `dev`'s nightly predictions JSON

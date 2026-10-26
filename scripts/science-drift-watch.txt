@@ -8,7 +8,7 @@
 # scripts/science-drift.sh; see its "Watched dev paths" report section
 # and AGENTS.md.
 
-alerts/schema @ c740f3e3  # new alert schema versions land here
+alerts/schema @ 883e3876  # new alert schema versions land here; 00.07 ported (port-schema-07)
 alerts/ned_catalog.py @ c740f3e3  # NED catalog access, not ported
 alerts/ned_reader.py @ c740f3e3  # NED from S3, not ported
 database/schema @ c740f3e3  # dev table changes, e.g. l2files.limmag
