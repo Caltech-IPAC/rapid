@@ -283,6 +283,7 @@ regression). A row whose finding a later row superseded says so.
 | mig-contracts | `run(job)` is the one stage contract; `admit`, `finalize`, `run_stage`, the `stage` and `selftest` verbs and `Storage` deleted; 181 packets, equal to run 135 | 136 | PRs 464, 466; rapid_docs 128 |
 | gate-sci-psf | under `science` the core, ring and registration stars come from the reference catalog; GBTDS gb3 on `:87`: core −0.036 to −0.048, ring −0.038, registration at most 0.015 px, 1,196 packets; replayed at `min_epochs` the gate holds every epoch on core; `:85` and `:86` carry PR 465's `ring_count` regression, fixed by PR 468 | 137, 139 | PRs 465, 468, 470; rapid_docs 130 |
 | dead-trim | the code nothing called is deleted; run 141 (every job on m6a) 181 packets, core and ring equal to run 136; run 140's 180 came from an r6i reference | 138, 140, 141 | PRs 467, 469, 471; rapid_docs 129 |
+| release-v0.13 | the tip `e7f042f9` tagged `rebuild-v0.13` (annotated, the v0.12 JSON shape; docs-only past `9f4c54f6`), its image built on base `base-39826742678-1` (digest `7ab782c1…`), `rapid-rebuild:88` and `rapid-rebuild-production:79` registered by the deploy hook with `RAPID_RELEASE_IDENTITY=rebuild-v0.13`, the pins snapshot written; unproved on Batch until the release-proof step (2026-10-25 23:58 UTC) | none | tag rebuild-v0.13 |
 
 ## Current procedure
 
