@@ -13,9 +13,43 @@ This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) 
 - `podman` (or `docker` under the same commands) and `jq`, and this checkout, with your shell at its top.
 - At least 16 GB of memory (the difference peaked at 15.2 GB) and 2 GB of disk.
 - Network access to the public bucket `s3://stpubdata` (read unsigned, no AWS account) and to `https://roman-crds.stsci.edu` (the PSF stage's reference).
-- The pipeline image: the team's `rapid-pipeline:rebuild-<sha>` from the registry `rapid_systems` names, or one you build ([`containers/README.md`](containers/README.md)).
-- A Gaia DR3 catalog covering the field, as one Parquet file (the team's is `gaia-dr3-hlwas-r00342-box.parquet`).
+- The pipeline image: the team's `rapid-pipeline:rebuild-<sha>`, pulled as [The image](#the-image) says, or one you build ([`containers/README.md`](containers/README.md)).
+- A Gaia DR3 catalog covering the field, as one Parquet file: [The Gaia catalog](#the-gaia-catalog) builds the team's `gaia-dr3-hlwas-r00342-box.parquet`.
 - PostgreSQL 18 as the public `docker.io/library/postgres:18` image, the one CI uses.
+
+### The image
+
+The team's images are in the SMDC account's private container registry, repository `rapid-pipeline`, one tag `rebuild-<sha>` per commit of `rebuild` built for Batch, the full 40-character sha. Pull one on a RAPID host, whose instance role carries the pull grant (`rapid_systems`' `cloudformation/rapid-ecr.yaml`); an SMDC login and `rapid_systems`' README, Setup, get you onto one. The newest tag, and the image:
+
+```sh
+REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
+aws ecr get-login-password --region us-east-1 | podman login --username AWS --password-stdin "$REGISTRY"
+TAG=$(aws ecr describe-images --region us-east-1 --repository-name rapid-pipeline --filter tagStatus=TAGGED \
+  --query 'reverse(sort_by(imageDetails[?imageTags[?starts_with(@, `rebuild-`)]], &imagePushedAt))[0].imageTags[0]' --output text)
+podman pull "$REGISTRY/rapid-pipeline:$TAG"
+export IMAGE=$REGISTRY/rapid-pipeline:$TAG
+```
+
+The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rapid` (`rapid_systems`' README, Python environments); the runbook's `$PY` is its `python3`.
+
+### The Gaia catalog
+
+The team's file is every column of Gaia DR3 over the HLWAS r00342 footprint's box with a 0.2-degree margin, from the public ESA Gaia archive; the query is in the file's own metadata. This builds it in the image, in the current directory, in about 20 seconds (34,171 rows, 152 columns, 16 MB):
+
+```sh
+podman run --rm -i -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/python3 "$IMAGE" - <<'EOF'
+import pyarrow as pa, pyarrow.parquet as pq
+from astroquery.gaia import Gaia
+query = "SELECT * FROM gaiadr3.gaia_source WHERE ra BETWEEN 6.9 AND 11.2 AND dec BETWEEN -45.7 AND -42.6"
+table = pa.Table.from_pandas(Gaia.launch_job_async(query).get_results().to_pandas(), preserve_index=False)
+assert table.num_rows < 50000, "the archive caps a job at 50,000 rows: split the box"
+pq.write_table(table.replace_schema_metadata({**table.schema.metadata, b"query": query.encode()}),
+               "/out/gaia-dr3-hlwas-r00342-box.parquet")
+print(table.num_rows, "rows")
+EOF
+```
+
+The team's copy is in the inputs bucket ([Datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html#hlwas-r00342)); this query rebuilt it on 2026-10-26 with the same rows and identical values in every column.
 
 ### The environment
 
@@ -23,7 +57,7 @@ The local values are set, and the team deployment's values are commented. The pa
 
 ```sh
 export IMAGE=<the pipeline image>                 # e.g. rapid-pipeline:rebuild-<sha>
-export GAIA=<your Gaia DR3 Parquet file>
+export GAIA=$PWD/gaia-dr3-hlwas-r00342-box.parquet  # The Gaia catalog, above
 export PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=rapid PGUSER=postgres PGPASSWORD=local
 export RAPIDPIPE_OUTPUTS_ROOT=file:///work/out    # ./rapid-local/out, as the container sees it
 export AWS_REGION=us-east-1                       # the public bucket's region
