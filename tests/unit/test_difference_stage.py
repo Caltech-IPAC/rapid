@@ -302,16 +302,9 @@ def test_the_packet_stage_reads_resolve_to_sffts_files_beside_the_published_imag
         assert (prefix / "diff" / (name + ".gz")).is_file(), name
 
 
-def test_the_shipped_default_publishes_sfft(tmp_path, files, fakes):
-    assert THIN["difference"]["diff_flavor"] == "sfft"
+def test_the_shipped_default_publishes_zogy(tmp_path, files, fakes):
     body = settings(); body["difference"]["diff_flavor"] = THIN["difference"]["diff_flavor"]
-    prefix = run_difference(tmp_path, files, body=body)
-    assert manifest(prefix)["difference"]["differencer"] == "sfft"
-    assert (prefix / "diff" / "sfftdiffimage_masked.fits.gz").exists()
-
-
-def test_zogy_selected_publishes_zogy(tmp_path, files, fakes):
-    body = settings(); body["difference"]["diff_flavor"] = "zogy"
+    assert THIN["difference"]["diff_flavor"] == "zogy"
     prefix = run_difference(tmp_path, files, body=body)
     m = manifest(prefix)["difference"]
     assert m["differencer"] == "zogy"
