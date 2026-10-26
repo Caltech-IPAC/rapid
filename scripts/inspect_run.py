@@ -56,14 +56,19 @@ def label(row: dict) -> str:
     return row["file"] or ""
 
 
+def by_stage(rows: list[dict]) -> dict[str, dict[int, dict]]:
+    """``job_metrics`` rows grouped: per stage, per job, its ``label`` and its metric ``values``."""
+    out: dict[str, dict[int, dict]] = defaultdict(dict)
+    for r in rows:
+        job = out[r["stage"]].setdefault(r["job"], {"label": label(r), "values": {}})
+        job["values"][r["metric"]] = r["value"]
+    return out
+
+
 def tables(rows: list[dict]) -> dict[str, str]:
     """One Markdown table per stage from ``job_metrics`` rows."""
-    by_stage: dict[str, dict[int, dict]] = defaultdict(dict)
-    for r in rows:
-        job = by_stage[r["stage"]].setdefault(r["job"], {"label": label(r), "values": {}})
-        job["values"][r["metric"]] = r["value"]
     out = {}
-    for stage, jobs in by_stage.items():
+    for stage, jobs in by_stage(rows).items():
         metrics = sorted({m for j in jobs.values() for m in j["values"]})
         median = {m: statistics.median(v) for m in metrics
                   if (v := [j["values"][m] for j in jobs.values() if m in j["values"]])}

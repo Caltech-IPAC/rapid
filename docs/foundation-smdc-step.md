@@ -401,7 +401,11 @@ comparison reads the pixels, never `diffimages.checksum` (the file
 carries its job id and timestamps). A one-epoch acceptance that asks
 packet equality names the reference job's instance type: the compute
 environment mixes m6a and r6i, and an r6i reference read 180 packets
-against m6a's 181 at equal image (runs 140, 141).
+against m6a's 181 at equal image (runs 140, 141). The paired
+measurement is `scripts/compare_runs.py --run-a A --run-b B`: the
+scorecard's null columns per shared epoch and, on an injected dataset,
+detected per magnitude bin and false positives per epoch, by
+`inspect_run.py`'s and `completeness.py`'s functions.
 
 **Settings in force.** The published catalog is ZOGY's unless a run
 sets `difference.diff_flavor="sfft"`; SFFT's catalogs and columns are

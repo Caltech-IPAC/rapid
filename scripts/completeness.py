@@ -250,24 +250,27 @@ def _records(conn_rows: list[dict]) -> dict:
     return out
 
 
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--run", type=int, required=True)
-    p.add_argument("--truth", type=Path, nargs="*", help="truth Parquet files (default: the dataset's catalog/)")
-    p.add_argument("--radius", type=float, default=0.3, help="match radius, arcsec")
-    p.add_argument("--out", type=Path)
-    p.add_argument("--no-history", action="store_true", help="skip decoding the packets")
-    p.add_argument("--expids", help="comma-separated expids: count only these epochs")
-    a = p.parse_args(argv)
-    out_dir = a.out or Path(os.environ.get("TMPDIR", ".")) / f"completeness-{a.run}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    t0 = time.perf_counter()
-
-    import psycopg2.extras
-
-    from rapidpipe.db.connection import connect
-    from rapidpipe.foundation.prefix import get
+def truth_files(intake: dict, truth: list | None = None) -> list[str]:
+    """The truth Parquet files: ``truth`` when given, else every Parquet under the dataset's
+    ``catalog/`` prefix (the run's ``[intake] source_root`` with its last component replaced);
+    an empty list when that prefix holds none, a dataset ``inject_dataset.py`` did not write."""
+    if truth:
+        return [str(f) for f in truth]
     from rapidpipe.products import storage
+
+    root = intake["source_root"].rstrip("/")
+    catalog = root.rsplit("/", 1)[0] + "/catalog/"
+    bucket, _, prefix = catalog.removeprefix("s3://").partition("/")
+    client = storage.s3_client()
+    return [f"s3://{bucket}/{o['Key']}" for o in client.list_objects_v2(
+        Bucket=bucket, Prefix=prefix).get("Contents", []) if o["Key"].endswith(".parquet")]
+
+
+def load(conn, run_id: int) -> dict:
+    """A run's rows this script reads: ``run`` (dataset, settings), ``shift``, ``sources``,
+    ``packets``, ``diffs`` (the (expid, SCA) with an official difference image), the difference
+    jobs' ``metrics`` and the packet jobs' ``read_sets``."""
+    import psycopg2.extras
 
     def q(sql, params=()):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -276,68 +279,70 @@ def main(argv: list[str] | None = None) -> int:
         conn.commit()
         return rows
 
-    with connect(application_name="completeness") as conn:
-        (run,) = q("SELECT dataset, settings FROM runs WHERE id = %s", (a.run,))
-        intake = run["settings"]["settings"]["intake"] if "settings" in run["settings"] else run["settings"]["intake"]
-        shift = tuple(float(v) for v in intake.get("crpix_shift", [0.0, 0.0]))
-        if a.truth:
-            files = [str(f) for f in a.truth]
-        else:
-            root = intake["source_root"].rstrip("/")
-            catalog = root.rsplit("/", 1)[0] + "/catalog/"
-            bucket, _, prefix = catalog.removeprefix("s3://").partition("/")
-            client = storage.s3_client()
-            files = [f"s3://{bucket}/{o['Key']}" for o in client.list_objects_v2(
-                Bucket=bucket, Prefix=prefix).get("Contents", []) if o["Key"].endswith(".parquet")]
-        truth = pd.concat([pd.read_parquet(get(f) if f.startswith("s3://") else f) for f in files],
-                          ignore_index=True)
-        sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
-                                 " s.field = d.field AS in_field FROM sources_official s"
-                                 " JOIN diffimages d ON d.pid = s.pid WHERE s.run = %s", (a.run,)))
-        packets = pd.DataFrame(q(
-            "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
-            " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
-            " FROM packets_official p JOIN jobs j ON j.id = p.job WHERE p.run = %s", (a.run,)))
-        diffs = {(r["expid"], r["sca"]) for r in q(
-            "SELECT expid, sca FROM diffimages_official WHERE run = %s", (a.run,))}
-        metrics = pd.DataFrame(q(
-            "SELECT expid, sca, metric, value FROM job_metrics WHERE run = %s AND stage = 'difference'"
-            " AND state = 'published' AND metric IN ('n_candidates', 'n_sources_snr_gt20',"
-            " 'n_sources_near_bright_px', 'n_sources_ring_snr_gt20', 'container_seconds')", (a.run,)))
-        read_sets = defaultdict(set)
-        if len(packets):
-            for r in q("SELECT i.job, i.source_job FROM job_inputs i WHERE i.kind = 'input'"
-                       " AND i.product = 'sources' AND i.job = ANY(%s)",
-                       (sorted({int(j) for j in packets["job"]}),)):
-                read_sets[r["job"]].add(r["source_job"])
-
+    (run,) = q("SELECT dataset, settings FROM runs WHERE id = %s", (run_id,))
+    intake = run["settings"]["settings"]["intake"] if "settings" in run["settings"] else run["settings"]["intake"]
+    shift = tuple(float(v) for v in intake.get("crpix_shift", [0.0, 0.0]))
+    sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
+                             " s.field = d.field AS in_field FROM sources_official s"
+                             " JOIN diffimages d ON d.pid = s.pid WHERE s.run = %s", (run_id,)))
+    packets = pd.DataFrame(q(
+        "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
+        " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
+        " FROM packets_official p JOIN jobs j ON j.id = p.job WHERE p.run = %s", (run_id,)))
+    diffs = {(r["expid"], r["sca"]) for r in q(
+        "SELECT expid, sca FROM diffimages_official WHERE run = %s", (run_id,))}
+    metrics = pd.DataFrame(q(
+        "SELECT expid, sca, metric, value FROM job_metrics WHERE run = %s AND stage = 'difference'"
+        " AND state = 'published' AND metric IN ('n_candidates', 'n_sources_snr_gt20',"
+        " 'n_sources_near_bright_px', 'n_sources_ring_snr_gt20', 'container_seconds')", (run_id,)))
+    read_sets = defaultdict(set)
+    if len(packets):
+        for r in q("SELECT i.job, i.source_job FROM job_inputs i WHERE i.kind = 'input'"
+                   " AND i.product = 'sources' AND i.job = ANY(%s)",
+                   (sorted({int(j) for j in packets["job"]}),)):
+            read_sets[r["job"]].add(r["source_job"])
     if not len(sources):
         sources = pd.DataFrame(columns=["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags", "in_field"])
     if not len(packets):
         packets = pd.DataFrame(columns=["job", "source_job", "sid", "object_job", "aid", "expid", "sca",
                                         "trigger_mjd", "filename", "byte_offset", "byte_length", "sent"])
-    if a.expids:
-        keep = {int(e) for e in a.expids.split(",")}
-        truth = truth[truth["expid"].isin(keep)]
-        sources = sources[sources["expid"].isin(keep)]
-        packets = packets[packets["expid"].isin(keep)]
-        diffs = {k for k in diffs if k[0] in keep}
-        if len(metrics):
-            metrics = metrics[metrics["expid"].isin(keep)]
+    return {"run": run, "intake": intake, "shift": shift, "sources": sources, "packets": packets,
+            "diffs": diffs, "metrics": metrics, "read_sets": read_sets}
+
+
+def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] | None = None,
+            epochs: set[tuple[int, int]] | None = None, with_history: bool = True) -> dict:
+    """The truth joined to ``load``'s rows: ``rows`` (one per truth row), ``table`` (per magnitude
+    bin), ``per_sca``, ``pur``, ``ep`` (per epoch), ``held_sets``, ``hist``, ``processed`` and
+    ``unprocessed``; every count restricted to ``expids`` and to the (expid, SCA) ``epochs`` when given."""
+    from rapidpipe.foundation.prefix import get
+
+    def keep(df):
+        k = pd.Series(True, index=df.index)
+        if expids is not None:
+            k &= df["expid"].isin(expids)
+        if epochs is not None:
+            k &= pd.Series([e in epochs for e in zip(df["expid"], df["sca"])], index=df.index, dtype=bool)
+        return df[k]
+
+    truth = pd.concat([pd.read_parquet(get(f) if f.startswith("s3://") else f) for f in files],
+                      ignore_index=True)
+    sources, packets, metrics = data["sources"], data["packets"], data["metrics"]
+    diffs = {k for k in data["diffs"] if (expids is None or k[0] in expids) and (epochs is None or k in epochs)}
+    truth, sources, packets = keep(truth), keep(sources), keep(packets)
+    if len(metrics):
+        metrics = keep(metrics)
     epochs_in_truth = set(zip(truth["expid"], truth["sca"]))
     processed = epochs_in_truth & diffs
     unprocessed = sorted(epochs_in_truth - diffs)
     truth = truth[[k in processed for k in zip(truth["expid"], truth["sca"])]].reset_index(drop=True)
-    rows = join(match(corrected_positions(truth, shift), sources, a.radius), sources, packets)
+    rows = join(match(corrected_positions(truth, data["shift"]), sources, radius), sources, packets)
     packets = packets.merge(sources[["job", "sid", "fluxfit", "flags"]].rename(columns={"job": "source_job"}),
                             on=["source_job", "sid"], how="left")
     zp = truth.groupby(["expid", "sca"])["zp"].median().to_dict()
     injected_keys = {(int(j), int(s)) for j, s in zip(rows.loc[rows["detected"], "job"],
                                                       rows.loc[rows["detected"], "sid"])}
     classed = purity(packets, injected_keys, zp)
-    table = bins(rows)
-    per_sca = bins(rows, ["sca"])
-    pur = purity_bins(classed)
     ep = classed.groupby(["expid", "sca", "class"]).size().unstack(fill_value=0)
     for c in ("injected", "bright", "other"):
         if c not in ep:
@@ -351,9 +356,42 @@ def main(argv: list[str] | None = None) -> int:
                       .reset_index(), on=["expid", "sca"], how="left")
     held_sets = sorted({int(j) for j, s in zip(packets["job"], packets["sent"]) if not s})
     hist = pd.DataFrame()
-    if not a.no_history and rows["alerted"].any():
+    if with_history and rows["alerted"].any():
         want = packets[[(int(j), int(s)) in injected_keys for j, s in zip(packets["source_job"], packets["sid"])]]
-        hist = history(rows, _records(want.to_dict("records")), read_sets)
+        hist = history(rows, _records(want.to_dict("records")), data["read_sets"])
+    return {"truth": truth, "rows": rows, "table": bins(rows), "per_sca": bins(rows, ["sca"]),
+            "pur": purity_bins(classed), "ep": ep, "packets": packets, "held_sets": held_sets,
+            "hist": hist, "processed": processed, "unprocessed": unprocessed}
+
+
+def false_positives(ep: pd.DataFrame) -> pd.Series:
+    """Per epoch, the packets on sources not in the truth (bright-flagged and other)."""
+    return ep["bright"].fillna(0) + ep["other"].fillna(0)
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--run", type=int, required=True)
+    p.add_argument("--truth", type=Path, nargs="*", help="truth Parquet files (default: the dataset's catalog/)")
+    p.add_argument("--radius", type=float, default=0.3, help="match radius, arcsec")
+    p.add_argument("--out", type=Path)
+    p.add_argument("--no-history", action="store_true", help="skip decoding the packets")
+    p.add_argument("--expids", help="comma-separated expids: count only these epochs")
+    a = p.parse_args(argv)
+    out_dir = a.out or Path(os.environ.get("TMPDIR", ".")) / f"completeness-{a.run}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
+
+    from rapidpipe.db.connection import connect
+
+    with connect(application_name="completeness") as conn:
+        data = load(conn, a.run)
+    files = truth_files(data["intake"], a.truth)
+    m = measure(data, files, a.radius, {int(e) for e in a.expids.split(",")} if a.expids else None,
+                with_history=not a.no_history)
+    run, shift, truth, rows, packets = data["run"], data["shift"], m["truth"], m["rows"], m["packets"]
+    table, per_sca, pur, ep, hist = m["table"], m["per_sca"], m["pur"], m["ep"], m["hist"]
+    processed, unprocessed, held_sets = m["processed"], m["unprocessed"], m["held_sets"]
 
     rows.drop(columns=["filename"], errors="ignore").to_parquet(out_dir / "truth.parquet")
     table.to_parquet(out_dir / "bins.parquet")
@@ -387,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     print("\npurity per packet magnitude bin (injected / bright-flagged / other)")
     print(pur.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
     print("\nper epoch: false positives (bright + other) relative to this catalog")
-    fp = ep["bright"].fillna(0) + ep["other"].fillna(0)
+    fp = false_positives(ep)
     print(f"  median {fp.median():.0f}, min {fp.min():.0f}, max {fp.max():.0f} over {len(ep)} epochs;"
           f" median bright {ep['bright'].median():.0f}, other {ep['other'].median():.0f}")
     if len(hist):
