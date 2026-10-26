@@ -25,7 +25,7 @@ nside9 = 2**level9
 
 
 swname = "registerCompletedJobsInDB.py"
-swvers = "1.2"
+swvers = "1.3"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -499,6 +499,18 @@ if __name__ == '__main__':
 
             rfid = None
 
+            # The difference image to register: the one named in the [ZOGY] section of the product
+            # config file, which is the SFFT difference image if the pipeline was run with
+            # run_zogy = False, else (for product config files written before then) the ZOGY one.
+
+            registered_diffimage_file = zogy_output_diffimage_file
+
+            if downloaded_from_bucket:
+                try:
+                    registered_diffimage_file = os.path.basename(product_config_input['ZOGY']['zogy_output_diffimage_file'])
+                except KeyError:
+                    pass
+
             product_bucket = s3_resource.Bucket(product_s3_bucket_base)
 
             job_prefix = proc_subdir + '/jid' + str(jid) + '/'
@@ -737,12 +749,12 @@ if __name__ == '__main__':
 
                 # Difference image.
 
-                print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
+                print("===> registered_diffimage_file =",registered_diffimage_file)
                 print("===> product_bucket_object.key =",product_bucket_object.key)
 
-                if f"{job_prefix}{zogy_output_diffimage_file}" == product_bucket_object.key:
+                if f"{job_prefix}{registered_diffimage_file}" == product_bucket_object.key:
 
-                    print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
+                    print("Found in difference image in S3 product bucket: {}".format(registered_diffimage_file))
 
 
                     # Harvest select product metadata from product config file

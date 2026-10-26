@@ -50,6 +50,18 @@ one science-image case to the next in different directories.
 There are difference-image products from three different methods: ZOGY, SFFT with cross-convolution,
 and naive (simple science image minus reference image).
 
+ZOGY and naive products are optional.  In ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``:
+
+* ``[ZOGY] run_zogy = False`` skips the ZOGY products.  The SFFT difference image (``sfftdiffimage_masked.fits``)
+  is then the one registered in the ``DiffImages`` database table, instead of ``zogy_diffimage_masked.fits``,
+  and the product config file's ``[ZOGY]`` section has ``diffimage_algorithm = sfft``.
+  This requires ``[SFFT] run_sfft = True``; otherwise ZOGY is run anyway.  If SFFT fails for a job with ZOGY
+  skipped, no difference image is registered and the job ends with exit code 65.
+* ``[NAIVE_DIFFIMAGE] naive_diffimage_flag = False`` skips the naive products, which nothing downstream uses.
+
+Post-processing, forced photometry, alert generation and the source loaders already use the SFFT products,
+so they are unaffected.
+
 .. note::
    Product filenames that do not include the suffix "_negative" are for positive difference images ("science image minus reference image").
    Product filenames that include the suffix "_negative" are for negative difference images ("reference image minus science image").

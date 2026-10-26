@@ -24,7 +24,7 @@ start_time_benchmark = time.time()
 
 
 swname = "awsBatchSubmitJobs_runSinglePostProcPipeline.py"
-swvers = "1.0"
+swvers = "1.1"
 
 print("swname =", swname)
 print("swvers =", swvers)
@@ -193,8 +193,10 @@ if __name__ == '__main__':
 
     awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 
-    zogy_output_diffimage_file_from_config = config_input['ZOGY']['zogy_output_diffimage_file']
-    zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fits","_masked.fits")
+    # The registered difference image is the one named in the DiffImages record: the ZOGY
+    # difference image, or the SFFT one if the science pipeline was run with run_zogy = False.
+
+    zogy_output_diffimage_file = os.path.basename(s3_full_filename_diffimage)
 
 
     # Populate config-file dictionary for products.

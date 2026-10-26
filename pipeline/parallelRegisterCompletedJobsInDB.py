@@ -34,7 +34,7 @@ nside9 = 2**level9
 
 
 swname = "parallelRegisterCompletedJobsInDB.py"
-swvers = "1.0"
+swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -582,6 +582,18 @@ def _run_single_core_job(jids,log_fnames,index_thread):
         reference_image_found = False
         rfid = None
 
+        # The difference image to register: the one named in the [ZOGY] section of the product
+        # config file, which is the SFFT difference image if the pipeline was run with
+        # run_zogy = False, else (for product config files written before then) the ZOGY one.
+
+        registered_diffimage_file = zogy_output_diffimage_file
+
+        if downloaded_from_bucket:
+            try:
+                registered_diffimage_file = os.path.basename(product_config_input['ZOGY']['zogy_output_diffimage_file'])
+            except KeyError:
+                pass
+
         product_bucket = s3_resource.Bucket(product_s3_bucket_base)
 
         job_prefix = proc_subdir + '/jid' + str(jid) + '/'
@@ -850,12 +862,12 @@ def _run_single_core_job(jids,log_fnames,index_thread):
 
             # Difference image.
 
-            fh.write(f"===> zogy_output_diffimage_file = {zogy_output_diffimage_file}\n")
+            fh.write(f"===> registered_diffimage_file = {registered_diffimage_file}\n")
             fh.write(f"===> product_bucket_object.key = {product_bucket_object.key}\n")
 
-            if f"{job_prefix}{zogy_output_diffimage_file}" == product_bucket_object.key:
+            if f"{job_prefix}{registered_diffimage_file}" == product_bucket_object.key:
 
-                fh.write("Found in difference image in S3 product bucket: {}\n".format(zogy_output_diffimage_file))
+                fh.write("Found in difference image in S3 product bucket: {}\n".format(registered_diffimage_file))
 
                 difference_image_found = True
 
