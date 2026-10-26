@@ -182,8 +182,10 @@ psf = 2048
 # Revalidated on ZOGY at 14860f57 (runs 103, 104, HLWAS 001_0001 SCA 8, four
 # healthy differences, usable 0.9994, offset at most 0.019 px): core -0.0011
 # to +0.0032, ring -0.0000 to +0.0017, inside both bounds, which stay.
-# SFFT's core +0.251 to +0.271 (ring -0.002 to +0.021) is its bright-star
-# residual, a failure the bounds hold, never a healthy range.
+# SFFT's core +0.251 to +0.271 (ring -0.002 to +0.021) under the socsims
+# block is its bright-star residual, a failure the bounds hold, never a
+# healthy range; under the HLWAS overlay's [difference.sfft] block (run 113)
+# core -0.0002 to +0.0004, ring -0.0092 to -0.0069, inside both.
 snr_gt20_factor = 3.0
 core_fraction_max_abs = 0.025
 ring_fraction_max_abs = 0.015
@@ -457,24 +459,20 @@ sextractor_interp_type = "ALL"
 # The brightest sources kept per difference image, by fluxfit / fluxerr,
 # as [import] max_sources; 0 keeps every source.
 max_sources = 500
-# The published differencer, dev's [ALERTS] diff_flavor: "zogy" or "sfft".
+# The published differencer, dev's [ALERTS] diff_flavor: "sfft" or "zogy".
 # The published rows are this differencer's image, uncertainty, PSF and
 # positive PSF-fit catalog; the other still runs and its PSF-fit catalogs stay
-# under the prefix as diagnostics. dev's value is sfft (since b725007d,
-# 2026-04-20, measured on GBTDS socsims only). The shipped default is zogy
-# (Ben, 2026-10-24 21:19 UTC): on HLWAS the raw SFFT catalog fills the cap
-# with star residuals (core fraction +0.252 against ZOGY's +0.003; injected
-# detection at AB 25 0.99 -> 0.00, false positives per epoch 228 -> 385, run
-# 88 against run 81), and dev never publishes it raw. dev's prefilter
-# ([difference.database_prefilter], dev-prefilter) does not earn it back:
-# HLWAS injected 001_0001 SCA 8, passes 4 to 6, same bytes at 14860f57 (runs
-# 103, 105, 107; null epoch runs 104, 102, 106): detected of 600, ZOGY 542,
-# raw SFFT 256, SFFT with the prefilter 275; AB 24 to 25, 93, 59, 78 of 96;
-# false positives per epoch mean (highest) 214 (233), 385 (390), 388 (390),
-# bright-flagged 0.62, 0.75, 0.86; null packets 182, 471, 478. The prefilter
-# keeps 0.67 to 0.71 of SFFT's candidates, and the bright-star residuals it
-# keeps still fill the 500 cap (queue item sfft-core).
-diff_flavor = "zogy"
+# under the prefix as diagnostics. sfft, as dev (b725007d, 2026-04-20; dev PR
+# 478, 2026-10-26, registers SFFT's image only) and the team (Ben,
+# 2026-10-26), with dev's prefilter ([difference.database_prefilter]); a run
+# or an overlay selects zogy (--set difference.diff_flavor="zogy"). The
+# measured trade, HLWAS 001_0001 SCA 8 F146 under the HLWAS overlay's
+# [difference.sfft] block (runs 145, 146 against ZOGY's 144, 127): injected
+# passes 4 to 6, detected 533 of 600 against 546, the loss at AB 26 to 26.5;
+# false positives per epoch 102.7 against 213.3; null-epoch packets 86
+# against 181. The other datasets follow this default unmeasured, under the
+# gate. The history is rapid_docs decisions.md (2026-10-26).
+diff_flavor = "sfft"
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
 xy_fit_max_offset = 0.5
