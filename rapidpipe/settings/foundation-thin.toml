@@ -467,11 +467,11 @@ max_sources = 500
 # 2026-10-26), with dev's prefilter ([difference.database_prefilter]); a run
 # or an overlay selects zogy (--set difference.diff_flavor="zogy"). The
 # measured trade, HLWAS 001_0001 SCA 8 F146 under the HLWAS overlay's
-# [difference.sfft] block (runs 113, 114 against ZOGY's 104, 103): injected
-# passes 4 to 6, detected 530 of 600 against 542, the loss at AB 26 to 26.5;
-# false positives per epoch 102 against 214; null-epoch packets 86 against
-# 182. The other datasets follow this default unmeasured, under the gate.
-# The history is rapid_docs decisions.md.
+# [difference.sfft] block (runs 145, 146 against ZOGY's 144, 127): injected
+# passes 4 to 6, detected 533 of 600 against 546, the loss at AB 26 to 26.5;
+# false positives per epoch 102.7 against 213.3; null-epoch packets 86
+# against 181. The other datasets follow this default unmeasured, under the
+# gate. The history is rapid_docs decisions.md (2026-10-26).
 diff_flavor = "sfft"
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
