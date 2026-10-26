@@ -57,7 +57,7 @@ summary and README.md has the detail.
 | `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
 | `tests/` | `unit/`, `db/` (with `db/proof/`, the procedure proof's synthetic steps in CI; the by-hand `thin_proof.py` retired with the associate stage, 2026-10-24), `cli/` and `fixtures/<stage>/`. |
 | `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list, `read_packets.py` (the packet reader: a packet set's validation report, outside the pipeline), `consume_packets.py` (a run's packet sets read back at their recorded offsets, counted, and one set per field compared byte for byte with the outbox), `copy_epsf.py` (CRDS ePSF references copied by name under the prefix a run's `[psf] epsf_cache` names, once), `check_run.sh` (a run's three checks, `validate_run.py`, `read_packets.py` over its bound sets and `consume_packets.py`, and one verdict line). |
-| `docs/` | The Sphinx source of the readthedocs site. |
+| `docs/` | `foundation-smdc-step.md`, the SMDC runbook. The readthedocs site is built from `rapid_docs`; `dev`'s Sphinx source stays on `dev`. |
 
 `dev`'s `pipeline/`, `alerts/`, `aws/`, `soc/`, `sims/`, `docker/`,
 `modules/{coadd,fake_src,solarsystem,utils}` and most of `database/` and

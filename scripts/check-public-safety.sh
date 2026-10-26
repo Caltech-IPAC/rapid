@@ -38,7 +38,6 @@ ECR_ALIAS="y9b1""s7h8"
 # starts with the listed prefix. Anything new blocks the check.
 ALLOWLIST="$(cat <<'EOF'
 c/src/bkgest/readme.txt	/Users/laher
-docs/source/analyses/count_fields_imaged/count_fields_imaged.rst	/Users/laher
 scripts/check-public-safety.sh	/Users/laher
 scripts/check-public-safety.sh	~/Vault
 scripts/check-public-safety.sh	~/Claude

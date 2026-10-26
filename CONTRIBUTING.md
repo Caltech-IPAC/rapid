@@ -35,4 +35,4 @@ All contributions are subject to review. Project maintainers may accept or rejec
 
 ## Questions
 
-For questions about contributing, open an issue on GitHub or consult the [documentation](https://caltech-ipac-rapid.readthedocs.io/en/latest/).
+For questions about contributing, open an issue on GitHub or consult the [documentation](https://roman-rapid.readthedocs.io/en/latest/).

@@ -2,7 +2,7 @@
 
 Repository for the RAPID (***R***oman ***A***lerts ***P***romptly from ***I***mage ***D***ifferencing) project-infrastructure team.
 
-[![Documentation Status](https://readthedocs.org/projects/caltech-ipac-rapid/badge/?version=latest)](https://caltech-ipac-rapid.readthedocs.io/en/latest/)
+[![Documentation Status](https://readthedocs.org/projects/roman-rapid/badge/?version=latest)](https://roman-rapid.readthedocs.io/en/latest/)
 
 ## Getting started
 
@@ -176,7 +176,7 @@ Per the repository's Unix convention, commands whose stdout carries data log to 
 
 ## Documentation
 
-Install instructions and documentation are on [ReadTheDocs](https://caltech-ipac-rapid.readthedocs.io/en/latest/).
+The documentation is on [Read the Docs](https://roman-rapid.readthedocs.io/en/latest/), built from the `rapid_docs` repository. `dev`'s Sphinx pages stay on `dev`.
 
 ## Contributing
 
