@@ -81,7 +81,12 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
 A difference image's neighbours (its PSF, uncertainty, science image and
 template) are read under the difference image's own suffix
 (:func:`neighbour`): ``.fits.gz`` from a difference job that gzips its
-files, ``.fits`` from one before it (run 12's).
+files, ``.fits`` from one before it (run 12's). A gzipped file is
+decompressed once per job, to a plain file beside its staged copy, when
+it is first read (:func:`_plain`); forced photometry and the cutouts then
+read the plain file, so the trigger's difference and science images, read
+by both, and the science PSF, read on every window image, are not
+decompressed again.
 
 Outputs under the prefix: ``packets/<expid>-<sca>-<fid>.avro`` (one Avro
 object container, deflate level 1, one record per block), declared tables
@@ -99,8 +104,10 @@ the bright-footprint flag
 from __future__ import annotations
 
 import dataclasses
+import gzip
 import logging
 import math
+import shutil
 import time
 from pathlib import Path
 
@@ -417,6 +424,18 @@ def _beside(url: str, name: str) -> Path:
     return get(url.rsplit("/", 1)[0] + "/" + neighbour(name, url))
 
 
+def _plain(path: Path) -> Path:
+    """``path``, or for a ``.gz`` the plain file beside it, decompressed on the first read and the staged copy removed."""
+    if path.suffix != ".gz":
+        return path
+    plain = path.with_suffix("")
+    if not plain.exists():
+        with gzip.open(path, "rb") as src, plain.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+        path.unlink()
+    return plain
+
+
 def measure_forced(images: list[WindowImage], positions: list[fp.Position],
                    reuse: dict[int, dict], time_proc: float) -> tuple[list[dict], int]:
     """One forced row per (object, image) whose footprint holds the object.
@@ -447,9 +466,9 @@ def measure_forced(images: list[WindowImage], positions: list[fp.Position],
         merged: dict[int, dict] = {}
         for product, path, psf, uncert in (("diff", image.diff, image.diff_psf, image.diff_uncert),
                                            ("science", image.sci, image.sci_psf, None)):
-            for m in fp.forced_photometry(str(path), str(psf), todo, rid=image.rid,
+            for m in fp.forced_photometry(str(_plain(path)), str(_plain(psf)), todo, rid=image.rid,
                                           product=product,
-                                          uncert_path=str(uncert) if uncert else None):
+                                          uncert_path=str(_plain(uncert)) if uncert else None):
                 rec = merged.setdefault(m.pos_id, {
                     "aid": m.pos_id, "rid": image.rid, "pid": image.pid, "expid": image.expid,
                     "sca": image.sca, "fid": image.fid, "band": image.band,
@@ -570,7 +589,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
             ("template", read.trigger_image.diff.with_name(
                 neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name)))):
-        stamps[kind] = load_fits_image(stamp_path)
+        stamps[kind] = load_fits_image(_plain(stamp_path))
         if stamps[kind][0] is None:  # the trigger's own images are required, not optional
             raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
     timing["cutouts_s"] = time.perf_counter() - t0
