@@ -2,8 +2,8 @@
 """The difference job's quality numbers, from arrays the job already holds.
 
 New, not `dev`'s: `dev` records no per-image quality numbers beyond the
-gain-matching and catalog counts. These are the measurements the images
-ledger made by hand on run 17 (``LEDGER-images.md``, 2026-10-23), which
+gain-matching and catalog counts. These are the measurements made by hand
+on run 17 (rapid_docs ``system/measurements.md``, run 17's difference detections, 2026-10-23), which
 would have shown the null test's detections to be artefacts on the first
 run; the difference stage records them under ``metrics`` in its manifest
 and the ``job_metrics`` view exposes them. Every value is a number; a
@@ -75,7 +75,7 @@ arms lie inside the disc at every measured star, so the footprint is a
 disc. The sources it holds are 50 to 56% of all kept sources there: faint
 sources on bright stars, a measurement, not a failure.
 
-The constants are the ledger's, not settings: no measured case has needed
+The constants are that measurement's, not settings: no measured case has needed
 a different one. This module may import leaf modules only.
 """
 
@@ -265,7 +265,7 @@ def ring_count(x: np.ndarray, y: np.ndarray, flux: np.ndarray, flux_err: np.ndar
 
 
 def centroid(image: np.ndarray, x: float, y: float, iterations: int = 20) -> tuple[float, float]:
-    """The Gaussian-weighted iterative centroid near ``(x, y)`` (the ledger's measure)."""
+    """The Gaussian-weighted iterative centroid near ``(x, y)`` (run 17's measure)."""
     h = CENTROID_HALF
     ny, nx = image.shape
     for _ in range(iterations):

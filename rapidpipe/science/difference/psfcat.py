@@ -246,7 +246,7 @@ def psf_catalog(settings: PsfCatalogSettings,
     # photutils' PSFPhotometry.__call__ returns None, not an exception, when
     # DAOStarFinder detects candidate sources but none survive its
     # sharpness/roundness filter (a real, valid outcome on a near-empty
-    # image -- confirmed live, LEDGER-fixture-real.md 2026-09-23): the
+    # image -- confirmed live on the fixture's real images, 2026-09-23): the
     # catalog is absent and the caller sets that difference image's
     # catalog-outcome bit.
     if phot is None:

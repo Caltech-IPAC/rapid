@@ -7,10 +7,10 @@ and the modules it calls (``pipeline/differenceImageSubs.py``,
 ``pipeline/sfftCommandSubs.py``, ``pipeline/sfftDetectionSubs.py``,
 ``pipeline/psfFwhmSubs.py``, ``pipeline/referenceBackgroundSubs.py``,
 ``modules/utils/rapid_pipeline_subs.py``), refreshed to dev d6aac515.
-The port principle (lead, 2026-09-22): minimise differences to `dev`;
+The port principle (2026-09-22): minimise differences to `dev`;
 improvements come later. Each function here keeps its `dev` counterpart's
 maths, file conventions and quirks; where a quirk looks wrong it is
-reproduced and recorded in the port's ledger, not fixed. The `dev` name of
+reproduced, not fixed. The `dev` name of
 each function is given in its docstring.
 
 External tools (SExtractor, SWarp, bkgest, ZOGY's ``py_zogy.py``, SFFT)

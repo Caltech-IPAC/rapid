@@ -1,4 +1,4 @@
--- The object catalog (night-2026-10-24 task 7; the plan's amendment of
+-- The object catalog (PR 378; the plan's amendment of
 -- 2026-10-24: association in the difference job over an append-only
 -- per-field catalog, reconcile at publish, the set chain retired). schema.sql
 -- carries the new tables and views for a fresh database; this file brings an

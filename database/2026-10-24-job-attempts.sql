@@ -1,4 +1,4 @@
--- A job's Batch submissions (night-2026-10-24 task 8, Spot as a probe): one
+-- A job's Batch submissions (PR 381, Spot as a probe): one
 -- entry per Batch job keyed by its id, written by the submitter, the job and
 -- the loop's reconcile (rapidpipe.foundation.attempts), and job_metrics gains
 -- the per-job numbers read from them and from the row's own times. schema.sql

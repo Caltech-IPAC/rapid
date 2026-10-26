@@ -164,9 +164,9 @@ code or a second list.
 - State every departure from `dev`'s behaviour on the relevant `rapid_docs`
   page, not only in a code comment. Readers and future agents look first
   to that page as the design authority.
-- Rulings (a supervisor's or the lead's decision that changes a
-  contract) are dated and attributed on the `rapid_docs` page they
-  affect (for example "supervisor step 6, 2026-09-24"); do not bury a
+- Rulings (a team decision that changes a contract) are dated and
+  attributed on the `rapid_docs` page they affect (for example a
+  `decisions.md` line ending "(name, 2026-09-24)"); do not bury a
   ruling in a code comment alone.
 - No em dashes in docs or commit messages written for this repository
   (house style; use a comma, colon, or a new sentence instead).

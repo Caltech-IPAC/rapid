@@ -21,7 +21,7 @@ masked HDU and counts the file's own NaN, the masked pixels and their union
 in the manifest; the HLWAS overlay's bits are #238's names without
 SATURATED; ``[intake] crpix_shift`` (default ``[0, 0]``) is added to
 ``CRPIX1`` and ``CRPIX2`` and recorded in the manifest, and the HLWAS overlay
-carries the WCS ledger's measured translation; ``[intake] rederive_wcs``
+carries the measured translation (rapid_docs measurements.md); ``[intake] rederive_wcs``
 (default false, `dev`'s behaviour) fetches nothing and keeps the file's
 gWCS, and on fetches the distortion reference the file names and writes
 the SIP fit of the re-derived gWCS, the manifest naming the reference and
@@ -359,7 +359,7 @@ def test_crpix_shift_defaults_to_nothing_and_translates_the_wcs_by_the_setting(t
     assert json.loads((prefix / "manifest.json").read_text())["crpix_shift"] == [0.25, -0.5]
 
 
-def test_the_hlwas_overlay_carries_the_ledgers_translation():
+def test_the_hlwas_overlay_carries_the_measured_translation():
     overlay = tomllib.loads((REPO / "rapidpipe/settings/datasets/hlwas-r00342.toml").read_text())
     assert overlay["intake"]["crpix_shift"] == [0.12, -0.99]
 

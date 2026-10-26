@@ -8,9 +8,9 @@ PSF, so the PSF it needs for the reference is the one of the image it is
 given: the awaicgen coadd after the per-epoch SWarp resample onto the
 science grid. Each of the two resamplings widens it (run 17, r00342 F146
 SCA 8, pass 4: star sigma science 0.952 px, mosaic 1.039, resampled 1.100,
-the 15% the images ledger found), and the widening depends on the
+the 15% run 17's detections showed), and the widening depends on the
 resampling, so the stamp is measured per job on the image ZOGY sees
-(``LEDGER-fixes.md`` sections 2 and 5(a), 2026-10-23).
+(rapid_docs ``system/measurements.md``, reference PSF, 2026-10-23).
 
 :func:`measure` takes the resampled, background-subtracted reference and
 the pixels it may use and returns a stamp the science PSF's size (an odd
@@ -32,7 +32,7 @@ re-centred on the central pixel, with what it measured:
   PSF evaluated at a pixel centre is that pixel's value), shifted until its
   centroid is within :data:`CENTRING_TOLERANCE_PX` of the central pixel;
 - the stars' own width: the median of the chosen stars' :func:`moments`
-  sigma on the image, the fixes ledger's reference-star sigma (1.10 px
+  sigma on the image, the measured reference-star sigma (1.10 px
   under SWarp BILINEAR, 1.02 under LANCZOS3, run 17 pass 4), which does not
   depend on the builder;
 - the wings: the science PSF's beyond :data:`WING_RADII_PX`, cosine-tapered
@@ -49,17 +49,17 @@ re-centred on the central pixel, with what it measured:
 
 The values are constants, not settings: no measured case has needed a
 different one (foundation plan Part 1). Their measurement, on run 17's
-pass 4 resampled reference (the fixes ledger): 73 stars on the SCA pass the
+pass 4 resampled reference (the same page): 73 stars on the SCA pass the
 cuts, sigma 1.064 to 1.091 px from 10 to 100 stars at oversample 4 and
 31 px stamps (oversample 1 halves the peak and is not used), 4.7 s for the
-whole chain. The ledger's sharpness and roundness values were not
+whole chain. That measurement's sharpness and roundness values were not
 recorded; on the same image a sharpness cut alone lets defect pixels and
 galaxies in and the built stamp comes out at sigma 0.33 to 0.80, so the
-width cut (fixes task 3, 2026-10-24) is what keeps the stars.
+width cut (2026-10-24) is what keeps the stars.
 
 :func:`moments` is the one measure of a stamp the stage records for both
 PSFs: the centroid and the second-moment sigma within :data:`MOMENT_RADIUS_PX`
-of it (the images ledger's reader's measure).
+of it (run 17's measure).
 
 This module may import ``rapidpipe.products`` and leaf modules only.
 """
@@ -77,8 +77,8 @@ FWHM_PX = 2.6
 #: Peaks kept: at least this many clipped standard deviations of the usable pixels (faint stars
 #: are noisy), at most this, in the image's units (DN/s for an awaicgen reference: bright ones
 #: near saturation). The floor was 20 DN/s, set on F146, where it is 886 sigma; in F184 and F213
-#: (r00342, SCA 8) it left 8 and 6 stars of 2,100 and 683 detections and failed the job (fixes
-#: task 5, runs 51 and 52); at 400 sigma their mosaics keep 49 and 20, F146's 64.
+#: (r00342, SCA 8) it left 8 and 6 stars of 2,100 and 683 detections and failed the job
+#: (runs 51 and 52, 2026-10-24); at 400 sigma their mosaics keep 49 and 20, F146's 64.
 PEAK_MIN_SIGMA, PEAK_MAX = 400.0, 3500.0
 #: DAOStarFinder's sharpness range and roundness magnitude kept (its defaults). On a resampled
 #: image the stars' sharpness spans 0.4 to 1.0 with the sub-pixel phase, overlapping defect

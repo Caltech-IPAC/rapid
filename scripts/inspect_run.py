@@ -19,7 +19,7 @@ aperture less the 8 to 12 px annulus median, the core fraction's) and
 shown at ±:data:`FLUX_STRETCH` per pixel, so every star's residual
 pattern is seen at the scale the core and ring fractions measure it. The sample is the first and last epoch of the run by ``expid``
 and every epoch whose ``n_sources_snr_gt20`` is more than twice the run's
-median: the images ledger's pictures made by code, not every job.
+median: run 17's hand-made pictures (rapid_docs measurements.md) made by code, not every job.
 
 ``check_run.sh`` runs it first, so the numbers are read as soon as a run
 drains. The database is named as for every rapidpipe command.
@@ -113,7 +113,7 @@ def _fmt(value, signed: bool = False) -> str:
 
 
 def thumbnail(image, block: int = THUMB_BLOCK):
-    """The largest-magnitude pixel of each ``block x block`` block (the images ledger's thumbnail)."""
+    """The largest-magnitude pixel of each ``block x block`` block (run 17's thumbnail)."""
     import numpy as np
 
     ny, nx = (s // block * block for s in image.shape)

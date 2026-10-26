@@ -2,10 +2,9 @@
 """The load stage's science: catalog join and per-source derivations, ported from `dev`.
 
 Source: `origin/dev`'s ``pipeline/loadPSFCatIntoDBSourcesTable.py``. The
-port principle (lead, 2026-09-22): minimise differences to `dev`;
+port principle (2026-09-22): minimise differences to `dev`;
 improvements come later. Each function keeps its `dev` counterpart's maths
-and quirks; where a quirk looks wrong it is reproduced and recorded in the
-port's ledger, not fixed.
+and quirks; where a quirk looks wrong it is reproduced, not fixed.
 
 - ``catalogs``: read a Photutils PSF-fit catalog and its finder catalog and
   inner-join them on ``id``; HEALPix level-6/9 indexes and the Roman

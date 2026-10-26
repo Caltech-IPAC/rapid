@@ -25,7 +25,8 @@ from typing import Any
 
 #: Batch's status reason when EC2 took a Spot host back (``Host EC2 (instance i-...) terminated.``).
 RECLAIM = "Host EC2"
-#: The concurrency :func:`report` times the fill to (the vault's Spot reopen trigger).
+#: The concurrency :func:`report` times the fill to (the Spot policy's reopen trigger,
+#: rapid_systems ``docs/reference/spot-and-retry-policy.md``).
 FILL_VCPUS = 1000
 
 

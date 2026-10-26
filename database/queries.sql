@@ -166,7 +166,7 @@ FROM official o WHERE o.opened_group = %(group)s
 ORDER BY side DESC, binding;
 
 --------------------------------------------------------------------------------
--- The team's twelve spatial and status shapes (LEDGER-queries (a), (b))
+-- The team's twelve spatial and status shapes (R<n>: rapid_docs measurements.md, query shapes)
 --------------------------------------------------------------------------------
 
 -- name: diffimages_in_cone
