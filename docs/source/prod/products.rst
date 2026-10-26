@@ -51,9 +51,8 @@ There are difference-image products from three different methods: ZOGY, SFFT wit
 and naive (simple science image minus reference image).
 
 Only the SFFT difference image (``sfftdiffimage_masked.fits``, or ``sfftdiffimage_dconv_masked.fits`` with
-``--crossconv``) is registered in the ``DiffImages`` database table, from the product config file's ``[ZOGY]`` section
-(name kept for compatibility), which has ``diffimage_algorithm = sfft``.  Older product config files, which describe
-the ZOGY difference image, are not registered.  Post-processing, forced photometry, alert generation and the source
+``--crossconv``) is registered in the ``DiffImages`` database table, from the product config file's ``[SFFT]`` section.
+Older product config files, which have no ``[SFFT]`` section, are not registered.  Post-processing, forced photometry, alert generation and the source
 loaders all use the SFFT products.
 
 ``[SFFT] run_sfft`` in ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`` must be True; a job that does not

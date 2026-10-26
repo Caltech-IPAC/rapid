@@ -13,9 +13,8 @@ exit_code            Definition
 =============       =========================================
 
 Only the SFFT difference image is registered in the DiffImages database table; it is described in
-the [ZOGY] section of the product config file (diffimage_algorithm = sfft), whose name is kept for
-compatibility.  The ZOGY difference image is made only if [ZOGY] run_zogy = True, and the naive
-difference image only if [NAIVE_DIFFIMAGE] naive_diffimage_flag = True.
+the [SFFT] section of the product config file.  The ZOGY difference image is made only if
+[ZOGY] run_zogy = True, and the naive difference image only if [NAIVE_DIFFIMAGE] naive_diffimage_flag = True.
 
 
 RAPID pipeline output_diffimage_file_infobits:
@@ -2789,8 +2788,8 @@ if __name__ == '__main__':
 
 
     #################################################################################################################
-    # Describe the SFFT difference image in the [ZOGY] section of the product config file (name kept
-    # for compatibility), from which it is registered in the DiffImages database table.
+    # Describe the SFFT difference image in the [SFFT] section of the product config file, from which
+    # it is registered in the DiffImages database table.
     #################################################################################################################
 
     if run_sfft and run_sfft_was_successful:
@@ -2801,40 +2800,38 @@ if __name__ == '__main__':
         if checksum_diffimage == 65 or checksum_diffimage == 68 or checksum_diffimage == 66:
             print("*** Error: Unexpected value for checksum =",checksum_diffimage)
 
-        product_config['ZOGY'] = {}
+        product_config['SFFT'] = {}
 
-        product_config['ZOGY']['diffimage_algorithm'] = "sfft"
-        product_config['ZOGY']['rid'] = str(rid_sciimage)
-        product_config['ZOGY']['ppid'] = str(ppid_sciimage)
-        product_config['ZOGY']['rfid'] = str(rfid)
-        product_config['ZOGY']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
-        product_config['ZOGY']['zogy_output_diffimage_file_checksum'] = checksum_diffimage
-        product_config['ZOGY']['zogy_output_diffimage_file'] = \
+        product_config['SFFT']['rid'] = str(rid_sciimage)
+        product_config['SFFT']['ppid'] = str(ppid_sciimage)
+        product_config['SFFT']['rfid'] = str(rfid)
+        product_config['SFFT']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
+        product_config['SFFT']['sfft_output_diffimage_file_checksum'] = checksum_diffimage
+        product_config['SFFT']['sfft_output_diffimage_file'] = \
             "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_sfftdiffimage)
-        product_config['ZOGY']['zogy_output_diffpsf_file'] = \
+        product_config['SFFT']['sfft_output_diffpsf_file'] = \
             "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_sfftdiffpsf)
-        product_config['ZOGY']['zogy_output_scorrimage_file'] = "None"
-        product_config['ZOGY']['zogy_output_diffimage_file_status'] = str(1)
+        product_config['SFFT']['sfft_output_diffimage_file_status'] = str(1)
 
-        product_config['ZOGY']['ra0'] = str(ra0_sciimage)
-        product_config['ZOGY']['dec0'] = str(dec0_sciimage)
-        product_config['ZOGY']['ra1'] = str(ra1_sciimage)
-        product_config['ZOGY']['dec1'] = str(dec1_sciimage)
-        product_config['ZOGY']['ra2'] = str(ra2_sciimage)
-        product_config['ZOGY']['dec2'] = str(dec2_sciimage)
-        product_config['ZOGY']['ra3'] = str(ra3_sciimage)
-        product_config['ZOGY']['dec3'] = str(dec3_sciimage)
-        product_config['ZOGY']['ra4'] = str(ra4_sciimage)
-        product_config['ZOGY']['dec4'] = str(dec4_sciimage)
+        product_config['SFFT']['ra0'] = str(ra0_sciimage)
+        product_config['SFFT']['dec0'] = str(dec0_sciimage)
+        product_config['SFFT']['ra1'] = str(ra1_sciimage)
+        product_config['SFFT']['dec1'] = str(dec1_sciimage)
+        product_config['SFFT']['ra2'] = str(ra2_sciimage)
+        product_config['SFFT']['dec2'] = str(dec2_sciimage)
+        product_config['SFFT']['ra3'] = str(ra3_sciimage)
+        product_config['SFFT']['dec3'] = str(dec3_sciimage)
+        product_config['SFFT']['ra4'] = str(ra4_sciimage)
+        product_config['SFFT']['dec4'] = str(dec4_sciimage)
 
-        product_config['ZOGY']['fid'] = str(fid_sciimage)
-        product_config['ZOGY']['sca'] = str(sca_sciimage)
-        product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_sfftdiffimage)
-        product_config['ZOGY']['scalefacref'] = str(scalefacref)
-        product_config['ZOGY']['dxrmsfin'] = str(dxrmsfin)
-        product_config['ZOGY']['dyrmsfin'] = str(dyrmsfin)
-        product_config['ZOGY']['dxmedianfin'] = str(dxmedianfin)
-        product_config['ZOGY']['dymedianfin'] = str(dymedianfin)
+        product_config['SFFT']['fid'] = str(fid_sciimage)
+        product_config['SFFT']['sca'] = str(sca_sciimage)
+        product_config['SFFT']['nsexcatsources'] = str(nsexcatsources_sfftdiffimage)
+        product_config['SFFT']['scalefacref'] = str(scalefacref)
+        product_config['SFFT']['dxrmsfin'] = str(dxrmsfin)
+        product_config['SFFT']['dyrmsfin'] = str(dyrmsfin)
+        product_config['SFFT']['dxmedianfin'] = str(dxmedianfin)
+        product_config['SFFT']['dymedianfin'] = str(dymedianfin)
 
 
     #################################################################################################################
@@ -3318,8 +3315,8 @@ if __name__ == '__main__':
     print("proc_pt_datetime_ended =",proc_pt_datetime_ended)
 
     product_config['JOB_PARAMS']['job_ended'] = str(proc_pt_datetime_ended)
-    if 'ZOGY' in product_config:
-        product_config['ZOGY']['zogy_output_diffimage_file_infobits'] = str(output_diffimage_file_infobits)      # TODO
+    if 'SFFT' in product_config:
+        product_config['SFFT']['sfft_output_diffimage_file_infobits'] = str(output_diffimage_file_infobits)      # TODO
 
 
     # Write product config file for job.
