@@ -19,13 +19,25 @@ from rapidpipe.science.alerts.param_registry import ALERT_PARAMS, NOT_USED, VERS
 from rapidpipe.science.alerts.records import Cutouts, ObjectRecord, Source
 
 
+#: An exposures row's Roman observation identifiers, as the packet stage selects them.
+IDENTIFIERS = {"program_id": -1, "execution_plan": 1, "obs_pass": 4, "segment": 1,
+               "observation": 1, "visit": 1, "exposure": 1,
+               "observation_id": "003420100400100100101101001"}
+
+#: Each identifier's alert field.
+WIRE_NAMES = {"program_id": "program", "execution_plan": "plan", "obs_pass": "pass",
+              "segment": "segment", "observation": "observation", "visit": "visit",
+              "exposure": "exposure", "observation_id": "observation_id"}
+
+
 def _source(sid, **overrides):
     row = {"sid": sid, "expid": 1234, "sca": 7, "mjdobs": 61273.125, "ra": 269.45,
            "dec": -28.77, "xfit": 10.0, "yfit": 12.0, "band": "F184", "xerr": 0.01,
            "yerr": 0.02, "fluxfit": 100.0, "fluxerr": 2.0, "flags": 0, "field": 5321,
            "hp6": 1, "hp9": 2, "pid": 4242, "isdiffpos": True, "qfit": 0.1, "cfit": 0.1,
            "redchi": 1.0, "npixfit": 25, "sharpness": 0.5, "roundness1": 0.0,
-           "roundness2": 0.0, "peak": 12.0, "exptime": 139.8}
+           "roundness2": 0.0, "peak": 12.0, "exptime": 139.8, **IDENTIFIERS,
+           "survey": "SOCSIMS", "rb": None, "rblabel": None}
     row.update(overrides)
     return Source.from_row(row, strict=True)
 
@@ -39,9 +51,9 @@ def _object_row(object_id, sid, **overrides):
 
 def test_packaged_schema_matches_the_registry():
     assert assemble.schema_problems() == []
-    assert assemble.SCHEMA_VERSION == VERSION == "00.06"
+    assert assemble.SCHEMA_VERSION == VERSION == "00.07"
     schema = assemble.load_schema()
-    assert schema["name"] == "rapid.v00_06.alert"
+    assert schema["name"] == "rapid.v00_07.alert"
 
 
 def test_schema_problems_names_a_drifted_file(tmp_path):
@@ -50,7 +62,7 @@ def test_schema_problems_names_a_drifted_file(tmp_path):
         target = root / path.relative_to(assemble.SCHEMA_ROOT)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(path.read_text())
-    alert = root / "00" / "06" / "rapid.v00_06.alert.avsc"
+    alert = root / "00" / "07" / "rapid.v00_07.alert.avsc"
     data = json.loads(alert.read_text())
     data["fields"] = data["fields"][:-1]
     alert.write_text(json.dumps(data))
@@ -109,7 +121,7 @@ def test_assemble_alert_is_devs_packet():
     earlier = _source(2, mjdobs=61200.0, aid=900)
     alert = _alert(prv=[earlier], cutout=b"FITS")
     assert set(alert) == {p.name for p in ALERT_PARAMS if p.status is not NOT_USED}
-    assert alert["schemaVersion"] == "00.06"
+    assert alert["schemaVersion"] == "00.07"
     assert alert["diaSource"]["diaObjectId"] == 900
     assert alert["diaSource"]["isNegative"] is False
     assert alert["diaSource"]["isSSCandidate"] is None
@@ -122,6 +134,26 @@ def test_assemble_alert_is_devs_packet():
         assemble.load_schema())
     assert decoded["diaSourceId"] == 1 and decoded["cutoutDifference"] == b"FITS"
 
+
+
+def test_the_diasource_carries_the_exposures_identifiers_and_the_survey():
+    alert = _alert()
+    assert {wire: alert["diaSource"][wire] for wire in WIRE_NAMES.values()} == {
+        WIRE_NAMES[k]: v for k, v in IDENTIFIERS.items()}
+    assert alert["diaSource"]["survey"] == "SOCSIMS"
+
+
+def test_a_program_with_no_surveys_row_gives_survey_null():
+    source = _source(1, survey=None, aid=900)
+    assert assemble.build_dia_source(source)["survey"] is None
+
+
+def test_the_three_reliability_fields_are_null_even_with_a_score_staged():
+    source = _source(1, rb=0.9, rblabel=1, aid=900)
+    source.rb_threshold, source.rb_version = 0.5, "model"
+    dia = assemble.build_dia_source(source)
+    assert (dia["reliability"], dia["reliabilityThreshold"], dia["reliabilityVersion"]) == (
+        None, None, None)
 
 def _container(sids, cutout_bytes, marker=b"0123456789abcdef"):
     buf = io.BytesIO()
@@ -169,7 +201,8 @@ def test_index_associations_keeps_the_lowest_aid_and_the_orphans():
                    ("sid", "expid", "sca", "mjdobs", "ra", "dec", "xfit", "yfit", "band", "xerr",
                     "yerr", "fluxfit", "fluxerr", "flags", "field", "hp6", "hp9", "pid",
                     "isdiffpos", "qfit", "cfit", "redchi", "npixfit", "sharpness",
-                    "roundness1", "roundness2", "peak", "exptime")}, "object_aid": 5}]
+                    "roundness1", "roundness2", "peak", "exptime", *IDENTIFIERS, "survey", "rb",
+                    "rblabel")}, "object_aid": 5}]
     indexed = assemble.index_associations(rows, history)
     assert indexed.objects_by_sid[1]["aid"] == 5
     assert indexed.orphans_by_sid == {2: [8]}

@@ -1,10 +1,14 @@
-# ported-from: alerts/param_registry.py @ 54fd7ea8
+# ported-from: alerts/param_registry.py @ 883e3876
 """The alert schema's parameter registry, ported verbatim from `dev`.
 
 Source: `origin/dev`'s ``alerts/param_registry.py`` (Emily Everetts, 07/2026),
-schema 00.06, byte-identical below this docstring apart from the module path
-in the usage line. The `.avsc` files it describes are copied verbatim from
-``alerts/schema/00/06/`` into this package's ``schema/00/06/``; `dev`'s
+schema 00.07, byte-identical below this docstring apart from the module path
+in the usage line, the bright-footprint comment on ``psfFitFlags``, and the
+three reliability params (``reliability``, ``reliabilityThreshold``,
+``reliabilityVersion``), which are ``STUB`` here, so null on every packet,
+where `dev` fills them: the rebuild has no real/bogus scorer (rapid_docs
+``decisions.md``). The `.avsc` files it describes are copied verbatim from
+``alerts/schema/00/07/`` into this package's ``schema/00/07/``; `dev`'s
 ``gen_schema.py`` (which writes them from this registry) is not ported --
 :func:`rapidpipe.science.alerts.assemble.schema_problems` checks the two
 agree instead.
@@ -46,7 +50,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.06"
+VERSION = "00.07"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -277,10 +281,16 @@ DIA_SOURCE_PARAMS = (
     # --- Classification (all stubs) -----------------------------------------
     Param("extendedness",  ["null", "float"],  "Probability of being extended (stub)",
                     STUB, "star/galaxy classification (not run)"),
-    Param("reliability",   ["null", "float"],  "Reliability score from ML classifier",
-                    STUB, "real/bogus classifier (not run)"),
-    Param("reliabilityVersion", ["null", "string"],  "Reliability code version",
-                    STUB, "from real/bogus classifier version (not run)"),
+    Param("reliability",   ["null", "float"],  "Real/bogus score from the RuBR-AT classifier, 0 (bogus) to "
+                                               "1 (real); null when the detection was not scored",
+                    STUB, "null until a scorer is validated on the published differencer's catalogs "
+                    "(rapid_docs decisions.md); dev: sources.rb", attr="rb"),
+    Param("reliabilityThreshold", ["null", "float"], "Score at or above which the classifier calls a detection "
+                                               "real",
+                    STUB, "null with reliability; dev: [ALERTS] rb_threshold", attr="rb_threshold"),
+    Param("reliabilityVersion", ["null", "string"],  "Identifier of the real/bogus model that produced the score",
+                    STUB, "null with reliability; dev: [RUBRAT] s3_prefix, last path component",
+                    attr="rb_version"),
 
     # --- Trailed-source fit (all stubs) --------------------------------------
     # Unsure if we will have these in v1
@@ -364,29 +374,32 @@ DIA_SOURCE_PARAMS = (
 
     # Roman observation ID hierarchy (meta.observation in the L2 ASDF files):
     # program > plan > pass > segment > observation > visit > exposure.
-    # All stubs: dropped in the ASDF-to-FITS conversion, not in exposures table.
+    # Registered at L2 ingest into the Exposures table since 2026-10-15
+    # (migration 20261015); null for exposures ingested before that, and for
+    # simulations the program is a negative number keyed in the Surveys table.
     Param("observation_id", ["null", "string"], "Roman observation ID: concatenated observation hierarchy "
                                                 "including the exposure counter; uniquely identifies the "
-                                                "Roman exposure (stub)",
-                    STUB, "meta.observation.observation_id"),
-    Param("program",       ["null", "int"],    "Roman program number (stub)",
-                    STUB, "meta.observation.program"),
-    Param("plan",          ["null", "int"],    "Roman execution plan number (stub)",
-                    STUB, "meta.observation.execution_plan"),
-    Param("pass",          ["null", "int"],    "Roman pass number (stub)",
-                    STUB, "meta.observation.pass"),
-    Param("segment",       ["null", "int"],    "Roman segment number (stub)",
-                    STUB, "meta.observation.segment"),
-    Param("observation",   ["null", "int"],    "Roman observation number within the segment (stub)",
-                    STUB, "meta.observation.observation"),
+                                                "Roman exposure",
+                    IMPLEMENTED, "exposures.observation_id", attr="observation_id"),
+    Param("program",       ["null", "int"],    "Roman program number (negative for simulations)",
+                    IMPLEMENTED, "exposures.program_id", attr="program_id"),
+    Param("plan",          ["null", "int"],    "Roman execution plan number",
+                    IMPLEMENTED, "exposures.execution_plan", attr="execution_plan"),
+    Param("pass",          ["null", "int"],    "Roman pass number",
+                    IMPLEMENTED, "exposures.pass", attr="obs_pass"),   # `pass` is a Python keyword
+    Param("segment",       ["null", "int"],    "Roman segment number",
+                    IMPLEMENTED, "exposures.segment", attr="segment"),
+    Param("observation",   ["null", "int"],    "Roman observation number within the segment",
+                    IMPLEMENTED, "exposures.observation", attr="observation"),
     Param("visit",         ["null", "int"],    "Roman visit number; a visit groups multiple exposures, so "
                                                 "this is NOT a per-image identifier -- use expId or "
-                                                "observation_id for that (stub)",
-                    STUB, "meta.observation.visit"),
-    Param("exposure",      ["null", "int"],    "Roman exposure counter within the visit (stub)",
-                    STUB, "meta.observation.exposure"), #TODO: name something else?
-    Param("survey",        ["null", "string"], "Survey name (stub)",
-                    STUB, "observation metadata (not available)"),
+                                                "observation_id for that",
+                    IMPLEMENTED, "exposures.visit", attr="visit"),
+    Param("exposure",      ["null", "int"],    "Roman exposure counter within the visit",
+                    IMPLEMENTED, "exposures.exposure", attr="exposure"), #TODO: name something else?
+    Param("survey",        ["null", "string"], "Survey title of the program (null when the program is "
+                                                "not yet in the Surveys table)",
+                    IMPLEMENTED, "surveys.program_title via exposures.program_id", attr="survey"),
 )
 
 

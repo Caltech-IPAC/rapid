@@ -1,5 +1,5 @@
-# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 54fd7ea8
-"""``packet``: one difference image's alert packets, schema 00.06, from named inputs.
+# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 883e3876
+"""``packet``: one difference image's alert packets, schema 00.07, from named inputs.
 
 Foundation plan v5, Part 2: a new port of `dev`'s ``alerts/`` package. It
 runs as ``rapidpipe job local --stage packet`` under
@@ -33,6 +33,12 @@ manifest's ``reads``, which the publisher writes to ``job_inputs``:
 - the triggers' objects and their members: every membership of those
   objects whose source set is official (``memberships_official``), and the
   set's own; ``sources`` reads, one per source set read;
+- each of those sources' exposure: the official ``exposures`` row of its
+  (dataset, expid), the one intake wrote, giving ``exposureTime``, the
+  Roman observation identifiers (``program``, ``plan``, ``pass``,
+  ``segment``, ``observation``, ``visit``, ``exposure``,
+  ``observation_id``) and, through ``surveys``, ``survey`` (null when the
+  program has no row, as `dev`); ``exposures`` reads, one per exposure;
 - the forced-photometry window: every difference image of the dataset
   whose difference is official, or the trigger's own, whose L2 ``mjdobs``
   is in ``[trigger - forced_window_days, trigger]`` and whose footprint
@@ -56,7 +62,7 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   the members read (:mod:`rapidpipe.science.statistics.sums`);
   ``nDiaSources`` is the count as of the trigger, the members with
   ``mjdobs <= trigger``, the trigger counted. The schema's doc string is
-  `dev`'s ("Total number"), kept verbatim with the 00.06 files.
+  `dev`'s ("Total number"), kept verbatim with the 00.07 files.
 - ``prvDiaForcedSources``: `dev`'s forced photometry
   (:mod:`rapidpipe.science.alerts.forced`) at the object's founding
   position on every window image whose footprint holds it, both the
@@ -74,6 +80,9 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   ``gaia_max_matches``; ``refStarMatches``/``refGalaxyMatches`` from the
   reference mosaic catalog, likewise; ``ssMatches``, ``nedMatches`` and
   ``lvsMatches`` null (not run: deferred by the plan).
+- ``reliability``, ``reliabilityThreshold`` and ``reliabilityVersion``
+  null: the rebuild runs no real/bogus scorer (the registry's stubs;
+  rapid_docs ``decisions.md``), where `dev` fills them.
 - three cutouts, ``(2 stamp_half_width + 1)`` pixels square from the
   difference image, the background-subtracted science image and the
   resampled gain-matched reference beside it, off-chip pixels zero.
@@ -164,15 +173,23 @@ EXTERNAL_SCHEMA = pa.schema([
     ("sid", pa.int64()), ("catalog_job", pa.int64()),
 ])
 
-#: A source row with its band and exposure time, as `dev`'s provider selects it.
+#: A source row with its band, and from its exposure the exposure time, the Roman observation
+#: identifiers and the program's survey title, as `dev`'s provider selects it (``SOURCE_SELECT``).
 SOURCE_COLUMNS = (
-    "s.job AS source_job, s.sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.xfit, s.yfit,"
+    "s.job AS source_job, s.dataset, s.sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.xfit, s.yfit,"
     " s.xerr, s.yerr, s.fluxfit, s.fluxerr, s.flags, s.field, s.hp6, s.hp9, s.pid,"
     " s.isdiffpos, s.qfit, s.cfit, s.redchi, s.npixfit, s.sharpness, s.roundness1,"
-    " s.roundness2, s.peak, f.filter AS band, e.exptime")
+    " s.roundness2, s.peak, f.filter AS band, e.job AS exposure_job, e.exptime,"
+    " e.program_id, e.execution_plan, e.pass AS obs_pass, e.segment, e.observation, e.visit,"
+    " e.exposure, e.observation_id, sv.program_title AS survey")
+#: The exposure is the official ``exposures`` row of the source's (dataset, expid), the one intake
+#: wrote; the survey is a LEFT JOIN, as `dev`'s, so a program not in ``surveys`` drops nothing.
 SOURCE_JOINS = (
     " JOIN filters f ON f.fid = s.fid"
-    " LEFT JOIN exposures e ON e.job = s.job AND e.dataset = s.dataset AND e.expid = s.expid")
+    " LEFT JOIN official oe ON oe.closed_at IS NULL AND oe.product = 'exposures'"
+    " AND oe.key = jsonb_build_object('dataset', s.dataset, 'expid', s.expid)"
+    " LEFT JOIN exposures e ON e.job = oe.job AND e.dataset = s.dataset AND e.expid = s.expid"
+    " LEFT JOIN surveys sv ON sv.program_id = e.program_id")
 
 #: The trigger set's memberships: its sources' objects.
 TRIGGER_SQL = ("SELECT sid, object_job, aid FROM memberships WHERE job = %s"
@@ -282,7 +299,9 @@ def _read(job: JobContext) -> Read:
         cur.execute(f"SELECT {SOURCE_COLUMNS} FROM sources s{SOURCE_JOINS}"
                     " WHERE s.job = %s AND s.flags & ~%s = %s ORDER BY s.sid",
                     (source_job, INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS))
-        alertable = [Source.from_row(r) for r in cur.fetchall()]
+        rows = cur.fetchall()
+        alertable = [Source.from_row(r) for r in rows]
+        exposures = {(r["dataset"], r["expid"]): r["exposure_job"] for r in rows}
 
         cur.execute(TRIGGER_SQL, (source_job,))
         aid_of, object_job = {}, {}
@@ -310,6 +329,9 @@ def _read(job: JobContext) -> Read:
             members.setdefault(aid, []).append((row["source_job"], member))
             objects[aid][2].add(row["ra"], row["dec"], row["fluxfit"])
             member_sets.add(row["source_job"])
+            exposures[row["dataset"], row["expid"]] = row["exposure_job"]
+        reads += [{"product": "exposures", "key": {"dataset": d, "expid": e}, "source_job": j}
+                  for (d, e), j in sorted(exposures.items()) if j is not None]
         if member_sets:
             cur.execute("SELECT DISTINCT job, dataset, expid, sca, fid FROM diffimages"
                         " WHERE job = ANY(%s) ORDER BY job", (sorted(member_sets),))

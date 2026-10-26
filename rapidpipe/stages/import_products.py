@@ -26,6 +26,9 @@ An epoch writes ``exposures``, ``l2files``, ``diffimages`` and ``sources``
 and copies the L2 file and the difference job's images (difference image,
 its uncertainty, its PSF, the background-subtracted science image and the
 resampled gain-matched reference: the packet stage's cutout inputs). Its
+``exposures`` row carries the L2 header's Roman observation identifiers
+(:func:`rapidpipe.science.intake.exposure_identifiers`, null where `dev`'s
+file predates them) and no ``program_id``. Its
 L2 row's ``limmag`` is measured with the science PSF (``kind``
 ``science``) of the ``psfs`` set the job names as an input. ``sources`` holds the
 ``max_sources`` brightest rows of the difference job's PSF-fit catalog by
@@ -62,6 +65,7 @@ from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.products.filters import rapid_filter_name
+from rapidpipe.science.intake import exposure_identifiers
 from rapidpipe.science.limmag import image_hdu_index, limiting_magnitude
 from rapidpipe.science.load.catalogs import source_set
 from rapidpipe.science.spatial import (
@@ -217,7 +221,7 @@ def _epoch(job: JobContext, settings: dict, source: Path, epoch: dict) -> dict:
     sources = _sources(settings, difference / DIFFERENCE_CATALOG, key, epoch["pid"], mjdobs,
                        diff_header["NAXIS1"], diff_header["NAXIS2"])
     return {"exposures": [{"dataset": job.dataset, "expid": epoch["expid"], "dateobs": dateobs,
-                           "exptime": exptime, "program_id": None}],
+                           "exptime": exptime, "program_id": None, **exposure_identifiers(header)}],
             "l2files": [l2file], "diffimages": [diffimage], "sources": sources}
 
 

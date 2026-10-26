@@ -1,4 +1,4 @@
-# ported-from: alerts/produce.py, alerts/providers.py @ 54fd7ea8
+# ported-from: alerts/produce.py, alerts/providers.py @ 883e3876
 """Alert assembly and the Avro container, ported from `dev`'s ``alerts/produce.py``.
 
 `origin/dev`'s ``alerts/produce.py`` (Emily Everetts, 07/26), as pure
@@ -7,7 +7,9 @@ functions over plain records instead of methods over a live provider:
 - the registry check run at import (``_validate_registry``) and the
   registry-driven builders (``build_record`` and ``build_*``), unchanged;
 - :func:`assemble_alert`: `dev`'s ``assemble_alert_for_source``, given the
-  object, history, matches and cutouts the provider used to fetch;
+  object, history, matches and cutouts the provider used to fetch; `dev`'s
+  stamping of ``rb_threshold`` and ``rb_version`` (883e3876) is not taken,
+  the reliability params being stubs here (rapid_docs ``decisions.md``);
 - :func:`load_schema`: the packaged ``schema/<major>/<minor>/*.avsc``,
   checked against the registry first (:func:`schema_problems`, standing in
   for `dev`'s unported ``gen_schema.schema_problems``);

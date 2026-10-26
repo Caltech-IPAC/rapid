@@ -1,4 +1,4 @@
-# ported-from: alerts/providers.py @ 54fd7ea8
+# ported-from: alerts/providers.py @ 883e3876
 """The alert's normalized records, ported from `dev`'s ``alerts/providers.py``.
 
 `dev`'s provider translates database rows into these dataclasses and the
@@ -82,13 +82,35 @@ class Source:
     roundness2: float | None = None
     peak: float | None = None
     exptime: float | None = None
+    # Roman observation identifiers, from the exposures row (migration
+    # 20261015; null for exposures ingested before it). `pass` is a Python
+    # keyword, hence obs_pass; the wire name is still "pass".
+    program_id: int | None = None
+    execution_plan: int | None = None
+    obs_pass: int | None = None
+    segment: int | None = None
+    observation: int | None = None
+    visit: int | None = None
+    exposure: int | None = None
+    observation_id: str | None = None
+    survey: str | None = None           # surveys.program_title, via program_id
+    # real/bogus: the score and label stored with the detection by the
+    # science pipeline (sources.rb / sources.rblabel; null = not scored)
+    rb: float | None = None
+    rblabel: int | None = None
     # solar-system candidate flag, set by get_ss_matches(); None = KONA
     # association not run for this detection (e.g. all prv sources)
     is_ss_candidate: bool | None = None
+    # real/bogus run-level facts, stamped at assembly from the provider's
+    # configuration (the threshold and model in force for this run); None
+    # on prior detections, whose scores may come from other model versions
+    rb_threshold: float | None = None
+    rb_version: str | None = None
 
     # fields filled after construction (association, assembly stamping,
     # KONA); never storage columns
-    FILLED_LATER = frozenset({"aid", "time_proc", "is_ss_candidate"})
+    FILLED_LATER = frozenset({"aid", "time_proc", "is_ss_candidate",
+                              "rb_threshold", "rb_version"})
 
     @property
     def snr(self) -> float | None:

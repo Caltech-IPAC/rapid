@@ -77,6 +77,18 @@ OBSERVATION_ID_KEYWORDS = [("PROGRAM", "program"), ("EXECPLAN", "execution_plan"
                            ("EXPOSURE", "exposure"), ("VISIT_ID", "visit_id"),
                            ("OBS_ID", "observation_id")]
 
+def exposure_identifiers(header) -> dict:
+    """The ``exposures`` row's observation-identifier columns from a converted file's header.
+
+    `dev`'s ``addExposure`` arguments (e212d40d, columns of migration
+    20261015): each ``meta.observation`` attribute but ``program`` (the
+    row's ``program_id`` is the data source's, set by the caller), under
+    its own name, null where the header lacks the keyword.
+    """
+    return {attribute: header.get(keyword) for keyword, attribute in OBSERVATION_ID_KEYWORDS
+            if attribute != "program"}
+
+
 #: The primary keywords copied into the science-image header (BUNIT deliberately not).
 SCIENCE_IMAGE_KEYWORDS = ["FILTER", "EXPTIME", "DATE-OBS", "DATE-END", "MJD-OBS", "TSTART", "TEND",
                           "DETECTOR", "SCA_NUM", "TARGAPER", "TARGRA", "TARGDEC",

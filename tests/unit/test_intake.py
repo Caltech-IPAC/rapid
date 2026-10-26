@@ -6,7 +6,8 @@ reproduces the gWCS at the corners and the centre to within the fit's own
 bound, ``sip_max_pix_error`` (0.1 px: ``to_fits_sip`` raises when a
 fixed-degree fit misses it, and a corner is the domain's edge, where a
 polynomial fit is worst); the ``exposures`` and ``l2files`` rows have
-exactly their schema columns and the key the file name gives; the
+exactly their schema columns and the key the file name gives, the
+``exposures`` row the file's Roman observation identifiers; the
 ``exposures`` row is declared only when the job expects its key; the
 manifest names the file's provenance; a file whose own identifiers
 contradict its name fails before a manifest; the file name parses, and the
@@ -54,6 +55,8 @@ from rapidpipe.stages import intake
 
 REPO = Path(__file__).resolve().parents[2]
 STEM = "r0034201001001004001_0001_wfi08_f146"
+VISIT_ID = "0034201001001004001"            # the file's meta.observation, as rad formats them
+OBSERVATION_ID = "003420100100100400101101001"
 N = 64
 EXPTIME = 294.1
 EPSF = "roman_wfi_epsf_0276.asdf"
@@ -121,6 +124,8 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
     meta.exposure.end_time = Time("2027-07-01T15:33:41.110")
     for name in ("program", "execution_plan", "pass", "segment", "observation", "visit", "exposure"):
         setattr(meta.observation, name, ids[name])
+    meta.observation.visit_id = VISIT_ID
+    meta.observation.observation_id = OBSERVATION_ID
     meta.pointing.target_ra, meta.pointing.target_dec = 9.67, -45.2
     meta.photometry.conversion_megajanskys = 0.24
     meta.photometry.pixel_area = 2.72e-13
@@ -224,6 +229,10 @@ def test_the_rows_have_their_schema_columns_and_the_key_the_name_gives(tmp_path,
     assert set(l2file) == schema_columns("l2files")
     expid = 1 * 10**6 + 4 * 10**4 + 1 * 10**2 + 1
     assert (exposure["dataset"], exposure["expid"], exposure["program_id"]) == ("r00342", expid, -1)
+    assert {k: exposure[k] for k in ("execution_plan", "pass", "segment", "observation", "visit",
+                                     "exposure", "visit_id", "observation_id")} == {
+        "execution_plan": 1, "pass": 1, "segment": 1, "observation": 4, "visit": 1, "exposure": 1,
+        "visit_id": VISIT_ID, "observation_id": OBSERVATION_ID}
     assert (l2file["dataset"], l2file["expid"], l2file["sca"], l2file["fid"]) == ("r00342", expid, 8, 8)
     assert l2file["filename"] == (prefix.as_uri() + "/") + f"{STEM}_cal.fits.gz"
     assert np.isfinite(l2file["limmag"]) and l2file["overlapfields"] and l2file["field"] > 0

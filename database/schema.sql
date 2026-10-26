@@ -199,7 +199,17 @@ CREATE TABLE exposures (
     expid integer NOT NULL,                          -- the exposure's scientific id, from its producer
     dateobs timestamp without time zone NOT NULL,    -- DATE-OBS
     exptime real NOT NULL,                           -- EXPTIME
-    program_id integer,                              -- ASDF meta.observation.program
+    program_id integer,                              -- the data source's program (dev's RAPIDDATASOURCE rule)
+    -- The Roman observation identifiers, ASDF meta.observation, dev's
+    -- migration 20261015 (5ba96e38): null for a source that has none.
+    execution_plan smallint,                         -- EXECPLAN
+    pass smallint,                                   -- PASS
+    segment smallint,                                -- SEGMENT
+    observation smallint,                            -- OBSERVTN
+    visit smallint,                                  -- VISIT
+    exposure smallint,                               -- EXPOSURE
+    visit_id character varying(19),                 -- VISIT_ID
+    observation_id character varying(28),           -- OBS_ID
     UNIQUE (dataset, expid, job)
 );
 
