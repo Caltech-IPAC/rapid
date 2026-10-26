@@ -8,8 +8,13 @@ Terminating exit codes:
 exit_code            Definition
 =============       =========================================
     0                Normal termination
-    4                SFFT did not execute successfully
+   65                SFFT was not run or did not execute successfully, so there is
+                     no difference image to register
 =============       =========================================
+
+Only the SFFT difference image is registered in the DiffImages database table; it is described in
+the [SFFT] section of the product config file.  The ZOGY difference image is made only if
+[ZOGY] run_zogy = True, and the naive difference image only if [NAIVE_DIFFIMAGE] naive_diffimage_flag = True.
 
 
 RAPID pipeline output_diffimage_file_infobits:
@@ -17,8 +22,8 @@ RAPID pipeline output_diffimage_file_infobits:
 ==========  ==========================================================================
 infobit     Definition
 ==========  ==========================================================================
-     0      No photutils catalog for ZOGY positive difference image was made.
-     1      No photutils catalog for ZOGY negative difference image was made.
+     0      No photutils catalog for ZOGY positive difference image was made (not set if ZOGY was not run).
+     1      No photutils catalog for ZOGY negative difference image was made (not set if ZOGY was not run).
      2      No photutils catalog for SFFT positive difference image was made.
      3      No photutils catalog for SFFT negative difference image was made.
      4      No photutils catalog for naive positive difference image was made.
@@ -60,7 +65,7 @@ start_time_benchmark_at_start = start_time_benchmark
 
 
 swname = "awsBatchSubmitJobs_runSingleSciencePipeline.py"
-swvers = "1.0"
+swvers = "1.1"
 
 rapid_sw = "/code"
 cfg_path = rapid_sw + "/cdf"
@@ -331,6 +336,16 @@ if __name__ == '__main__':
     else:
         zogy_sn_sr_from_uncertainty_maps = False
     s3_full_name_sciimage_psf = zogy_dict['s3_full_name_sciimage_psf']
+
+    # Whether to run ZOGY.  Only the SFFT difference image is registered in the database, so ZOGY
+    # products are optional.  Configs written before run_zogy existed run ZOGY.
+
+    run_zogy = ast.literal_eval(zogy_dict['run_zogy']) if 'run_zogy' in zogy_dict else True
+
+    if not ast.literal_eval(config_input['SFFT']['run_sfft']):
+        print("*** Warning: run_sfft = False, so no difference image will be registered")
+
+    print("run_zogy =",run_zogy)
 
     awaicgen_dict = config_input['AWAICGEN']
 
@@ -1451,626 +1466,589 @@ if __name__ == '__main__':
 
 
 
-    # ZOGY's SN and SR arguments are the background noise sigmas.  Only their ratio affects
-    # the difference image.  See pipeline/zogyNoiseSubs.py for why the uncertainty maps are
-    # the better source of these in a crowded field.
-
-    zogy_sn,zogy_sr = zogynoise.zogy_background_sigmas(zogy_sn_sr_from_uncertainty_maps,
-                                                       reformatted_science_uncert_image_filename,
-                                                       output_resampled_gainmatched_reference_uncert_image,
-                                                       std_sci_img,
-                                                       std_ref_img,
-                                                       scalefacref)
-
-    print("zogy_sn,zogy_sr,ratio =",zogy_sn,zogy_sr,zogy_sn / zogy_sr if zogy_sr else float('nan'))
-
-
-    zogy_cmd = [python_cmd,
-                zogy_code,
-                filename_bkg_subbed_science_image,
-                output_resampled_gainmatched_reference_image,
-                filename_sciimage_psf_normalized,
-                filename_refimage_psf,
-                reformatted_science_uncert_image_filename,
-                output_resampled_gainmatched_reference_uncert_image,
-                str(zogy_sn),
-                str(zogy_sr),
-                str(dxrmsfin),
-                str(dyrmsfin),
-                filename_diffimage,
-                filename_diffpsf,
-                filename_scorrimage]
-
-    exitcode_from_zogy = util.execute_command(zogy_cmd)
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after running ZOGY =",
-        round(end_time_benchmark - start_time_benchmark,3))
-    start_time_benchmark = end_time_benchmark
-
-
-    # Update FITS header with info about fake sources injected, if any.
-
-    if inject_fake_sources_flag:
-
-        hdu_index = 0
-        util.addHistoryLinesToFITSHeader(filename_diffimage,
-                                         ["Fake sources were injected into science image."],
-                                         hdu_index)
-
-        keywords = ['NINJECT','MNMAGINJ','MXMAGINJ']
-        kwdvals = [num_injections,
-                   injection_mag_min,
-                   injection_mag_max]
-
-        util.addKeywordsToFITSHeader(filename_diffimage,
-                                     keywords,
-                                     kwdvals,
-                                     hdu_index,
-                                     filename_diffimage)
-
-
-    # Mask difference image with output_resampled_reference_cov_map.
-
-    filename_diffimage_masked = filename_diffimage.replace(".fits","_masked.fits")
-    filename_scorrimage_masked = filename_scorrimage.replace(".fits","_masked.fits")
-
-    dfis.mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,
-                                                                output_resampled_reference_cov_map,
-                                                                filename_diffimage_masked,
-                                                                post_zogy_keep_diffimg_lower_cov_map_thresh)
-
-    dfis.mask_difference_image_with_resampled_reference_cov_map(filename_scorrimage,
-                                                                output_resampled_reference_cov_map,
-                                                                filename_scorrimage_masked,
-                                                                post_zogy_keep_diffimg_lower_cov_map_thresh)
-
-
-    # Restore NaNs to the ZOGY output files that were masked prior to executing ZOGY,
-    # both from science and reference images.
-
-    if nan_indices_sciimage:
-        util.restore_nans(filename_diffimage_masked,nan_indices_sciimage)
-
-    if nan_indices_refimage:
-        util.restore_nans(filename_diffimage_masked,nan_indices_refimage)
-
-    if nan_indices_sciimage:
-        util.restore_nans(filename_scorrimage_masked,nan_indices_sciimage)
-
-    if nan_indices_refimage:
-        util.restore_nans(filename_scorrimage_masked,nan_indices_refimage)
-
-
-    # Compute negative ZOGY difference and scorr images.
-
-    filename_diffimage_masked_negative = filename_diffimage_masked.replace(".fits","_negative.fits")
-    util.scale_image_data(filename_diffimage_masked,-1.0,filename_diffimage_masked_negative)
-
-    filename_scorrimage_masked_negative = filename_scorrimage_masked.replace(".fits","_negative.fits")
-    util.scale_image_data(filename_scorrimage_masked,-1.0,filename_scorrimage_masked_negative)
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after masking ZOGY difference image =",
-        round(end_time_benchmark - start_time_benchmark,3))
-    start_time_benchmark = end_time_benchmark
-
-
-    # Generate diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
-
-    filename_diffimage_unc_masked = filename_diffimage_masked.replace("masked.fits","uncert_masked.fits")
-
-    dfis.compute_diffimage_uncertainty(sca_gain * exptime_sciimage,
-                                       filename_bkg_subbed_science_image,
-                                       output_resampled_gainmatched_reference_image,
-                                       output_resampled_reference_cov_map,
-                                       post_zogy_keep_diffimg_lower_cov_map_thresh,
-                                       filename_diffimage_masked,
-                                       filename_diffimage_unc_masked)
-
-    filename_weight_image = filename_diffimage_unc_masked
-
-
-    # Store SExtractor diffimage parameters to be overridden and reverted to afterwards.
-    save_weight_type = sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()]
-    save_filter = sextractor_diffimage_dict["sextractor_FILTER".lower()]
-
-
-    # Compute SExtractor catalog for positive ZOGY masked difference image.
-    # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
-    # image, then use to perform aperture phot on difference image to generate
-    # raw ascii catalog file.
-
-    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
-    filename_diffimage_sextractor_catalog = filename_diffimage_masked.replace(".fits",".txt")
-
-    sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
-    sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked
-    # Override the config-file parameter sextractor_WEIGHT_TYPE for ZOGY masked-difference-image catalog.
-    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
-    sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
-    sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
-    # Override the config-file parameter sextractor_FILTER for ZOGY masked-difference-image catalog.
-    sextractor_diffimage_dict["sextractor_FILTER".lower()] = "N"
-    sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
-    sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
-    sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog
-    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
-    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
-
-
-    # Revert overridden SExtractor diffimage parameters.
-    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = save_weight_type
-    sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
-
-
-    # Parse SExtractor catalog for positive ZOGY masked difference image.
-
-    params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
-
-    vals_diffimage = util.parse_ascii_text_sextractor_catalog(filename_diffimage_sextractor_catalog,
-                                                              sextractor_diffimage_paramsfile,
-                                                              params_to_get_diffimage)
-
-    nsexcatsources_zogy_diffimage = len(vals_diffimage)
-
-    print("nsexcatsources_zogy_diffimage =",nsexcatsources_zogy_diffimage)
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after running SExtractor on positive ZOGY difference image =",
-        round(end_time_benchmark - start_time_benchmark,3))
-    start_time_benchmark = end_time_benchmark
-
-
-    # Compute SExtractor catalog for negative ZOGY masked difference image.
-    # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
-    # image, then use to perform aperture phot on difference image to generate
-    # raw ascii catalog file.
-
-    sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
-    filename_diffimage_sextractor_catalog_negative = filename_diffimage_masked_negative.replace(".fits",".txt")
-
-    sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked_negative
-    sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked_negative
-    # Override the config-file parameter sextractor_WEIGHT_TYPE for ZOGY masked-difference-image catalog.
-    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
-    sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
-    sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
-    # Override the config-file parameter sextractor_FILTER for ZOGY masked-difference-image catalog.
-    sextractor_diffimage_dict["sextractor_FILTER".lower()] = "N"
-    sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
-    sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
-    sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog_negative
-    sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
-    exitcode_from_sextractor = util.execute_command(sextractor_cmd)
-
-
-    # Revert overridden SExtractor diffimage parameters.
-    sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = save_weight_type
-    sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
-
-
-    # Parse SExtractor catalog for negative ZOGY masked difference image.
-
-    params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
-
-    vals_diffimage_negative = util.parse_ascii_text_sextractor_catalog(filename_diffimage_sextractor_catalog_negative,
-                                                              sextractor_diffimage_paramsfile,
-                                                              params_to_get_diffimage)
-
-    nsexcatsources_zogy_diffimage_negative = len(vals_diffimage_negative)
-
-    print("nsexcatsources_zogy_diffimage_negative =",nsexcatsources_zogy_diffimage_negative)
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after running SExtractor on negative ZOGY difference image =",
-        round(end_time_benchmark - start_time_benchmark,3))
-    start_time_benchmark = end_time_benchmark
-
-
-    # Generate PSF-fit catalog for positive ZOGY difference image using photutils.  No background subtraction is done.
-
-    n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
-    n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
-
-    fwhm = float(psfcat_diffimage_dict["fwhm"])
-    fit_shape_str = psfcat_diffimage_dict["fit_shape"]
-    fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
-    aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
-
-    sharplo = float(psfcat_diffimage_dict["sharplo"])
-    sharphi = float(psfcat_diffimage_dict["sharphi"])
-    roundlo = float(psfcat_diffimage_dict["roundlo"])
-    roundhi = float(psfcat_diffimage_dict["roundhi"])
-    min_separation = float(psfcat_diffimage_dict["min_separation"])
-
-    input_img_filename = filename_diffimage_masked
-    input_unc_filename = filename_diffimage_unc_masked
-    input_psf_filename = filename_diffpsf
-    output_psfcat_filename = psfcat_diffimage_dict["output_zogy_psfcat_filename"]
-    output_psfcat_finder_filename = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"]
-    output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
-    output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
-
-    psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
-                                                        n_thresh_sigma,
-                                                        fwhm,
-                                                        fit_shape,
-                                                        aperture_radius,
-                                                        input_img_filename,
-                                                        input_unc_filename,
-                                                        input_psf_filename,
-                                                        output_psfcat_residual_filename,
-                                                        sharplo=sharplo,
-                                                        sharphi=sharphi,
-                                                        roundlo=roundlo,
-                                                        roundhi=roundhi,
-                                                        min_separation=min_separation)
-
-    print("psfcat_flag =",psfcat_flag)
-
-    if not psfcat_flag:
-
-        output_diffimage_file_infobits |= 2**0
-
-    else:
-
-        npsfcatsources_zogy_diffimage = len(phot)
-
-        print("npsfcatsources_zogy_diffimage =",npsfcatsources_zogy_diffimage)
-
-
-        # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
-        # merged with the DAOStarFinder astropy table.
-        # Output columns are documentated at
-        # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
-        # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
-
-        try:
-            phot['x_init'].info.format = '.4f'
-            phot['y_init'].info.format = '.4f'
-            phot['flux_init'].info.format = '.6f'
-            phot['flux_fit'].info.format = '.6f'
-            phot['x_err'].info.format = '.4f'
-            phot['y_err'].info.format = '.4f'
-            phot['flux_err'].info.format = '.5f'
-            phot['qfit'].info.format = '.4f'
-            phot['cfit'].info.format = '.4f'
-
-            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
-
-
-            # Compute sky coordinates for given pixel coordinates.
-
-            ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
-                                                          list(phot['x_fit']),
-                                                          list(phot['y_fit']))
-
-            phot['x_fit'].info.format = '.4f'
-            phot['y_fit'].info.format = '.4f'
-            phot.add_column(ra, name='ra')
-            phot.add_column(dec, name='dec')
-
-
-            # Write PSF-fit photometry catalog in astropy table to text file.
-
-            print("output_psfcat_filename = ", output_psfcat_filename)
-
-            ascii.write(phot, output_psfcat_filename, overwrite=True)
-
-
-            # Write PSF-fit finder catalog in astropy table to text file.
-
-            print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
-
-            ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
-
-
-            # Join photometry and finder objects and output parquet file.
-
-            joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
-
-            nrows = len(joined_table_inner)
-            print(f"nrows in PSF-fit catalog = {nrows}\n")
-
-            # Convert the QTable to a pandas DataFrame
-            df = joined_table_inner.to_pandas()
-
-            # Write the DataFrame to a Parquet file.
-            df.to_parquet(output_psfcat_parquet_filename, engine='pyarrow')
-
-        except Exception as e:
-            print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after generating PSF-fit catalog on positive ZOGY difference image =",
-        round(end_time_benchmark - start_time_benchmark,3))
-    start_time_benchmark = end_time_benchmark
-
-
-    # Generate PSF-fit catalog for negative ZOGY difference image using photutils.  No background subtraction is done.
-
-    n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
-    n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
-
-    fwhm = float(psfcat_diffimage_dict["fwhm"])
-    fit_shape_str = psfcat_diffimage_dict["fit_shape"]
-    fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
-    aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
-
-    sharplo = float(psfcat_diffimage_dict["sharplo"])
-    sharphi = float(psfcat_diffimage_dict["sharphi"])
-    roundlo = float(psfcat_diffimage_dict["roundlo"])
-    roundhi = float(psfcat_diffimage_dict["roundhi"])
-    min_separation = float(psfcat_diffimage_dict["min_separation"])
-
-    input_img_filename = filename_diffimage_masked_negative
-    input_unc_filename = filename_diffimage_unc_masked
-    input_psf_filename = filename_diffpsf
-    output_psfcat_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_filename"].replace(".txt","_negative.txt")
-    output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"].replace(".txt","_negative.txt")
-    output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"].replace(".fits","_negative.fits")
-    output_psfcat_parquet_filename_negative = output_psfcat_filename_negative.replace(".txt",".parquet")
-
-    psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
-                                                        n_thresh_sigma,
-                                                        fwhm,
-                                                        fit_shape,
-                                                        aperture_radius,
-                                                        input_img_filename,
-                                                        input_unc_filename,
-                                                        input_psf_filename,
-                                                        output_psfcat_residual_filename_negative,
-                                                        sharplo=sharplo,
-                                                        sharphi=sharphi,
-                                                        roundlo=roundlo,
-                                                        roundhi=roundhi,
-                                                        min_separation=min_separation)
-
-    print("psfcat_flag =",psfcat_flag)
-
-    if not psfcat_flag:
-
-        output_diffimage_file_infobits |= 2**1
-
-    else:
-
-        npsfcatsources_zogy_diffimage_negative = len(phot)
-
-        print("npsfcatsources_zogy_diffimage_negative =",npsfcatsources_zogy_diffimage_negative)
-
-
-        # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
-        # merged with the DAOStarFinder astropy table.
-        # Output columns are documentated at
-        # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
-        # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
-
-        try:
-            phot['x_init'].info.format = '.4f'
-            phot['y_init'].info.format = '.4f'
-            phot['flux_init'].info.format = '.6f'
-            phot['flux_fit'].info.format = '.6f'
-            phot['x_err'].info.format = '.4f'
-            phot['y_err'].info.format = '.4f'
-            phot['flux_err'].info.format = '.5f'
-            phot['qfit'].info.format = '.4f'
-            phot['cfit'].info.format = '.4f'
-
-            print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
-
-
-            # Compute sky coordinates for given pixel coordinates.
-
-            ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
-                                                          list(phot['x_fit']),
-                                                          list(phot['y_fit']))
-
-            phot['x_fit'].info.format = '.4f'
-            phot['y_fit'].info.format = '.4f'
-            phot.add_column(ra, name='ra')
-            phot.add_column(dec, name='dec')
-
-
-            # Write PSF-fit photometry catalog in astropy table to text file.
-
-            print("output_psfcat_filename_negative = ", output_psfcat_filename_negative)
-
-            ascii.write(phot, output_psfcat_filename_negative, overwrite=True)
-
-
-            # Write PSF-fit finder catalog in astropy table to text file.
-
-            print("output_psfcat_finder_filename_negative = ", output_psfcat_finder_filename_negative)
-
-            ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
-
-
-            # Join photometry and finder objects and output parquet file.
-
-            joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
-
-            nrows = len(joined_table_inner)
-            print(f"nrows in PSF-fit catalog = {nrows}\n")
-
-            # Convert the QTable to a pandas DataFrame
-            df = joined_table_inner.to_pandas()
-
-            # Write the DataFrame to a Parquet file.
-            df.to_parquet(output_psfcat_parquet_filename_negative, engine='pyarrow')
-
-        except Exception as e:
-            print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
-
-
-    # Code-timing benchmark.
-
-    end_time_benchmark = time.time()
-    print("Elapsed time in seconds after generating PSF-fit catalog on negative ZOGY difference image =",
-        round(end_time_benchmark - start_time_benchmark,3))
-    start_time_benchmark = end_time_benchmark
-
-
-    # Compute MD5 checksum of masked difference image.
-
-    print("Computing checksum of ",filename_diffimage_masked)
-    checksum_diffimage = db.compute_checksum(filename_diffimage_masked)
-
-    if checksum_diffimage == 65 or checksum_diffimage == 68 or checksum_diffimage == 66:
-        print("*** Error: Unexpected value for checksum =",checksum_diffimage)
-
-
-    # Upload intermediate and final FITS files to product S3 bucket.
+    # Upload the products that do not depend on the differencing algorithm to product S3 bucket:
+    # the science and reference images and PSFs that the difference images are made from, which
+    # alert production cuts out.
 
     product_s3_bucket = product_s3_bucket_base
-    s3_object_name_diffimage = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_masked
-    s3_object_name_diffimage_unc_masked = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_unc_masked
-    s3_object_name_diffimage_catalog = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog
-    s3_object_name_diffpsf = proc_subdir + "/jid" + str(jid) + "/" + filename_diffpsf
-    s3_object_name_scorrimage = proc_subdir + "/jid" + str(jid) + "/" + filename_scorrimage_masked
     s3_object_name_bkg_subbed_science_image = proc_subdir + "/jid" + str(jid) + "/" + filename_bkg_subbed_science_image
     s3_object_name_output_resampled_gainmatched_reference_image = proc_subdir + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_image
     s3_object_name_output_resampled_gainmatched_reference_uncert_image = proc_subdir + "/jid" + str(jid) + "/" + \
                                                                   output_resampled_gainmatched_reference_uncert_image
-    s3_object_name_output_psfcat_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename
-    s3_object_name_output_psfcat_finder_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
-    s3_object_name_output_psfcat_residual_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
-
-    s3_object_name_diffimage_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_masked_negative
-    s3_object_name_diffimage_catalog_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog_negative
-    s3_object_name_scorrimage_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_scorrimage_masked_negative
-    s3_object_name_output_psfcat_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
-    s3_object_name_output_psfcat_finder_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
-    s3_object_name_output_psfcat_residual_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
     s3_object_name_sciimage_psf_normalized = proc_subdir + "/jid" + str(jid) + "/" + filename_sciimage_psf_normalized
     s3_object_name_refimage_psf = proc_subdir + "/jid" + str(jid) + "/" + filename_refimage_psf
 
-    s3_object_name_output_psfcat_parquet_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
-    s3_object_name_output_psfcat_parquet_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename_negative
-
-
-    filenames = [filename_diffimage_masked,
-                 filename_diffimage_unc_masked,
-                 filename_diffimage_sextractor_catalog,
-                 filename_diffpsf,
-                 filename_scorrimage_masked,
-                 filename_bkg_subbed_science_image,
+    filenames = [filename_bkg_subbed_science_image,
                  output_resampled_gainmatched_reference_image,
                  output_resampled_gainmatched_reference_uncert_image,
-                 output_psfcat_filename,
-                 output_psfcat_finder_filename,
-                 output_psfcat_residual_filename,
-                 filename_diffimage_masked_negative,
-                 filename_diffimage_sextractor_catalog_negative,
-                 filename_scorrimage_masked_negative,
-                 output_psfcat_filename_negative,
-                 output_psfcat_finder_filename_negative,
-                 output_psfcat_residual_filename_negative,
                  filename_sciimage_psf_normalized,
-                 filename_refimage_psf,
-                 output_psfcat_parquet_filename,
-                 output_psfcat_parquet_filename_negative]
+                 filename_refimage_psf]
 
-    objectnames = [s3_object_name_diffimage,
-                   s3_object_name_diffimage_unc_masked,
-                   s3_object_name_diffimage_catalog,
-                   s3_object_name_diffpsf,
-                   s3_object_name_scorrimage,
-                   s3_object_name_bkg_subbed_science_image,
+    objectnames = [s3_object_name_bkg_subbed_science_image,
                    s3_object_name_output_resampled_gainmatched_reference_image,
                    s3_object_name_output_resampled_gainmatched_reference_uncert_image,
-                   s3_object_name_output_psfcat_filename,
-                   s3_object_name_output_psfcat_finder_filename,
-                   s3_object_name_output_psfcat_residual_filename,
-                   s3_object_name_diffimage_negative,
-                   s3_object_name_diffimage_catalog_negative,
-                   s3_object_name_scorrimage_negative,
-                   s3_object_name_output_psfcat_filename_negative,
-                   s3_object_name_output_psfcat_finder_filename_negative,
-                   s3_object_name_output_psfcat_residual_filename_negative,
                    s3_object_name_sciimage_psf_normalized,
-                   s3_object_name_refimage_psf,
-                   s3_object_name_output_psfcat_parquet_filename,
-                   s3_object_name_output_psfcat_parquet_filename_negative]
+                   s3_object_name_refimage_psf]
 
     if upload_to_s3_bucket:
 
         util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
 
 
+    # Store SExtractor diffimage parameters to be overridden by the ZOGY and SFFT catalogs and
+    # reverted to afterwards.
+
+    save_weight_type = sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()]
+    save_filter = sextractor_diffimage_dict["sextractor_FILTER".lower()]
+
+
+    #################################################################################################################
+    # Run ZOGY, unless run_zogy is False: the ZOGY difference image and its catalogs.  These are not
+    # registered in the database (only the SFFT difference image is; see after SFFT below).
+    #################################################################################################################
+
+    if run_zogy:
+
+        # ZOGY's SN and SR arguments are the background noise sigmas.  Only their ratio affects
+        # the difference image.  See pipeline/zogyNoiseSubs.py for why the uncertainty maps are
+        # the better source of these in a crowded field.
+
+        zogy_sn,zogy_sr = zogynoise.zogy_background_sigmas(zogy_sn_sr_from_uncertainty_maps,
+                                                           reformatted_science_uncert_image_filename,
+                                                                                                 std_sci_img,
+                                                           std_ref_img,
+                                                           scalefacref)
+
+        print("zogy_sn,zogy_sr,ratio =",zogy_sn,zogy_sr,zogy_sn / zogy_sr if zogy_sr else float('nan'))
+
+
+        zogy_cmd = [python_cmd,
+                    zogy_code,
+                    filename_bkg_subbed_science_image,
+                    output_resampled_gainmatched_reference_image,
+                    filename_sciimage_psf_normalized,
+                    filename_refimage_psf,
+                    reformatted_science_uncert_image_filename,
+                    output_resampled_gainmatched_reference_uncert_image,
+                    str(zogy_sn),
+                    str(zogy_sr),
+                    str(dxrmsfin),
+                    str(dyrmsfin),
+                    filename_diffimage,
+                    filename_diffpsf,
+                    filename_scorrimage]
+
+        exitcode_from_zogy = util.execute_command(zogy_cmd)
+
+
         # Code-timing benchmark.
 
         end_time_benchmark = time.time()
-        print("Elapsed time in seconds after uploading main products to S3 bucket =",
+        print("Elapsed time in seconds after running ZOGY =",
             round(end_time_benchmark - start_time_benchmark,3))
         start_time_benchmark = end_time_benchmark
 
 
-    # Define ZOGY dictionary in config-file dictionary for products.
+        # Update FITS header with info about fake sources injected, if any.
 
-    product_config['ZOGY'] = {}
+        if inject_fake_sources_flag:
 
-    zogy_diffimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffimage)
-    zogy_diffpsf_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffpsf)
-    zogy_scorrimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_scorrimage)
+            hdu_index = 0
+            util.addHistoryLinesToFITSHeader(filename_diffimage,
+                                             ["Fake sources were injected into science image."],
+                                             hdu_index)
 
-    product_config['ZOGY']['rid'] = str(rid_sciimage)
-    product_config['ZOGY']['ppid'] = str(ppid_sciimage)
-    product_config['ZOGY']['rfid'] = str(rfid)
+            keywords = ['NINJECT','MNMAGINJ','MXMAGINJ']
+            kwdvals = [num_injections,
+                       injection_mag_min,
+                       injection_mag_max]
 
-
-    # By design, the following is redundant.  It is also written to REF_IMAGE block above
-    # only if it was necessary for this pipeline instance to generate a reference image.
-
-    product_config['ZOGY']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
-
-    product_config['ZOGY']['zogy_output_diffimage_file_checksum'] = checksum_diffimage
-    product_config['ZOGY']['zogy_output_diffimage_file'] = zogy_diffimage_name_for_db_record
-    product_config['ZOGY']['zogy_output_diffpsf_file'] = zogy_diffpsf_name_for_db_record
-    product_config['ZOGY']['zogy_output_scorrimage_file'] = zogy_scorrimage_name_for_db_record
-    product_config['ZOGY']['zogy_output_diffimage_file_status'] = str(1)
+            util.addKeywordsToFITSHeader(filename_diffimage,
+                                         keywords,
+                                         kwdvals,
+                                         hdu_index,
+                                         filename_diffimage)
 
 
-    # The following sky positions are correct for the difference image
-    # only because the current code reprojects the reference image
-    # into the distorted grid of the science image.
+        # Mask difference image with output_resampled_reference_cov_map.
 
-    product_config['ZOGY']['ra0'] = str(ra0_sciimage)
-    product_config['ZOGY']['dec0'] = str(dec0_sciimage)
-    product_config['ZOGY']['ra1'] = str(ra1_sciimage)
-    product_config['ZOGY']['dec1'] = str(dec1_sciimage)
-    product_config['ZOGY']['ra2'] = str(ra2_sciimage)
-    product_config['ZOGY']['dec2'] = str(dec2_sciimage)
-    product_config['ZOGY']['ra3'] = str(ra3_sciimage)
-    product_config['ZOGY']['dec3'] = str(dec3_sciimage)
-    product_config['ZOGY']['ra4'] = str(ra4_sciimage)
-    product_config['ZOGY']['dec4'] = str(dec4_sciimage)
+        filename_diffimage_masked = filename_diffimage.replace(".fits","_masked.fits")
+        filename_scorrimage_masked = filename_scorrimage.replace(".fits","_masked.fits")
 
-    product_config['ZOGY']['fid'] = str(fid_sciimage)
-    product_config['ZOGY']['sca'] = str(sca_sciimage)
-    product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_zogy_diffimage)
-    product_config['ZOGY']['scalefacref'] = str(scalefacref)
-    product_config['ZOGY']['dxrmsfin'] = str(dxrmsfin)
-    product_config['ZOGY']['dyrmsfin'] = str(dyrmsfin)
-    product_config['ZOGY']['dxmedianfin'] = str(dxmedianfin)
-    product_config['ZOGY']['dymedianfin'] = str(dymedianfin)
+        dfis.mask_difference_image_with_resampled_reference_cov_map(filename_diffimage,
+                                                                    output_resampled_reference_cov_map,
+                                                                    filename_diffimage_masked,
+                                                                    post_zogy_keep_diffimg_lower_cov_map_thresh)
 
+        dfis.mask_difference_image_with_resampled_reference_cov_map(filename_scorrimage,
+                                                                    output_resampled_reference_cov_map,
+                                                                    filename_scorrimage_masked,
+                                                                    post_zogy_keep_diffimg_lower_cov_map_thresh)
+
+
+        # Restore NaNs to the ZOGY output files that were masked prior to executing ZOGY,
+        # both from science and reference images.
+
+        if nan_indices_sciimage:
+            util.restore_nans(filename_diffimage_masked,nan_indices_sciimage)
+
+        if nan_indices_refimage:
+            util.restore_nans(filename_diffimage_masked,nan_indices_refimage)
+
+        if nan_indices_sciimage:
+            util.restore_nans(filename_scorrimage_masked,nan_indices_sciimage)
+
+        if nan_indices_refimage:
+            util.restore_nans(filename_scorrimage_masked,nan_indices_refimage)
+
+
+        # Compute negative ZOGY difference and scorr images.
+
+        filename_diffimage_masked_negative = filename_diffimage_masked.replace(".fits","_negative.fits")
+        util.scale_image_data(filename_diffimage_masked,-1.0,filename_diffimage_masked_negative)
+
+        filename_scorrimage_masked_negative = filename_scorrimage_masked.replace(".fits","_negative.fits")
+        util.scale_image_data(filename_scorrimage_masked,-1.0,filename_scorrimage_masked_negative)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after masking ZOGY difference image =",
+            round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
+
+
+        # Generate diffimage uncertainty image, which will be the weight image for sextractor_WEIGHT_IMAGE.
+
+        filename_diffimage_unc_masked = filename_diffimage_masked.replace("masked.fits","uncert_masked.fits")
+
+        dfis.compute_diffimage_uncertainty(sca_gain * exptime_sciimage,
+                                                                                       output_resampled_reference_cov_map,
+                                           post_zogy_keep_diffimg_lower_cov_map_thresh,
+                                           filename_diffimage_masked,
+                                           filename_diffimage_unc_masked)
+
+        filename_weight_image = filename_diffimage_unc_masked
+
+
+
+        # Compute SExtractor catalog for positive ZOGY masked difference image.
+        # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
+        # image, then use to perform aperture phot on difference image to generate
+        # raw ascii catalog file.
+
+        sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
+        filename_diffimage_sextractor_catalog = filename_diffimage_masked.replace(".fits",".txt")
+
+        sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked
+        sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked
+        # Override the config-file parameter sextractor_WEIGHT_TYPE for ZOGY masked-difference-image catalog.
+        sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
+        sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
+        sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
+        # Override the config-file parameter sextractor_FILTER for ZOGY masked-difference-image catalog.
+        sextractor_diffimage_dict["sextractor_FILTER".lower()] = "N"
+        sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
+        sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
+        sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog
+        sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+        exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+        # Revert overridden SExtractor diffimage parameters.
+        sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = save_weight_type
+        sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
+
+
+        # Parse SExtractor catalog for positive ZOGY masked difference image.
+
+        params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+
+        vals_diffimage = util.parse_ascii_text_sextractor_catalog(filename_diffimage_sextractor_catalog,
+                                                                  sextractor_diffimage_paramsfile,
+                                                                  params_to_get_diffimage)
+
+        nsexcatsources_zogy_diffimage = len(vals_diffimage)
+
+        print("nsexcatsources_zogy_diffimage =",nsexcatsources_zogy_diffimage)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running SExtractor on positive ZOGY difference image =",
+            round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
+
+
+        # Compute SExtractor catalog for negative ZOGY masked difference image.
+        # Execute SExtractor to first detect candidates on Scorr (S/N) match-filter
+        # image, then use to perform aperture phot on difference image to generate
+        # raw ascii catalog file.
+
+        sextractor_diffimage_paramsfile = cfg_path + "/rapidSexParamsDiffImage.inp"
+        filename_diffimage_sextractor_catalog_negative = filename_diffimage_masked_negative.replace(".fits",".txt")
+
+        sextractor_diffimage_dict["sextractor_detection_image".lower()] = filename_scorrimage_masked_negative
+        sextractor_diffimage_dict["sextractor_input_image".lower()] = filename_diffimage_masked_negative
+        # Override the config-file parameter sextractor_WEIGHT_TYPE for ZOGY masked-difference-image catalog.
+        sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = "NONE,MAP_RMS"
+        sextractor_diffimage_dict["sextractor_WEIGHT_IMAGE".lower()] = filename_weight_image
+        sextractor_diffimage_dict["sextractor_PARAMETERS_NAME".lower()] = sextractor_diffimage_paramsfile
+        # Override the config-file parameter sextractor_FILTER for ZOGY masked-difference-image catalog.
+        sextractor_diffimage_dict["sextractor_FILTER".lower()] = "N"
+        sextractor_diffimage_dict["sextractor_FILTER_NAME".lower()] = cfg_path + "/rapidSexDiffImageFilter.conv"
+        sextractor_diffimage_dict["sextractor_STARNNW_NAME".lower()] = cfg_path + "/rapidSexDiffImageStarGalaxyClassifier.nnw"
+        sextractor_diffimage_dict["sextractor_CATALOG_NAME".lower()] = filename_diffimage_sextractor_catalog_negative
+        sextractor_cmd = util.build_sextractor_command_line_args(sextractor_diffimage_dict)
+        exitcode_from_sextractor = util.execute_command(sextractor_cmd)
+
+
+        # Revert overridden SExtractor diffimage parameters.
+        sextractor_diffimage_dict["sextractor_WEIGHT_TYPE".lower()] = save_weight_type
+        sextractor_diffimage_dict["sextractor_FILTER".lower()] = save_filter
+
+
+        # Parse SExtractor catalog for negative ZOGY masked difference image.
+
+        params_to_get_diffimage = ["XWIN_IMAGE","YWIN_IMAGE","FLUX_APER_6"]
+
+        vals_diffimage_negative = util.parse_ascii_text_sextractor_catalog(filename_diffimage_sextractor_catalog_negative,
+                                                                  sextractor_diffimage_paramsfile,
+                                                                  params_to_get_diffimage)
+
+        nsexcatsources_zogy_diffimage_negative = len(vals_diffimage_negative)
+
+        print("nsexcatsources_zogy_diffimage_negative =",nsexcatsources_zogy_diffimage_negative)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after running SExtractor on negative ZOGY difference image =",
+            round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
+
+
+        # Generate PSF-fit catalog for positive ZOGY difference image using photutils.  No background subtraction is done.
+
+        n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+        n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+        fwhm = float(psfcat_diffimage_dict["fwhm"])
+        fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+        fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+        aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+        sharplo = float(psfcat_diffimage_dict["sharplo"])
+        sharphi = float(psfcat_diffimage_dict["sharphi"])
+        roundlo = float(psfcat_diffimage_dict["roundlo"])
+        roundhi = float(psfcat_diffimage_dict["roundhi"])
+        min_separation = float(psfcat_diffimage_dict["min_separation"])
+
+        input_img_filename = filename_diffimage_masked
+        input_unc_filename = filename_diffimage_unc_masked
+        input_psf_filename = filename_diffpsf
+        output_psfcat_filename = psfcat_diffimage_dict["output_zogy_psfcat_filename"]
+        output_psfcat_finder_filename = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"]
+        output_psfcat_residual_filename = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"]
+        output_psfcat_parquet_filename = output_psfcat_filename.replace(".txt",".parquet")
+
+        psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                            n_thresh_sigma,
+                                                            fwhm,
+                                                            fit_shape,
+                                                            aperture_radius,
+                                                            input_img_filename,
+                                                            input_unc_filename,
+                                                            input_psf_filename,
+                                                            output_psfcat_residual_filename,
+                                                            sharplo=sharplo,
+                                                            sharphi=sharphi,
+                                                            roundlo=roundlo,
+                                                            roundhi=roundhi,
+                                                            min_separation=min_separation)
+
+        print("psfcat_flag =",psfcat_flag)
+
+        if not psfcat_flag:
+
+            output_diffimage_file_infobits |= 2**0
+
+        else:
+
+            npsfcatsources_zogy_diffimage = len(phot)
+
+            print("npsfcatsources_zogy_diffimage =",npsfcatsources_zogy_diffimage)
+
+
+            # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+            # merged with the DAOStarFinder astropy table.
+            # Output columns are documentated at
+            # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+            # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+            try:
+                phot['x_init'].info.format = '.4f'
+                phot['y_init'].info.format = '.4f'
+                phot['flux_init'].info.format = '.6f'
+                phot['flux_fit'].info.format = '.6f'
+                phot['x_err'].info.format = '.4f'
+                phot['y_err'].info.format = '.4f'
+                phot['flux_err'].info.format = '.5f'
+                phot['qfit'].info.format = '.4f'
+                phot['cfit'].info.format = '.4f'
+
+                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
+
+
+                # Compute sky coordinates for given pixel coordinates.
+
+                ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
+                                                              list(phot['x_fit']),
+                                                              list(phot['y_fit']))
+
+                phot['x_fit'].info.format = '.4f'
+                phot['y_fit'].info.format = '.4f'
+                phot.add_column(ra, name='ra')
+                phot.add_column(dec, name='dec')
+
+
+                # Write PSF-fit photometry catalog in astropy table to text file.
+
+                print("output_psfcat_filename = ", output_psfcat_filename)
+
+                ascii.write(phot, output_psfcat_filename, overwrite=True)
+
+
+                # Write PSF-fit finder catalog in astropy table to text file.
+
+                print("output_psfcat_finder_filename = ", output_psfcat_finder_filename)
+
+                ascii.write(psfphot.finder_results, output_psfcat_finder_filename, overwrite=True)
+
+
+                # Join photometry and finder objects and output parquet file.
+
+                joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+
+                nrows = len(joined_table_inner)
+                print(f"nrows in PSF-fit catalog = {nrows}\n")
+
+                # Convert the QTable to a pandas DataFrame
+                df = joined_table_inner.to_pandas()
+
+                # Write the DataFrame to a Parquet file.
+                df.to_parquet(output_psfcat_parquet_filename, engine='pyarrow')
+
+            except Exception as e:
+                print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after generating PSF-fit catalog on positive ZOGY difference image =",
+            round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
+
+
+        # Generate PSF-fit catalog for negative ZOGY difference image using photutils.  No background subtraction is done.
+
+        n_clip_sigma = float(psfcat_diffimage_dict["n_clip_sigma"])
+        n_thresh_sigma = float(psfcat_diffimage_dict["n_thresh_sigma"])
+
+        fwhm = float(psfcat_diffimage_dict["fwhm"])
+        fit_shape_str = psfcat_diffimage_dict["fit_shape"]
+        fit_shape = tuple(int(x) for x in fit_shape_str.replace("(","").replace(")","").replace(" ", "").split(','))
+        aperture_radius = float(psfcat_diffimage_dict["aperture_radius"])
+
+        sharplo = float(psfcat_diffimage_dict["sharplo"])
+        sharphi = float(psfcat_diffimage_dict["sharphi"])
+        roundlo = float(psfcat_diffimage_dict["roundlo"])
+        roundhi = float(psfcat_diffimage_dict["roundhi"])
+        min_separation = float(psfcat_diffimage_dict["min_separation"])
+
+        input_img_filename = filename_diffimage_masked_negative
+        input_unc_filename = filename_diffimage_unc_masked
+        input_psf_filename = filename_diffpsf
+        output_psfcat_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_filename"].replace(".txt","_negative.txt")
+        output_psfcat_finder_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_finder_filename"].replace(".txt","_negative.txt")
+        output_psfcat_residual_filename_negative = psfcat_diffimage_dict["output_zogy_psfcat_residual_filename"].replace(".fits","_negative.fits")
+        output_psfcat_parquet_filename_negative = output_psfcat_filename_negative.replace(".txt",".parquet")
+
+        psfcat_flag,phot,psfphot = util.compute_psf_catalog(n_clip_sigma,
+                                                            n_thresh_sigma,
+                                                            fwhm,
+                                                            fit_shape,
+                                                            aperture_radius,
+                                                            input_img_filename,
+                                                            input_unc_filename,
+                                                            input_psf_filename,
+                                                            output_psfcat_residual_filename_negative,
+                                                            sharplo=sharplo,
+                                                            sharphi=sharphi,
+                                                            roundlo=roundlo,
+                                                            roundhi=roundhi,
+                                                            min_separation=min_separation)
+
+        print("psfcat_flag =",psfcat_flag)
+
+        if not psfcat_flag:
+
+            output_diffimage_file_infobits |= 2**1
+
+        else:
+
+            npsfcatsources_zogy_diffimage_negative = len(phot)
+
+            print("npsfcatsources_zogy_diffimage_negative =",npsfcatsources_zogy_diffimage_negative)
+
+
+            # Output psf-fit catalog is an PSFPhotometry astropy table with the PSF-fitting results
+            # merged with the DAOStarFinder astropy table.
+            # Output columns are documentated at
+            # https://photutils.readthedocs.io/en/latest/api/photutils.psf.PSFPhotometry.html
+            # https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html
+
+            try:
+                phot['x_init'].info.format = '.4f'
+                phot['y_init'].info.format = '.4f'
+                phot['flux_init'].info.format = '.6f'
+                phot['flux_fit'].info.format = '.6f'
+                phot['x_err'].info.format = '.4f'
+                phot['y_err'].info.format = '.4f'
+                phot['flux_err'].info.format = '.5f'
+                phot['qfit'].info.format = '.4f'
+                phot['cfit'].info.format = '.4f'
+
+                print(phot[('id', 'x_fit', 'y_fit', 'flux_fit','x_err', 'y_err', 'flux_err', 'n_pixels_fit', 'qfit', 'cfit', 'flags')])
+
+
+                # Compute sky coordinates for given pixel coordinates.
+
+                ra,dec = util.computeSkyCoordsFromPixelCoords(reformatted_science_image_filename,
+                                                              list(phot['x_fit']),
+                                                              list(phot['y_fit']))
+
+                phot['x_fit'].info.format = '.4f'
+                phot['y_fit'].info.format = '.4f'
+                phot.add_column(ra, name='ra')
+                phot.add_column(dec, name='dec')
+
+
+                # Write PSF-fit photometry catalog in astropy table to text file.
+
+                print("output_psfcat_filename_negative = ", output_psfcat_filename_negative)
+
+                ascii.write(phot, output_psfcat_filename_negative, overwrite=True)
+
+
+                # Write PSF-fit finder catalog in astropy table to text file.
+
+                print("output_psfcat_finder_filename_negative = ", output_psfcat_finder_filename_negative)
+
+                ascii.write(psfphot.finder_results, output_psfcat_finder_filename_negative, overwrite=True)
+
+
+                # Join photometry and finder objects and output parquet file.
+
+                joined_table_inner = join(phot, psfphot.finder_results, keys='id', join_type='inner')
+
+                nrows = len(joined_table_inner)
+                print(f"nrows in PSF-fit catalog = {nrows}\n")
+
+                # Convert the QTable to a pandas DataFrame
+                df = joined_table_inner.to_pandas()
+
+                # Write the DataFrame to a Parquet file.
+                df.to_parquet(output_psfcat_parquet_filename_negative, engine='pyarrow')
+
+            except Exception as e:
+                print(f"PSF-fit PSFPhotometry and DAOStarFinder catalogs: An unexpected error occurred: {e}")
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("Elapsed time in seconds after generating PSF-fit catalog on negative ZOGY difference image =",
+            round(end_time_benchmark - start_time_benchmark,3))
+        start_time_benchmark = end_time_benchmark
+
+
+        # Upload the ZOGY products to product S3 bucket.
+
+        product_s3_bucket = product_s3_bucket_base
+        s3_object_name_diffimage = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_masked
+        s3_object_name_diffimage_unc_masked = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_unc_masked
+        s3_object_name_diffimage_catalog = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog
+        s3_object_name_diffpsf = proc_subdir + "/jid" + str(jid) + "/" + filename_diffpsf
+        s3_object_name_scorrimage = proc_subdir + "/jid" + str(jid) + "/" + filename_scorrimage_masked
+        s3_object_name_output_psfcat_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename
+        s3_object_name_output_psfcat_finder_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename
+        s3_object_name_output_psfcat_residual_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename
+
+        s3_object_name_diffimage_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_masked_negative
+        s3_object_name_diffimage_catalog_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_diffimage_sextractor_catalog_negative
+        s3_object_name_scorrimage_negative = proc_subdir + "/jid" + str(jid) + "/" + filename_scorrimage_masked_negative
+        s3_object_name_output_psfcat_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_filename_negative
+        s3_object_name_output_psfcat_finder_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_finder_filename_negative
+        s3_object_name_output_psfcat_residual_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_residual_filename_negative
+
+        s3_object_name_output_psfcat_parquet_filename = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename
+        s3_object_name_output_psfcat_parquet_filename_negative = proc_subdir + "/jid" + str(jid) + "/" + output_psfcat_parquet_filename_negative
+
+
+        filenames = [filename_diffimage_masked,
+                     filename_diffimage_unc_masked,
+                     filename_diffimage_sextractor_catalog,
+                     filename_diffpsf,
+                     filename_scorrimage_masked,
+                     filename_bkg_subbed_science_image,
+                     output_resampled_gainmatched_reference_image,
+                     output_resampled_gainmatched_reference_uncert_image,
+                     output_psfcat_filename,
+                     output_psfcat_finder_filename,
+                     output_psfcat_residual_filename,
+                     filename_diffimage_masked_negative,
+                     filename_diffimage_sextractor_catalog_negative,
+                     filename_scorrimage_masked_negative,
+                     output_psfcat_filename_negative,
+                     output_psfcat_finder_filename_negative,
+                     output_psfcat_residual_filename_negative,
+                     output_psfcat_parquet_filename,
+                     output_psfcat_parquet_filename_negative]
+
+        objectnames = [s3_object_name_diffimage,
+                       s3_object_name_diffimage_unc_masked,
+                       s3_object_name_diffimage_catalog,
+                       s3_object_name_diffpsf,
+                       s3_object_name_scorrimage,
+                             s3_object_name_output_psfcat_filename,
+                       s3_object_name_output_psfcat_finder_filename,
+                       s3_object_name_output_psfcat_residual_filename,
+                       s3_object_name_diffimage_negative,
+                       s3_object_name_diffimage_catalog_negative,
+                       s3_object_name_scorrimage_negative,
+                       s3_object_name_output_psfcat_filename_negative,
+                       s3_object_name_output_psfcat_finder_filename_negative,
+                       s3_object_name_output_psfcat_residual_filename_negative,
+                           s3_object_name_output_psfcat_parquet_filename,
+                       s3_object_name_output_psfcat_parquet_filename_negative]
+
+        if upload_to_s3_bucket:
+
+            util.upload_files_to_s3_bucket(s3_client,product_s3_bucket,filenames,objectnames)
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("Elapsed time in seconds after uploading ZOGY products to S3 bucket =",
+                round(end_time_benchmark - start_time_benchmark,3))
+            start_time_benchmark = end_time_benchmark
 
     #################################################################################################################
     # Optionally run SFFT to generate an alternate difference image and catalog.
@@ -2810,6 +2788,53 @@ if __name__ == '__main__':
 
 
     #################################################################################################################
+    # Describe the SFFT difference image in the [SFFT] section of the product config file, from which
+    # it is registered in the DiffImages database table.
+    #################################################################################################################
+
+    if run_sfft and run_sfft_was_successful:
+
+        print("Computing checksum of ",filename_sfftdiffimage)
+        checksum_diffimage = db.compute_checksum(filename_sfftdiffimage)
+
+        if checksum_diffimage == 65 or checksum_diffimage == 68 or checksum_diffimage == 66:
+            print("*** Error: Unexpected value for checksum =",checksum_diffimage)
+
+        product_config['SFFT'] = {}
+
+        product_config['SFFT']['rid'] = str(rid_sciimage)
+        product_config['SFFT']['ppid'] = str(ppid_sciimage)
+        product_config['SFFT']['rfid'] = str(rfid)
+        product_config['SFFT']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
+        product_config['SFFT']['sfft_output_diffimage_file_checksum'] = checksum_diffimage
+        product_config['SFFT']['sfft_output_diffimage_file'] = \
+            "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_sfftdiffimage)
+        product_config['SFFT']['sfft_output_diffpsf_file'] = \
+            "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_sfftdiffpsf)
+        product_config['SFFT']['sfft_output_diffimage_file_status'] = str(1)
+
+        product_config['SFFT']['ra0'] = str(ra0_sciimage)
+        product_config['SFFT']['dec0'] = str(dec0_sciimage)
+        product_config['SFFT']['ra1'] = str(ra1_sciimage)
+        product_config['SFFT']['dec1'] = str(dec1_sciimage)
+        product_config['SFFT']['ra2'] = str(ra2_sciimage)
+        product_config['SFFT']['dec2'] = str(dec2_sciimage)
+        product_config['SFFT']['ra3'] = str(ra3_sciimage)
+        product_config['SFFT']['dec3'] = str(dec3_sciimage)
+        product_config['SFFT']['ra4'] = str(ra4_sciimage)
+        product_config['SFFT']['dec4'] = str(dec4_sciimage)
+
+        product_config['SFFT']['fid'] = str(fid_sciimage)
+        product_config['SFFT']['sca'] = str(sca_sciimage)
+        product_config['SFFT']['nsexcatsources'] = str(nsexcatsources_sfftdiffimage)
+        product_config['SFFT']['scalefacref'] = str(scalefacref)
+        product_config['SFFT']['dxrmsfin'] = str(dxrmsfin)
+        product_config['SFFT']['dyrmsfin'] = str(dyrmsfin)
+        product_config['SFFT']['dxmedianfin'] = str(dxmedianfin)
+        product_config['SFFT']['dymedianfin'] = str(dymedianfin)
+
+
+    #################################################################################################################
     # Compute naive image difference.
     #################################################################################################################
 
@@ -3290,7 +3315,8 @@ if __name__ == '__main__':
     print("proc_pt_datetime_ended =",proc_pt_datetime_ended)
 
     product_config['JOB_PARAMS']['job_ended'] = str(proc_pt_datetime_ended)
-    product_config['ZOGY']['zogy_output_diffimage_file_infobits'] = str(output_diffimage_file_infobits)      # TODO
+    if 'SFFT' in product_config:
+        product_config['SFFT']['sfft_output_diffimage_file_infobits'] = str(output_diffimage_file_infobits)      # TODO
 
 
     # Write product config file for job.
@@ -3347,8 +3373,10 @@ if __name__ == '__main__':
     # Termination.
 
     terminating_exitcode = 0
-    if not run_sfft_was_successful:
-        terminating_exitcode = 4
+
+    if not (run_sfft and run_sfft_was_successful):
+        print("*** Error: SFFT was not run or failed, so there is no difference image to register")
+        terminating_exitcode = 65
 
     print("terminating_exitcode =",terminating_exitcode)
 

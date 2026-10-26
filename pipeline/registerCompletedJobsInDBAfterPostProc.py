@@ -43,7 +43,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "registerCompletedJobsInDBAfterPostProc.py"
-swvers = "1.2"
+swvers = "1.3"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -149,7 +149,6 @@ job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base'
 postproc_job_config_filename_base = config_input['JOB_PARAMS']['postproc_job_config_filename_base']
 postproc_product_config_filename_base = config_input['JOB_PARAMS']['postproc_product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 
 
 #-------------------------------------------------------------------------------------------------------------
