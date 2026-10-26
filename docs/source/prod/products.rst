@@ -50,17 +50,18 @@ one science-image case to the next in different directories.
 There are difference-image products from three different methods: ZOGY, SFFT with cross-convolution,
 and naive (simple science image minus reference image).
 
-ZOGY and naive products are optional.  In ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini``:
+Only the SFFT difference image (``sfftdiffimage_masked.fits``, or ``sfftdiffimage_dconv_masked.fits`` with
+``--crossconv``) is registered in the ``DiffImages`` database table, from the product config file's ``[ZOGY]`` section
+(name kept for compatibility), which has ``diffimage_algorithm = sfft``.  Older product config files, which describe
+the ZOGY difference image, are not registered.  Post-processing, forced photometry, alert generation and the source
+loaders all use the SFFT products.
 
-* ``[ZOGY] run_zogy = False`` skips the ZOGY products.  The SFFT difference image (``sfftdiffimage_masked.fits``)
-  is then the one registered in the ``DiffImages`` database table, instead of ``zogy_diffimage_masked.fits``,
-  and the product config file's ``[ZOGY]`` section has ``diffimage_algorithm = sfft``.
-  This requires ``[SFFT] run_sfft = True``; otherwise ZOGY is run anyway.  If SFFT fails for a job with ZOGY
-  skipped, no difference image is registered and the job ends with exit code 65.
-* ``[NAIVE_DIFFIMAGE] naive_diffimage_flag = False`` skips the naive products, which nothing downstream uses.
+``[SFFT] run_sfft`` in ``cdf/awsBatchSubmitJobs_launchSingleSciencePipeline.ini`` must be True; a job that does not
+run SFFT, or whose SFFT fails, has no difference image to register and ends with exit code 65.
+The ZOGY and naive products are optional, set in the same file:
 
-Post-processing, forced photometry, alert generation and the source loaders already use the SFFT products,
-so they are unaffected.
+* ``[ZOGY] run_zogy = False`` skips the ZOGY products.
+* ``[NAIVE_DIFFIMAGE] naive_diffimage_flag = False`` skips the naive products.
 
 .. note::
    Product filenames that do not include the suffix "_negative" are for positive difference images ("science image minus reference image").

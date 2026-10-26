@@ -25,7 +25,7 @@ nside9 = 2**level9
 
 
 swname = "registerCompletedJobsInDB.py"
-swvers = "1.3"
+swvers = "1.4"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -144,8 +144,6 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-zogy_output_diffimage_file_from_config = config_input['ZOGY']['zogy_output_diffimage_file']
-zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fits","_masked.fits")
 ppid_science_pipeline = int(config_input['SCI_IMAGE']['ppid'])
 ppid_refimage_pipeline = int(config_input['REF_IMAGE']['ppid'])
 
@@ -499,17 +497,20 @@ if __name__ == '__main__':
 
             rfid = None
 
-            # The difference image to register: the one named in the [ZOGY] section of the product
-            # config file, which is the SFFT difference image if the pipeline was run with
-            # run_zogy = False, else (for product config files written before then) the ZOGY one.
+            # Only SFFT difference images are registered.  The [ZOGY] section of the product config
+            # file of a science-pipeline job must describe the SFFT difference image (diffimage_algorithm
+            # = sfft, written by science pipeline 1.1 and later); otherwise its difference image is not
+            # registered.
 
-            registered_diffimage_file = zogy_output_diffimage_file
+            registered_diffimage_file = None
 
-            if downloaded_from_bucket:
-                try:
+            if downloaded_from_bucket and 'ZOGY' in product_config_input:
+                diffimage_algorithm = product_config_input['ZOGY'].get('diffimage_algorithm','zogy')
+                if diffimage_algorithm == "sfft":
                     registered_diffimage_file = os.path.basename(product_config_input['ZOGY']['zogy_output_diffimage_file'])
-                except KeyError:
-                    pass
+                else:
+                    print(f"*** Warning: Difference image for jid={jid} is from {diffimage_algorithm}, not SFFT; " +
+                          "not registering it")
 
             product_bucket = s3_resource.Bucket(product_s3_bucket_base)
 
@@ -752,7 +753,8 @@ if __name__ == '__main__':
                 print("===> registered_diffimage_file =",registered_diffimage_file)
                 print("===> product_bucket_object.key =",product_bucket_object.key)
 
-                if f"{job_prefix}{registered_diffimage_file}" == product_bucket_object.key:
+                if registered_diffimage_file is not None and \
+                    f"{job_prefix}{registered_diffimage_file}" == product_bucket_object.key:
 
                     print("Found in difference image in S3 product bucket: {}".format(registered_diffimage_file))
 

@@ -8,15 +8,14 @@ Terminating exit codes:
 exit_code            Definition
 =============       =========================================
     0                Normal termination
-    4                SFFT did not execute successfully
-   65                ZOGY was not run ([ZOGY] run_zogy = False) and SFFT did not
-                     execute successfully, so there is no difference image to register
+   65                SFFT was not run or did not execute successfully, so there is
+                     no difference image to register
 =============       =========================================
 
-The difference image registered in the DiffImages database table, described in the [ZOGY] section of
-the product config file, is the ZOGY difference image, or, with [ZOGY] run_zogy = False, the SFFT
-difference image (the section's diffimage_algorithm key says which).  The naive difference image is
-made only if [NAIVE_DIFFIMAGE] naive_diffimage_flag = True.
+Only the SFFT difference image is registered in the DiffImages database table; it is described in
+the [ZOGY] section of the product config file (diffimage_algorithm = sfft), whose name is kept for
+compatibility.  The ZOGY difference image is made only if [ZOGY] run_zogy = True, and the naive
+difference image only if [NAIVE_DIFFIMAGE] naive_diffimage_flag = True.
 
 
 RAPID pipeline output_diffimage_file_infobits:
@@ -339,16 +338,13 @@ if __name__ == '__main__':
         zogy_sn_sr_from_uncertainty_maps = False
     s3_full_name_sciimage_psf = zogy_dict['s3_full_name_sciimage_psf']
 
-    # Whether to run ZOGY.  If False, the SFFT difference image is the one registered in the
-    # database (the [ZOGY] section of the product config file describes it instead), so ZOGY
-    # always runs if SFFT does not.  Configs written before run_zogy existed run ZOGY.
+    # Whether to run ZOGY.  Only the SFFT difference image is registered in the database, so ZOGY
+    # products are optional.  Configs written before run_zogy existed run ZOGY.
 
     run_zogy = ast.literal_eval(zogy_dict['run_zogy']) if 'run_zogy' in zogy_dict else True
 
-    if not run_zogy and not ast.literal_eval(config_input['SFFT']['run_sfft']):
-        print("*** Warning: run_zogy = False requires run_sfft = True, so that a difference image " +
-              "is registered; running ZOGY")
-        run_zogy = True
+    if not ast.literal_eval(config_input['SFFT']['run_sfft']):
+        print("*** Warning: run_sfft = False, so no difference image will be registered")
 
     print("run_zogy =",run_zogy)
 
@@ -1509,10 +1505,8 @@ if __name__ == '__main__':
 
 
     #################################################################################################################
-    # Run ZOGY, unless run_zogy is False: the ZOGY difference image, its catalogs, and the [ZOGY]
-    # section of the product config file, which describes the difference image registered in the
-    # database.  If ZOGY is not run, that section describes the SFFT difference image instead
-    # (see after SFFT below).
+    # Run ZOGY, unless run_zogy is False: the ZOGY difference image and its catalogs.  These are not
+    # registered in the database (only the SFFT difference image is; see after SFFT below).
     #################################################################################################################
 
     if run_zogy:
@@ -1985,15 +1979,6 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
-        # Compute MD5 checksum of masked difference image.
-
-        print("Computing checksum of ",filename_diffimage_masked)
-        checksum_diffimage = db.compute_checksum(filename_diffimage_masked)
-
-        if checksum_diffimage == 65 or checksum_diffimage == 68 or checksum_diffimage == 66:
-            print("*** Error: Unexpected value for checksum =",checksum_diffimage)
-
-
         # Upload the ZOGY products to product S3 bucket.
 
         product_s3_bucket = product_s3_bucket_base
@@ -2065,58 +2050,6 @@ if __name__ == '__main__':
             print("Elapsed time in seconds after uploading ZOGY products to S3 bucket =",
                 round(end_time_benchmark - start_time_benchmark,3))
             start_time_benchmark = end_time_benchmark
-
-
-        # Define ZOGY dictionary in config-file dictionary for products.
-
-        product_config['ZOGY'] = {}
-
-        product_config['ZOGY']['diffimage_algorithm'] = "zogy"
-
-        zogy_diffimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffimage)
-        zogy_diffpsf_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_diffpsf)
-        zogy_scorrimage_name_for_db_record = "s3://{}/{}".format(product_s3_bucket,s3_object_name_scorrimage)
-
-        product_config['ZOGY']['rid'] = str(rid_sciimage)
-        product_config['ZOGY']['ppid'] = str(ppid_sciimage)
-        product_config['ZOGY']['rfid'] = str(rfid)
-
-
-        # By design, the following is redundant.  It is also written to REF_IMAGE block above
-        # only if it was necessary for this pipeline instance to generate a reference image.
-
-        product_config['ZOGY']['awaicgen_output_mosaic_image_infobits'] = str(infobits_refimage)
-
-        product_config['ZOGY']['zogy_output_diffimage_file_checksum'] = checksum_diffimage
-        product_config['ZOGY']['zogy_output_diffimage_file'] = zogy_diffimage_name_for_db_record
-        product_config['ZOGY']['zogy_output_diffpsf_file'] = zogy_diffpsf_name_for_db_record
-        product_config['ZOGY']['zogy_output_scorrimage_file'] = zogy_scorrimage_name_for_db_record
-        product_config['ZOGY']['zogy_output_diffimage_file_status'] = str(1)
-
-
-        # The following sky positions are correct for the difference image
-        # only because the current code reprojects the reference image
-        # into the distorted grid of the science image.
-
-        product_config['ZOGY']['ra0'] = str(ra0_sciimage)
-        product_config['ZOGY']['dec0'] = str(dec0_sciimage)
-        product_config['ZOGY']['ra1'] = str(ra1_sciimage)
-        product_config['ZOGY']['dec1'] = str(dec1_sciimage)
-        product_config['ZOGY']['ra2'] = str(ra2_sciimage)
-        product_config['ZOGY']['dec2'] = str(dec2_sciimage)
-        product_config['ZOGY']['ra3'] = str(ra3_sciimage)
-        product_config['ZOGY']['dec3'] = str(dec3_sciimage)
-        product_config['ZOGY']['ra4'] = str(ra4_sciimage)
-        product_config['ZOGY']['dec4'] = str(dec4_sciimage)
-
-        product_config['ZOGY']['fid'] = str(fid_sciimage)
-        product_config['ZOGY']['sca'] = str(sca_sciimage)
-        product_config['ZOGY']['nsexcatsources'] = str(nsexcatsources_zogy_diffimage)
-        product_config['ZOGY']['scalefacref'] = str(scalefacref)
-        product_config['ZOGY']['dxrmsfin'] = str(dxrmsfin)
-        product_config['ZOGY']['dyrmsfin'] = str(dyrmsfin)
-        product_config['ZOGY']['dxmedianfin'] = str(dxmedianfin)
-        product_config['ZOGY']['dymedianfin'] = str(dymedianfin)
 
     #################################################################################################################
     # Optionally run SFFT to generate an alternate difference image and catalog.
@@ -2856,12 +2789,11 @@ if __name__ == '__main__':
 
 
     #################################################################################################################
-    # If ZOGY was not run, describe the SFFT difference image in the [ZOGY] section of the product
-    # config file, from which it is registered in the DiffImages database table.  The fields that
-    # do not depend on the differencing algorithm are the same as for ZOGY.
+    # Describe the SFFT difference image in the [ZOGY] section of the product config file (name kept
+    # for compatibility), from which it is registered in the DiffImages database table.
     #################################################################################################################
 
-    if not run_zogy and run_sfft and run_sfft_was_successful:
+    if run_sfft and run_sfft_was_successful:
 
         print("Computing checksum of ",filename_sfftdiffimage)
         checksum_diffimage = db.compute_checksum(filename_sfftdiffimage)
@@ -3444,11 +3376,9 @@ if __name__ == '__main__':
     # Termination.
 
     terminating_exitcode = 0
-    if not run_sfft_was_successful:
-        terminating_exitcode = 4
 
-    if not run_zogy and not run_sfft_was_successful:
-        print("*** Error: ZOGY was not run and SFFT failed, so there is no difference image to register")
+    if not (run_sfft and run_sfft_was_successful):
+        print("*** Error: SFFT was not run or failed, so there is no difference image to register")
         terminating_exitcode = 65
 
     print("terminating_exitcode =",terminating_exitcode)
