@@ -294,10 +294,22 @@ Starting a night, is the verbatim recipe for a night and its exit-code
 table; the README's Getting started runs one epoch locally.
 
 **The environment.** Account names come from rapid_systems, never from
-this repository:
+this repository. A night runs on a workstation under its own instance
+role, `rapid-<owner>-instance-role` on rapid_systems'
+`WorkstationSubmitterRoleNames` (its `docs/workstation-submission.md`),
+with no `AWS_PROFILE` set: `run create`, `official change`, the Gaia
+import by `job local`, `loop` and `check_run.sh` need nothing more. An
+administrator profile is needed only for the image (the ECR push and
+the release `deploy` hook) and for a statement as `postgres` on the
+database host (the bring-up below and a schema change). Proof: run 149,
+the HLWAS null epoch 4040101 on `rapid-rebuild:91`, created, made live,
+imported and drained CLEAN through `loop` under
+`rapid-rivera-instance-role` alone (2026-10-26; 86 packets, consumer
+86/86). The four teammate hosts move onto their roles from the shared
+one at their next running swap.
 
 ```sh
-export AWS_PROFILE=...       # an administrator profile for this account
+unset AWS_PROFILE            # the workstation's own instance role
 export AWS_REGION=us-east-1
 export PY=...                # the rapid environment's python3
 export PYTHONPATH=$PWD       # a checkout of rebuild
