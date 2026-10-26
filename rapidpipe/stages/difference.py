@@ -21,9 +21,9 @@ reference by the medians -> ZOGY -> coverage mask, NaN restore, negation
 -> difference uncertainty -> SExtractor and Photutils catalogs, positive
 and negative. SFFT and the naive subtraction follow ZOGY and run as `dev`
 runs them (``[sfft] run_sfft``, ``[naive_diffimage] naive_diffimage_flag``).
-``[difference] diff_flavor`` names the published differencer, ``zogy``
-(the shipped default, with the measurement in the toml) or ``sfft`` (`dev`'s
-since b725007d, 2026-04-20); under ``sfft``, ``run_sfft = false`` fails the
+``[difference] diff_flavor`` names the published differencer, ``sfft``
+(the shipped default, `dev`'s since b725007d, 2026-04-20, with the
+measurement in the toml) or ``zogy``; under ``sfft``, ``run_sfft = false`` fails the
 settings check. A nonzero exit of either tool fails the job as any tool's
 does (:class:`~rapidpipe.science.difference.tools.ToolFailed`), never a
 fallback to the other.
@@ -278,7 +278,7 @@ def check_settings(settings: dict[str, Any]) -> None:
         raise ValueError(
             "[difference.fake_sources] inject_fake_sources_flag = true is not supported: "
             "fake-source injection is not ported to the rebuild")
-    flavor = settings.get("diff_flavor", "zogy")
+    flavor = settings.get("diff_flavor", "sfft")
     if flavor not in ("zogy", "sfft"):
         raise ValueError(f"[difference] diff_flavor = {flavor!r}: zogy or sfft")
     if flavor == "sfft" and not settings["sfft"]["run_sfft"]:
@@ -817,7 +817,7 @@ def run(job: JobContext) -> None:
         _run_naive(**common)
 
     # Rows: the published differencer's image and positive PSF-fit catalog ([difference] diff_flavor).
-    flavor = settings.get("diff_flavor", "zogy")
+    flavor = settings.get("diff_flavor", "sfft")
     if flavor == "sfft":
         published_image, published_unc, published_psf = (
             sfft_names["diffimage"], sfft_names["diffimage_unc"], sfft_names["diffpsf"])
