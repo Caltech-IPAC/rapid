@@ -284,6 +284,7 @@ regression). A row whose finding a later row superseded says so.
 | gate-sci-psf | under `science` the core, ring and registration stars come from the reference catalog; GBTDS gb3 on `:87`: core −0.036 to −0.048, ring −0.038, registration at most 0.015 px, 1,196 packets; replayed at `min_epochs` the gate holds every epoch on core; `:85` and `:86` carry PR 465's `ring_count` regression, fixed by PR 468 | 137, 139 | PRs 465, 468, 470; rapid_docs 130 |
 | dead-trim | the code nothing called is deleted; run 141 (every job on m6a) 181 packets, core and ring equal to run 136; run 140's 180 came from an r6i reference | 138, 140, 141 | PRs 467, 469, 471; rapid_docs 129 |
 | release-v0.13 | the tip `e7f042f9` tagged `rebuild-v0.13` (annotated, the v0.12 JSON shape; docs-only past `9f4c54f6`), its image built on base `base-39826742678-1` (digest `7ab782c1…`), `rapid-rebuild:88` and `rapid-rebuild-production:79` registered by the deploy hook with `RAPID_RELEASE_IDENTITY=rebuild-v0.13`, the pins snapshot written (2026-10-25 23:58 UTC); proved on Batch by release-proof: run 142 (dataset `r00342-v013`, the HLWAS null epoch 4040101 on `rapid-rebuild:88`, reference on m6a.2xlarge) CLEAN with 181 packets, core −0.0010316, ring +0.0017106, 828 / 500 candidates kept, 25 at S/N > 20, equal to run 141 | 142 | tag rebuild-v0.13, PR 475 |
+| window-gunzip | each gzipped window file is decompressed once per packet job, to a plain file beside its staged copy that forced and the cutouts both read (the trigger's difference and science images were read twice); on `rapid-rebuild:89` (m6a) the null epoch's packet job 18.18 → 15.27 s against run 142's, 181 packets, core and ring equal, packet content equal but for processing time and row ids | 143 | PR 476 |
 
 ## Current procedure
 
@@ -507,9 +508,10 @@ items no later part closed; each names where its numbers are.
 - **`forced` grows with the window**: a field's rows quadratically in
   epoch while its 30-day window is open, copies 0.57 of a deep set's
   rows; storing references instead of copies is the later item;
-  saturation past a 30-day span is unmeasured (PR 455). Each window image
-  costs about 2.1 s of gzip decompression at the packet stage (part 8
-  step 1).
+  saturation past a 30-day span is unmeasured (PR 455). Each gzipped
+  window file is decompressed once per packet job (PR 476): the one-image
+  null epoch's packet job 18.2 → 15.3 s; a window's other images were
+  already read once, so the per-image decompression itself remains.
 - **The packet's window query** reads the dataset's difference images in
   the MJD window through an unindexed haversine; a q3c or HEALPix
   predicate on `diffimages (ra0, dec0)` at thousands a month (part 12).
