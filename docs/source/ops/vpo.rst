@@ -229,6 +229,10 @@ the section or a parameter is missing):
      - 3
      - Resubmissions of AWS Batch jobs that failed for infrastructure reasons (see
        `Resubmitting failed AWS Batch jobs`_).
+   * - ``load_sources_tables``
+     - True
+     - False skips the stages that load the ``Sources``, ``Merges``, ``AstroObjects`` and
+       ``AstroObjectsMeta`` tables, and alert production (see `Stages`_).
 
 The high-water mark means an observation range is never covered twice.  L2Files in a
 covered range that did not get a difference image -- for example because their field did not
@@ -341,6 +345,13 @@ log file in the working directory named after the stage, the processing date and
 Stages 10 through 17 pair up: each Sources stage has an XSources counterpart that does the
 same thing for the SExtractor catalogs.  Alert production (stage 18) currently covers
 Sources only.
+
+With ``[VPO_SETTINGS] load_sources_tables = False``, the VPO skips the Sources stages (10, 12,
+14 and 16), so the ``Sources``, ``Merges_<field>``, ``AstroObjects_<field>`` and
+``AstroObjectsMeta_<field>`` tables are not loaded, and it also skips alert production (18),
+which reads them.  The XSources stages (11, 13, 15 and 17) always run.  Each skipped stage
+is noted in the VPO's log (``Skipping ... (load_sources_tables = False)...``) and has no
+log file of its own.
 
 The VPO prints an elapsed time in seconds after every stage, so a run's log file is also its
 own timing breakdown.

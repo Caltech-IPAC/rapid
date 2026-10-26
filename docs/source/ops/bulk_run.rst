@@ -320,7 +320,10 @@ exit with code 0 without cross-matching anything if no exposure is in the range.
 Run them one at a time, each after the previous one has finished; check that each exits with
 code 0 (``echo $?``) before starting the next, since an exit code of 64 or higher is an error.
 Alert production (stage 18) only reads what the previous stages wrote, so it can be rerun on
-its own.
+its own.  To match a VPO run with ``[VPO_SETTINGS] load_sources_tables = False`` (see
+:doc:`vpo`), leave out the Sources stages (``loadPSFCatIntoDBSourcesTable.py``,
+``crossMatchSources.py``, ``computeStatisticsForAstroObjects.py`` and ``pruneNotBestMerges.py``)
+and alert production, which reads their tables.
 
 The loading stages (10 and 11) prefilter the records they load, by ``sumrat``, the real/bogus
 score and, for XSources, the aperture SNR (``[DATABASE_PREFILTER]`` of the configuration file;
