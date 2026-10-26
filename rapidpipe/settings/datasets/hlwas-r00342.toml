@@ -29,8 +29,8 @@ dq_mask_bits = 0x2110C01
 crpix_shift = [0.12, -0.99]
 
 [difference.sfft]
-# dev's OpenUniverse block, read when [difference] diff_flavor = "sfft" (the
-# published differencer stays ZOGY's). Measured on one epoch pair, 001_0001
+# dev's OpenUniverse block, read when [difference] diff_flavor = "sfft".
+# Measured on one epoch pair, 001_0001
 # SCA 8 F146 pass 4 against run 81's reference, the same bytes (sfft-core,
 # 2026-10-24): under the socsims block the stage's zeroed DQ-masked science
 # cores (5,096 px, 0.03% of the frame, 31% of the sum of the reference's
