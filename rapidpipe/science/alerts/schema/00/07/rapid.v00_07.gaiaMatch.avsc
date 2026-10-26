@@ -1,0 +1,181 @@
+{
+    "namespace": "rapid.v00_07",
+    "name": "gaiaMatch",
+    "doc": "Gaia DR3 source near the triggering source, at its epoch",
+    "version": "00.07",
+    "type": "record",
+    "fields": [
+        {
+            "name": "sourceId",
+            "type": "long",
+            "doc": "Gaia DR3 source_id (stable within DR3; changes between releases)"
+        },
+        {
+            "name": "ra",
+            "type": "double",
+            "doc": "Right ascension of the source PROPAGATED by proper motion to the triggering source's epoch (mjdobs); ICRS [deg]"
+        },
+        {
+            "name": "dec",
+            "type": "double",
+            "doc": "Declination of the source at the triggering source's epoch; ICRS [deg]"
+        },
+        {
+            "name": "sep",
+            "type": "float",
+            "doc": "Angular separation from the triggering source position, at its epoch [arcsec]"
+        },
+        {
+            "name": "pa",
+            "type": "float",
+            "doc": "Position angle from the triggering source to the Gaia source, East of North [deg]"
+        },
+        {
+            "name": "pmRA",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Proper motion in right ascension, pmra*cos(dec) [mas/yr]"
+        },
+        {
+            "name": "pmDec",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Proper motion in declination [mas/yr]"
+        },
+        {
+            "name": "parallax",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Parallax [mas]"
+        },
+        {
+            "name": "parallaxUnc",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty in parallax [mas]"
+        },
+        {
+            "name": "ruwe",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Renormalised unit weight error of the astrometric fit; > 1.4 suggests a poor single-star fit (binary, blend)"
+        },
+        {
+            "name": "magG",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean G magnitude, Vega [mag]"
+        },
+        {
+            "name": "magBP",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean integrated BP magnitude, Vega [mag]"
+        },
+        {
+            "name": "magRP",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean integrated RP magnitude, Vega [mag]"
+        },
+        {
+            "name": "bpRp",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "BP - RP colour [mag]"
+        },
+        {
+            "name": "fluxOverErrG",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Mean G flux divided by its error; low values at a given magnitude indicate variability"
+        },
+        {
+            "name": "variable",
+            "type": "boolean",
+            "doc": "True if Gaia's variability analysis classified the source as VARIABLE (phot_variable_flag); False also when not analysed"
+        },
+        {
+            "name": "nonSingleStar",
+            "type": "int",
+            "doc": "Gaia non_single_star bit flags: 0 none, 1 astrometric binary, 2 spectroscopic binary, 4 eclipsing binary"
+        },
+        {
+            "name": "inQsoCandidates",
+            "type": "boolean",
+            "doc": "True if the source is in Gaia's quasar-candidates table"
+        },
+        {
+            "name": "inGalaxyCandidates",
+            "type": "boolean",
+            "doc": "True if the source is in Gaia's galaxy-candidates table"
+        },
+        {
+            "name": "probStar",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "DSC combined-model probability that the source is a star"
+        },
+        {
+            "name": "probGalaxy",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "DSC combined-model probability that the source is a galaxy"
+        },
+        {
+            "name": "probQuasar",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "DSC combined-model probability that the source is a quasar"
+        },
+        {
+            "name": "duplicatedSource",
+            "type": "boolean",
+            "doc": "True if Gaia removed another source within ~2 arcsec during processing (possible blend or duplicate)"
+        },
+        {
+            "name": "ipdFracMultiPeak",
+            "type": "int",
+            "doc": "Percentage of Gaia image windows with more than one peak; high values indicate a blend or resolved pair"
+        }
+    ]
+}

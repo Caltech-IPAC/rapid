@@ -19,7 +19,13 @@ ePSF reference, ``EPSFREF``, other than the file's own
 tessellation field, overlapping fields and HEALPix indexes the import
 stage derives the same way, and one ``exposures`` row only when the job
 expects the ``exposures`` key (the loop gives that expectation to one
-SCA of an exposure; a row nothing binds is not written). The calibrated file
+SCA of an exposure; a row nothing binds is not written). The row's
+``program_id`` is ``[intake] program_id``, `dev`'s ``RAPIDDATASOURCE`` rule
+(a simulation's fixed negative id, a flight program's own number), and its
+Roman observation identifiers (``execution_plan``, ``pass``, ``segment``,
+``observation``, ``visit``, ``exposure``, ``visit_id``, ``observation_id``)
+are the converted header's (:func:`rapidpipe.science.intake.exposure_identifiers`,
+`dev`'s e212d40d and e05e29a1), null for a reader whose header lacks them. The calibrated file
 carries the gWCS and the whole ``meta`` tree, so its ``_wcs.asdf`` sidecar
 is not read.
 
@@ -102,7 +108,7 @@ from rapidpipe.foundation.prefix import get
 from rapidpipe.science import intake_openuniverse, intake_rimtimsim
 from rapidpipe.science.alerts.crossmatch import epoch_offset_years, propagate_positions
 from rapidpipe.science.astrometry import gaia_offset
-from rapidpipe.science.intake import asdf_to_fits, gzip_file
+from rapidpipe.science.intake import asdf_to_fits, exposure_identifiers, gzip_file
 from rapidpipe.science.limmag import limiting_magnitude
 from rapidpipe.science.spatial import (
     healpix_indexes, image_centre_and_corners, overlapping_fields, tessellation_field)
@@ -204,7 +210,8 @@ def run(job: JobContext) -> None:
     l2file = _l2file(job, header, key, fits_name, limmag)
     dateobs = datetime.fromisoformat(header["DATE-OBS"])
     exposure = {"dataset": job.dataset, "expid": key["expid"], "dateobs": dateobs,
-                "exptime": float(header["EXPTIME"]), "program_id": int(settings["program_id"])}
+                "exptime": float(header["EXPTIME"]), "program_id": int(settings["program_id"]),
+                **exposure_identifiers(header)}
     tables = [("l2files", [l2file])]
     if any(i["kind"] == "expects" and i["product"] == "exposures" for i in job.inputs):
         tables.insert(0, ("exposures", [exposure]))
