@@ -31,7 +31,11 @@ Keep each pull request (PR) focused on one feature or fix.
 
 ## Review and Acceptance
 
-All contributions are subject to review. Project maintainers may accept or reject any contribution at their discretion.
+- A person opens a pull request to `rebuild` and merges it once every CI check is green. The pull request names the [rapid_docs](https://roman-rapid.readthedocs.io/en/latest/) page it implements or corrects, and a page that disagrees with the code is corrected first ([AGENTS.md](AGENTS.md), Design authority).
+- One review by a named maintainer is required once the team names one. Until then, green CI and the doc-first rule are the gate.
+- Coding agents merge their own pull requests on `rebuild` once CI is green ([AGENTS.md](AGENTS.md), Branches and pull requests).
+
+Project maintainers may accept or reject any contribution at their discretion.
 
 ## Questions
 

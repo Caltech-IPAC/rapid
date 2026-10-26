@@ -44,6 +44,9 @@ summary and README.md has the detail.
   Use rebase merge (squash only when the branch carries a merge commit).
   Agents merge their own PRs on `rebuild` once CI is green (Ben,
   2026-09-23).
+- People open a PR to `rebuild` and merge it on green CI under the same
+  doc-first rule; one review by a named maintainer is required once the
+  team names one (CONTRIBUTING.md, Review and Acceptance).
 
 ## Repository layout
 
@@ -114,6 +117,12 @@ a `tests/db` test, not only a mocked `tests/unit` one.
 | `tests/cli` | `foundation.yml` | The five verbs against the same database: argv in, exit code/stdout/stderr/database state out. |
 | n/a | `container.yml` | Builds `containers/rapid-pipeline` against a public stand-in base image and smoke-tests `--version`, `--help`, the imports of the kept helpers outside `rapidpipe/` and the presence of the `/code` script and config files. Proves the build recipe only, not the production science environment. |
 | n/a | `public-safety.yml` | `scripts/check-public-safety.sh`, see above. |
+
+The README's Getting started runs in no workflow: it needs the private
+pipeline image, and GitHub Actions holds no AWS credential to pull it
+(no repository secret names one, and rapid_systems' GitHub OIDC
+federation was torn down on 2026-08-04, its `docs/architecture.md`). A
+quickstart job waits on a pull route the team grants.
 
 The stages' fake external tools are `tests/support/fakedifftools.py` and
 `fakereftools.py`; a stage's real tools run in the image, under a job.
