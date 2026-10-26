@@ -193,10 +193,10 @@ if __name__ == '__main__':
 
     awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
 
-    # The registered difference image is the one named in the DiffImages record: the ZOGY
-    # difference image, or the SFFT one if the science pipeline was run with run_zogy = False.
+    # The registered difference image is the SFFT one named in the DiffImages record
+    # (sfftdiffimage_masked.fits, or sfftdiffimage_dconv_masked.fits with --crossconv).
 
-    zogy_output_diffimage_file = os.path.basename(s3_full_filename_diffimage)
+    sfft_output_diffimage_file = os.path.basename(s3_full_filename_diffimage)
 
 
     # Populate config-file dictionary for products.
@@ -296,17 +296,17 @@ if __name__ == '__main__':
 
         # Difference image.
 
-        print("===> zogy_output_diffimage_file =",zogy_output_diffimage_file)
+        print("===> sfft_output_diffimage_file =",sfft_output_diffimage_file)
 
-        if f"{job_prefix}{zogy_output_diffimage_file}" == product_bucket_object.key:
+        if f"{job_prefix}{sfft_output_diffimage_file}" == product_bucket_object.key:
 
-            print("Found in difference image in S3 product bucket: {}".format(zogy_output_diffimage_file))
+            print("Found in difference image in S3 product bucket: {}".format(sfft_output_diffimage_file))
 
 
             # Download difference image from S3 bucket.
 
             print("s3_full_filename_diffimage = ",s3_full_filename_diffimage)
-            zogy_output_diffimage_file,subdirs_diffimage,downloaded_from_bucket = \
+            sfft_output_diffimage_file,subdirs_diffimage,downloaded_from_bucket = \
                 util.download_file_from_s3_bucket(s3_client,s3_full_filename_diffimage)
 
 
@@ -316,7 +316,7 @@ if __name__ == '__main__':
             kwdvals = [str(pid),
                        product_s3_bucket_base,
                        job_prefix,
-                       zogy_output_diffimage_file,
+                       sfft_output_diffimage_file,
                        str(infobitssci_diffimage),
                        str(version_diffimage),
                        str(ppid),
@@ -326,22 +326,22 @@ if __name__ == '__main__':
                        str(field),
                        proc_utc_datetime]
             hdu_index = 0
-            util.addKeywordsToFITSHeader(zogy_output_diffimage_file,
+            util.addKeywordsToFITSHeader(sfft_output_diffimage_file,
                                          keywords,
                                          kwdvals,
                                          hdu_index,
-                                         zogy_output_diffimage_file)
+                                         sfft_output_diffimage_file)
 
 
             # Compute MD5 checksum of difference image.
 
-            print("Computing checksum of ",zogy_output_diffimage_file)
-            checksum_diffimage = db.compute_checksum(zogy_output_diffimage_file)
+            print("Computing checksum of ",sfft_output_diffimage_file)
+            checksum_diffimage = db.compute_checksum(sfft_output_diffimage_file)
 
 
             # Store product configuration parameters for reference image.
 
-            s3_object_name_diffimage = proc_subdir + "/jid" + str(jid) + "/" + zogy_output_diffimage_file
+            s3_object_name_diffimage = proc_subdir + "/jid" + str(jid) + "/" + sfft_output_diffimage_file
             diffimage_filename_for_db_record = "s3://{}/{}".format(product_s3_bucket_base,s3_object_name_diffimage)
 
             product_config['DIFF_IMAGE']['pid'] = str(pid)
@@ -352,7 +352,7 @@ if __name__ == '__main__':
 
             # Upload difference image to S3 bucket.
 
-            filenames = [zogy_output_diffimage_file]
+            filenames = [sfft_output_diffimage_file]
             objectnames = [s3_object_name_diffimage]
             util.upload_files_to_s3_bucket(s3_client,product_s3_bucket_base,filenames,objectnames)
 
