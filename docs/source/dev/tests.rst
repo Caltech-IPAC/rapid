@@ -135,6 +135,9 @@ Date              Software modification
                     ``docker run -it --entrypoint bash --name russ-test-jobsubmit  --shm-size=64g -e TMPDIR=/dev/shm
                     -v /home/ubuntu/work/test_20261021:/work -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1
                     -e NUMEXPR_NUM_THREADS=1 public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest``
+10/26/2026        * Only the SFFT difference image is registered in the DiffImages database table, from the new ``[SFFT]`` section of the product config file (replacing ``[ZOGY]``);
+                    ``[SFFT] run_sfft`` must be True, and a job that does not run SFFT or whose SFFT fails exits with code 65 (replacing exit code 4) (PR #478).
+                  * New ``[ZOGY] run_zogy`` flag (default True) skips the ZOGY products; naive products are skipped with ``[NAIVE_DIFFIMAGE] naive_diffimage_flag = False`` (PR #478).
 ===============   ===============================================================================================================================================================================================================================
 
 

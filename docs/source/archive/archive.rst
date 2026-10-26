@@ -27,7 +27,9 @@ The volume and cost estimates in this document rely on the following assumptions
 * GRISM and PRISM (spectroscopic) exposures are excluded; RAPID processes imaging modes only
 * Observation plan based on the provisional Roman scheduled observations; detailed mission plan is TBD
 * Reference images are assumed to exist for all observed sky tiles and filters (upper bound on difference-image volume)
-* Only ZOGY positive difference-image products are delivered to MAST; SFFT, Naive, and negative images are excluded
+* Only SFFT positive difference-image products are delivered to MAST; ZOGY, Naive, and negative images are excluded
+* SFFT is run with PSF cross-convolution (``--crossconv``), as for the OpenUniverse sims; without it there is no cross-convolved image (67 MB less per SCA image)
+* SExtractor difference-image catalogs sized from the 2026-02-27 run; later runs, with extra catalog columns and other simulations, have much larger catalogs (e.g., 97 MB mean for SFFT in the 2026-08-21 run) *(TBD: catalog contents for delivery)*
 * Alert rates: 2,000 candidates/SCA for galactic surveys (GBTDS, GPS), 500/SCA for extragalactic (HLTDS, HLWAS) *(TBD: filtering thresholds, real/bogus classifier performance)*
 * Alert packet size: 60 KB AVRO, consistent with Rubin/LSST estimates *(TBD: final RAPID alert schema and contents)*
 * Product sizes measured from the 2026-02-27 pipeline test run (OpenUniverse simulated data)
@@ -104,9 +106,9 @@ Data Products
 Product Sizes
 =============
 
-Product sizes are measured from the 2026-02-27 pipeline test run using OpenUniverse simulated data. The pipeline currently generates products with three differencing methods (ZOGY, SFFT, Naive) in both positive and negative directions. For archive delivery to MAST, only **ZOGY positive** products are planned; SFFT and Naive products are retained internally for algorithm evaluation.
+Product sizes are measured from the 2026-02-27 pipeline test run using OpenUniverse simulated data. The pipeline currently generates products with three differencing methods (ZOGY, SFFT, Naive) in both positive and negative directions. Only the SFFT difference image is registered in the operations database, and ZOGY and Naive products can be switched off (see :doc:`/prod/products`). For archive delivery to MAST, only **SFFT positive** products are planned.
 
-This reduces the per-SCA archive footprint from 816 MB (all methods, both directions) to **204 MB** (ZOGY positive only). The per-SCA archive volume is dominated by three 67 MB FITS images (difference image, uncertainty map, and SCORR image), which together account for 99% of the footprint. Catalogs and PSFs are negligible by comparison.
+This reduces the per-SCA archive footprint from 816 MB (all methods, both directions) to **204 MB** (SFFT positive only). The per-SCA archive volume is dominated by three 67 MB FITS images (decorrelated difference image, uncertainty map, and cross-convolved image, the SFFT counterpart of the ZOGY SCORR image), which together account for 98% of the footprint. Catalogs and PSFs are negligible by comparison.
 
 Product Inventory
 =================
@@ -196,7 +198,7 @@ Product Inventory
      -
      -
    * - **Difference** (per SCA image)
-     - Difference image (ZOGY)
+     - Difference image (SFFT, decorrelated)
      - 67 MB
      - 9.8 M
      - 654 TB
@@ -204,7 +206,7 @@ Product Inventory
      - FITS
      - ASDF
    * -
-     - Uncertainty map (ZOGY)
+     - Uncertainty map (SFFT)
      - 67 MB
      - 9.8 M
      - 654 TB
@@ -212,7 +214,7 @@ Product Inventory
      - FITS
      - ASDF
    * -
-     - SCORR image (ZOGY)
+     - Cross-convolved image (SFFT)
      - 67 MB
      - 9.8 M
      - 654 TB
@@ -221,25 +223,25 @@ Product Inventory
      - ASDF
    * -
      - Difference PSF
-     - 29 KB
+     - 43 KB
      - 9.8 M
-     - 0.3 TB
+     - 0.4 TB
      - Prompt
      - FITS
      - ASDF
    * -
      - SExtractor catalog
-     - 2.5 MB
+     - 3.1 MB
      - 9.8 M
-     - 24 TB
+     - 30 TB
      - Prompt
      - Parquet
      - Parquet
    * -
      - PSF-fit catalog (Parquet)
-     - 0.3 MB
+     - 0.26 MB
      - 9.8 M
-     - 3 TB
+     - 2.5 TB
      - Prompt
      - Parquet
      - Parquet
@@ -338,14 +340,14 @@ Each incoming SCA image is differenced against the best available reference imag
 
 The pipeline currently evaluates three differencing methods:
 
-* **ZOGY** --- the primary method, producing a difference image, SCORR (signal-to-noise) image, uncertainty map, and PSF model.
-* **SFFT** --- cross-convolution subtraction, producing decorrelated and cross-convolved images.
-* **Naive** --- simple pixel-by-pixel subtraction as a diagnostic baseline.
+* **SFFT** --- the primary method, and the only one registered in the operations database; with cross-convolution, it produces decorrelated and cross-convolved images, an uncertainty map, and a difference PSF.
+* **ZOGY** --- optional (``[ZOGY] run_zogy``), producing a difference image, SCORR (signal-to-noise) image, uncertainty map, and PSF model.
+* **Naive** --- optional (``[NAIVE_DIFFIMAGE] naive_diffimage_flag``), simple pixel-by-pixel subtraction as a diagnostic baseline.
 
 For each method, SExtractor and PhotUtils PSF-fit catalogs are generated from both positive and negative difference images. Gain matching and sub-pixel alignment of the reference image are performed before differencing.
 
 .. note::
-   For archive delivery to MAST, only **ZOGY positive** difference-image products are planned. SFFT and Naive outputs are used internally for algorithm comparison and are excluded from the volume estimates in this document.
+   For archive delivery to MAST, only **SFFT positive** difference-image products are planned. ZOGY and Naive outputs, if made, are used internally for algorithm comparison and are excluded from the volume estimates in this document.
 
 For details on the differencing algorithms and PSF handling, see :doc:`/pl/pl`. A complete listing of all difference-image products is in :doc:`/prod/products`.
 
@@ -435,7 +437,7 @@ RAPID will deliver products to MAST on a **monthly** schedule throughout the nom
 Each monthly delivery will include:
 
 * New and updated reference images, coverage maps, uncertainty images, and catalogs
-* All ZOGY positive difference images, SCORR images, uncertainty maps, PSFs, and catalogs produced since the previous delivery (one set per SCA image)
+* All SFFT positive difference images, cross-convolved images, uncertainty maps, PSFs, and catalogs produced since the previous delivery (one set per SCA image)
 * Updated light-curve catalogs (Parquet export from the operations database)
 * Archived alert packets (AVRO tarballs covering the preceding month)
 * Forced-photometry results
