@@ -359,7 +359,9 @@ and moves `rapid-rebuild-production`'s with it. One deploy at a time
 (one stack). A proof submits the revision its own deploy printed, or,
 when two deploys meet one tag, the revision whose image digest the job
 definition shows. Never prove on `rapid-rebuild:85` or `:86`: both carry
-PR 465's `ring_count` regression.
+PR 465's `ring_count` regression. Nor on `rapid-rebuild:91`
+(`rapid-rebuild-production:82`): it publishes SFFT by default (PR 485),
+reverted by PR 486.
 
 **A run.** One dataset name and one live run per proof; a run's bindings
 are its dataset's alone; two loops never run under one run at once. The
