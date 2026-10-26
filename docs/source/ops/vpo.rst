@@ -392,6 +392,12 @@ a new reference image whose input-images CSV file is not in S3.  Its ``Jobs`` re
 open and it has no done file.  A job that failed (exit code 64 or higher), or that had too few
 inputs for a reference image (exit code 33), is closed out without product records.
 
+**Difference images.**  Only the SFFT difference image is registered in ``DiffImages``, from the
+``[SFFT]`` section of the job's product config file (see :doc:`../prod/products`).  A science job
+whose product config file has no ``[SFFT]`` section (written before this was introduced) is closed
+out without a ``DiffImages`` record.  A science job that did not run SFFT, or whose SFFT failed,
+ends with exit code 65 and is closed out as failed.
+
 **Done files.**  A job that has been registered gets a done file in S3
 (``job_config_jid<jid>.done``, or ``postproc_job_config_jid<jid>.done`` after stage 9; see
 :doc:`../prod/products`), and is skipped by later runs of the stage.  A registration stage can
