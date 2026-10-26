@@ -22,7 +22,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.11"
+swvers = "1.12"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -214,6 +214,12 @@ l2file_settle_seconds = config_input.getfloat('VPO_SETTINGS','l2file_settle_seco
 
 n_scas_per_exposure = 18          # Roman WFI
 
+# Whether to load the Sources, Merges, AstroObjects and AstroObjectsMeta database tables (from the
+# PhotUtils PSF-fit catalogs); if False, their stages are skipped, and so is alert production, which
+# reads them.  The XSources, XMerges, XAstroObjects and XAstroObjectsMeta tables are always loaded.
+
+load_sources_tables = config_input.getboolean('VPO_SETTINGS','load_sources_tables',fallback=True)
+
 
 # Print variables.
 
@@ -231,6 +237,7 @@ print("min_elapsed_observation_seconds =",min_elapsed_observation_seconds)
 print("max_elapsed_observation_seconds =",max_elapsed_observation_seconds)
 print("open_loop_sleep_seconds =",open_loop_sleep_seconds)
 print("l2file_settle_seconds =",l2file_settle_seconds)
+print("load_sources_tables =",load_sources_tables)
 print("startdatetime =",startdatetime)
 print("enddatetime =",enddatetime)
 print("launch_science_pipelines_code =", launch_science_pipelines_code)
@@ -1162,27 +1169,32 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
-        # Launch script to load PSF-fit catalogs into database sources tables.
-        #
-        # Environment variable JOBPROCDATE to specify processing date is required.
+        if load_sources_tables:
 
-        fname_out = "load_psfcat_into_db_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
-        load_psfcat_into_db_sources_cmd = [python_cmd,
-                                           load_psfcat_into_db_sources_code]
+            # Launch script to load PSF-fit catalogs into database sources tables.
+            #
+            # Environment variable JOBPROCDATE to specify processing date is required.
 
-        exitcode_from_load_psfcat_into_db_sources_cmd = util.execute_command(load_psfcat_into_db_sources_cmd,fname_out)
+            fname_out = "load_psfcat_into_db_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
+            load_psfcat_into_db_sources_cmd = [python_cmd,
+                                               load_psfcat_into_db_sources_code]
 
-        if exitcode_from_load_psfcat_into_db_sources_cmd >= 64:
-            print(f"*** Error: {load_psfcat_into_db_sources_cmd} returned exit code = {exitcode_from_load_psfcat_into_db_sources_cmd}; quitting...")
-            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+            exitcode_from_load_psfcat_into_db_sources_cmd = util.execute_command(load_psfcat_into_db_sources_cmd,fname_out)
+
+            if exitcode_from_load_psfcat_into_db_sources_cmd >= 64:
+                print(f"*** Error: {load_psfcat_into_db_sources_cmd} returned exit code = {exitcode_from_load_psfcat_into_db_sources_cmd}; quitting...")
+                finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
-        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("VPO Elapsed time in seconds after loading Sources database records =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("VPO Elapsed time in seconds after loading Sources database records =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+        else:
+            print("Skipping loading Sources database records (load_sources_tables = False)...")
 
 
         # Launch script to load the SExtractor catalogs for both the positive and
@@ -1209,27 +1221,32 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
-        # Launch script to crossmatch sources and astroobjects database tables.
-        #
-        # Environment variable JOBPROCDATE to specify processing date is required.
+        if load_sources_tables:
 
-        fname_out = "crossmatch_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
-        crossmatch_sources_cmd = [python_cmd,
-                                  crossmatch_sources_code]
+            # Launch script to crossmatch sources and astroobjects database tables.
+            #
+            # Environment variable JOBPROCDATE to specify processing date is required.
 
-        exitcode_from_crossmatch_sources_cmd = util.execute_command(crossmatch_sources_cmd,fname_out)
+            fname_out = "crossmatch_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
+            crossmatch_sources_cmd = [python_cmd,
+                                      crossmatch_sources_code]
 
-        if exitcode_from_crossmatch_sources_cmd >= 64:
-            print(f"*** Error: {crossmatch_sources_cmd} returned exit code = {exitcode_from_crossmatch_sources_cmd}; quitting...")
-            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+            exitcode_from_crossmatch_sources_cmd = util.execute_command(crossmatch_sources_cmd,fname_out)
+
+            if exitcode_from_crossmatch_sources_cmd >= 64:
+                print(f"*** Error: {crossmatch_sources_cmd} returned exit code = {exitcode_from_crossmatch_sources_cmd}; quitting...")
+                finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
-        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("VPO Elapsed time in seconds after crossmatching Sources and AstroObjects database records =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("VPO Elapsed time in seconds after crossmatching Sources and AstroObjects database records =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+        else:
+            print("Skipping crossmatching Sources and AstroObjects database records (load_sources_tables = False)...")
 
 
         # Launch script to crossmatch xsources and xastroobjects database tables.
@@ -1255,27 +1272,32 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
-        # Launch script to compute statistics for astroobjects database tables.
-        #
-        # Environment variable JOBPROCDATE to specify processing date is required.
+        if load_sources_tables:
 
-        fname_out = "compute_statistics_for_astroobjects_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
-        compute_statistics_for_astroobjects_cmd = [python_cmd,
-                                                   compute_statistics_for_astroobjects_code]
+            # Launch script to compute statistics for astroobjects database tables.
+            #
+            # Environment variable JOBPROCDATE to specify processing date is required.
 
-        exitcode_from_compute_statistics_for_astroobjects_cmd = util.execute_command(compute_statistics_for_astroobjects_cmd,fname_out)
+            fname_out = "compute_statistics_for_astroobjects_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
+            compute_statistics_for_astroobjects_cmd = [python_cmd,
+                                                       compute_statistics_for_astroobjects_code]
 
-        if exitcode_from_compute_statistics_for_astroobjects_cmd >= 64:
-            print(f"*** Error: {compute_statistics_for_astroobjects_cmd} returned exit code = {exitcode_from_compute_statistics_for_astroobjects_cmd}; quitting...")
-            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+            exitcode_from_compute_statistics_for_astroobjects_cmd = util.execute_command(compute_statistics_for_astroobjects_cmd,fname_out)
+
+            if exitcode_from_compute_statistics_for_astroobjects_cmd >= 64:
+                print(f"*** Error: {compute_statistics_for_astroobjects_cmd} returned exit code = {exitcode_from_compute_statistics_for_astroobjects_cmd}; quitting...")
+                finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
-        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("VPO Elapsed time in seconds after computing statistics for AstroObjects database records =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("VPO Elapsed time in seconds after computing statistics for AstroObjects database records =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+        else:
+            print("Skipping computing statistics for AstroObjects database records (load_sources_tables = False)...")
 
 
         # Launch script to compute statistics for xastroobjects database tables.
@@ -1301,25 +1323,30 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
-        # Launch script to delete not-best Merges database records.
+        if load_sources_tables:
 
-        fname_out = "prune_notbest_merges_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
-        prune_notbest_merges_cmd = [python_cmd,
-                                    prune_notbest_merges_code]
+            # Launch script to delete not-best Merges database records.
 
-        exitcode_from_prune_notbest_merges_cmd = util.execute_command(prune_notbest_merges_cmd,fname_out)
+            fname_out = "prune_notbest_merges_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
+            prune_notbest_merges_cmd = [python_cmd,
+                                        prune_notbest_merges_code]
 
-        if exitcode_from_prune_notbest_merges_cmd >= 64:
-            print(f"*** Error: {prune_notbest_merges_cmd} returned exit code = {exitcode_from_prune_notbest_merges_cmd}; quitting...")
-            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+            exitcode_from_prune_notbest_merges_cmd = util.execute_command(prune_notbest_merges_cmd,fname_out)
+
+            if exitcode_from_prune_notbest_merges_cmd >= 64:
+                print(f"*** Error: {prune_notbest_merges_cmd} returned exit code = {exitcode_from_prune_notbest_merges_cmd}; quitting...")
+                finalize_procreqs_and_exit(dbh,reqid,-1,64)
 
 
-        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("VPO Elapsed time in seconds after deleting not-best Merges database records =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("VPO Elapsed time in seconds after deleting not-best Merges database records =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+        else:
+            print("Skipping deleting not-best Merges database records (load_sources_tables = False)...")
 
 
         # Launch script to delete not-best XMerges database records.
@@ -1343,30 +1370,35 @@ if __name__ == '__main__':
         start_time_benchmark = end_time_benchmark
 
 
-        # Launch script to produce alert packets for all difference images processed on this date.
-        # It only reads the database products populated by the preceding stages, so unlike them
-        # a failure here is reported but does not abort the processing request.
-        #
-        # Environment variable JOBPROCDATE to specify processing date is required.
+        if load_sources_tables:
 
-        fname_out = "produce_alerts_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
-        produce_alerts_cmd = [python_cmd,
-                              produce_alerts_code]
+            # Launch script to produce alert packets for all difference images processed on this date.
+            # It only reads the database products populated by the preceding stages, so unlike them
+            # a failure here is reported but does not abort the processing request.
+            #
+            # Environment variable JOBPROCDATE to specify processing date is required.
 
-        exitcode_from_produce_alerts_cmd = util.execute_command(produce_alerts_cmd,fname_out)
+            fname_out = "produce_alerts_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
+            produce_alerts_cmd = [python_cmd,
+                                  produce_alerts_code]
 
-        if exitcode_from_produce_alerts_cmd >= 64:
-            print(f"*** Error: {produce_alerts_cmd} returned exit code = {exitcode_from_produce_alerts_cmd}; continuing...")
-        elif exitcode_from_produce_alerts_cmd > 0:
-            print(f"*** Warning: {produce_alerts_cmd} returned exit code = {exitcode_from_produce_alerts_cmd}; continuing...")
+            exitcode_from_produce_alerts_cmd = util.execute_command(produce_alerts_cmd,fname_out)
+
+            if exitcode_from_produce_alerts_cmd >= 64:
+                print(f"*** Error: {produce_alerts_cmd} returned exit code = {exitcode_from_produce_alerts_cmd}; continuing...")
+            elif exitcode_from_produce_alerts_cmd > 0:
+                print(f"*** Warning: {produce_alerts_cmd} returned exit code = {exitcode_from_produce_alerts_cmd}; continuing...")
 
 
-        # Code-timing benchmark.
+            # Code-timing benchmark.
 
-        end_time_benchmark = time.time()
-        print("VPO Elapsed time in seconds after producing alerts =",
-            end_time_benchmark - start_time_benchmark)
-        start_time_benchmark = end_time_benchmark
+            end_time_benchmark = time.time()
+            print("VPO Elapsed time in seconds after producing alerts =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+        else:
+            print("Skipping producing alerts, which read the Sources tables (load_sources_tables = False)...")
 
 
         # Close out record in ProcReqs database table with status = 1.
