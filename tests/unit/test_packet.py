@@ -7,7 +7,8 @@ cutouts are (2 half width + 1) pixels square with off-chip pixels zero;
 a forced row a predecessor set holds is carried, not measured again,
 while a pair it lacks is measured; a difference image's neighbours are
 read under its own suffix, so a gzipped epoch gives the packets a plain
-one gives. An unreadable stamp image of the trigger's epoch fails the
+one gives, and each gzipped file is decompressed at most once per set,
+whichever reader asks and however often. An unreadable stamp image of the trigger's epoch fails the
 set, naming the file; the stamps are the trigger's alone, so a window
 epoch's unreadable reference image does not. The forced window is the images covering the triggers'
 objects, whichever field each image is centred on (the field rule,
@@ -231,6 +232,26 @@ def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):
             assert gzipped[sid][name] == record[name]
         assert [(f["psfFlux"], f["scienceFlux"]) for f in gzipped[sid]["prvDiaForcedSources"]] == [
             (f["psfFlux"], f["scienceFlux"]) for f in record["prvDiaForcedSources"]]
+
+
+def test_each_gzipped_file_is_decompressed_once_per_set(tmp_path, monkeypatch):
+    """Both readers and every role: the trigger's difference and science images feed forced and
+    the cutouts, and epoch 1's PSF is also every epoch's science PSF (a repeated request)."""
+    opened = []
+    init = gzip.GzipFile.__init__
+
+    def counting(self, filename=None, mode=None, *args, **kwargs):
+        fileobj = kwargs.get("fileobj") or (args[1] if len(args) > 1 else None)
+        if not (mode or getattr(fileobj, "mode", "rb")).startswith("w"):
+            opened.append(str(filename or fileobj.name))
+        init(self, filename, mode, *args, **kwargs)
+
+    monkeypatch.setattr(gzip.GzipFile, "__init__", counting)
+    build(tmp_path, reuse_first_epoch=False, gzipped=True)
+    roles = ["zogy_diffimage_masked", "zogy_diffimage_uncert_masked", "diffpsf",
+             "bkg_subbed_science_image"]
+    read = {f"e{e}/{role}.fits.gz" for e in (1, 2) for role in roles} | {f"e2/{REFERENCE_STAMP}.gz"}
+    assert sorted(str(tmp_path / name) for name in read) == sorted(opened)
 
 
 def _image(job: int, ra0: float, dec0: float, half: float = 0.06) -> dict:
