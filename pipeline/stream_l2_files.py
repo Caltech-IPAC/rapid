@@ -107,6 +107,14 @@ def remove_already_downloaded(l2_filenames, ingest_bucket):
     to_transfer = sorted(set(l2_filenames) - existing)
     return to_transfer
 
+def guided(tbdata, colname):
+    n_unguided = np.char.startswith(tbdata['guide_star_id'], "PGS").sum()
+    n_guided = len(tbdata) - n_unguided
+    if n_guided >=3:
+        return True
+    else:
+        return False
+
 
 start = datetime.datetime.now()
 
@@ -129,7 +137,7 @@ missions.login(token=token)
 # is not in this list, but will still be returned.
 col_list = ['ra', 'dec', 'program', 'execution_plan', 'pass', 'segment', 'visit', 'observation',
             'optical_element', 'exposure_type', 'instrument_name', 'detector', 'productLevel',
-            'product_type', 'exposure_time', 'exposure_start_time', 'exposure_end_time', 'fileSetName']
+            'product_type', 'exposure_time', 'exposure_start_time', 'exposure_end_time', 'fileSetName','guide_star_id']
 
 # Create a dictionary of search criteria
 search = {'program': program,
@@ -138,18 +146,13 @@ if roman_filter is not None:
     search['optical_element']=roman_filter
 else:
     search['optical_element'] = ['!GRISM', '!PRISM']
-if detector is not None:
-    search['detector']=f"WFI{detector:02d}"
 if pass_num is not None:
     search['pass'] = pass_num
 if segment is not None:
     search['segment'] = segment
 if visit is not None:
     search['visit'] = visit
-if unguided==False:
-    search['guide_star_id']=['!PGS0100001','!PGS0200001','!PGS0300001','!PGS0400001','!PGS0500001','!PGS0600001','!PGS0700001',
-                            '!PGS0800001','!PGS0900001','!PGS1000001','!PGS1100001','!PGS1200001','!PGS1300001','!PGS1400001',
-                            '!PGS1500001','!PGS1600001', '!PGS1700001', '!PGS1800001']
+
 if mjdmin is not None:
     search['exposure_start_time']=f">{Time(mjdmin, format='mjd').fits}"
 if mjdmax is not None:
@@ -166,7 +169,18 @@ results = missions.query_criteria(
 
 # Build L2 filenames directly from the dataset IDs instead of fetching every product
 # from MAST; assumes each Roman L2 file is named <fileSetName>_cal.asdf
+if unguided is False:
+    # Group all SCAs in an exposure together
+    exp_grouped_results = results.group_by('exposure_start_time')
+
+    #Choose only exposures with at least 3 detectors with real guide stars
+    results = exp_grouped_results.groups.filter(guided)
+
+if detector is not None:
+    results = results[results['detector']==f"WFI{detector:02d}"]
+
 filesets = np.unique(results['fileSetName'])
+
 l2_filenames = [f"{fs}_cal.asdf" for fs in filesets]
 print(f"{len(l2_filenames)} identified")
 
