@@ -344,7 +344,9 @@ first delete their Merges_<field> and XMerges_<field> records, which they find t
 XSources records; ``pipeline/pruneNotBestSources.py`` and ``pruneNotBestXSources.py`` then delete the
 Sources and XSources records themselves.  Each script vacuums and analyzes the tables it deleted records
 from, and drops those left empty (a dropped Sources or XSources child table is recreated by the loader
-when it is needed again).
+when it is needed again).  The Sources and XSources pruning instead reclusters a child table that lost
+at least ``[DATABASE_PRUNING] recluster_deleted_fraction`` of its records, which compacts it; the
+tables are otherwise clustered on their sky-position index by the loading and cross-matching stages.
 
 The Sources and XSources database tables have the ``rb`` float column for storing real-bogus scores,
 computed by the RuBR-AT Machine-Learning classifier, which is optimized for Roman WFI data.

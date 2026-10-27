@@ -19,7 +19,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "pruneNotBestSources.py"
-swvers = "1.1"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -112,6 +112,15 @@ product_config_filename_base = config_input['JOB_PARAMS']['product_config_filena
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
+
+
+# A child table that loses at least this fraction of its records is reclustered on its sky-position
+# index (CLUSTER rewrites it compactly, in order); otherwise it is only vacuumed and analyzed, which
+# leaves the space of the deleted records in the table file.
+
+recluster_deleted_fraction = config_input.getfloat('DATABASE_PRUNING','recluster_deleted_fraction',fallback=0.2)
+
+print("recluster_deleted_fraction =",recluster_deleted_fraction)
 
 
 # Number of parallel worker processes: environment variable NUM_CORES if set, otherwise all
@@ -268,7 +277,9 @@ def run_single_core_job(work_items,index_thread):
     Returns
     -------
     ndeleted_by_table : dict
-        Number of records deleted, keyed by child-table name.
+        (number of records deleted, number of records before the delete), keyed by child-table
+        name.  The number before is the planner's estimate (pg_class.reltuples, kept current by
+        the ANALYZE of the loading stage), or an exact count if the table was never analyzed.
     '''
 
 
@@ -327,14 +338,23 @@ def run_single_core_job(work_items,index_thread):
             query = f"WITH deleted AS (DELETE FROM {sources_tablename} " +\
                     f"WHERE pid IN ({pids_str}) RETURNING 1) SELECT count(*) FROM deleted;"
 
-        fh.write(f"Deleting not-best records in {sources_tablename} database table...\n")
+        query_nrows = f"SELECT reltuples FROM pg_class WHERE oid = 'public.{sources_tablename}'::regclass;"
+        records = execute_or_raise(dbh,[query_nrows],thread_debug,fh,f"row-count estimate of {sources_tablename}")
+        nrows_before = int(records[0][0])
+
+        if nrows_before < 0:
+            records = execute_or_raise(dbh,[f"SELECT count(*) FROM {sources_tablename};"],thread_debug,fh,
+                                       f"row count of {sources_tablename}")
+            nrows_before = int(records[0][0])
+
+        fh.write(f"Deleting not-best records in {sources_tablename} database table ({nrows_before} records)...\n")
         fh.flush()
 
         records = execute_or_raise(dbh,[query],thread_debug,fh,
                                    f"delete of not-best records from {sources_tablename}")
 
         ndeleted = int(records[0][0])
-        ndeleted_by_table[sources_tablename] = ndeleted
+        ndeleted_by_table[sources_tablename] = (ndeleted,nrows_before)
 
 
         # Code-timing benchmark.
@@ -384,7 +404,8 @@ def execute_parallel_processes(work_items,num_cores=None):
     Returns
     -------
     ndeleted_by_table : dict
-        Number of records deleted, keyed by child-table name.
+        (number of records deleted, number of records before the delete), keyed by child-table
+        name (see run_single_core_job).
     '''
 
     if num_cores is None:
@@ -533,12 +554,15 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Vacuum and analyze the Sources child tables that records were deleted from.  Drop a table
-    # left empty.
+    # Vacuum and analyze the Sources child tables that records were deleted from, or recluster
+    # those that lost at least recluster_deleted_fraction of their records.  Drop a table left empty.
 
-    for tablename,ndeleted in sorted(ndeleted_by_table.items()):
+    for tablename,(ndeleted,nrows_before) in sorted(ndeleted_by_table.items()):
 
-        print(f"Deleted {ndeleted} not-best record(s) from {tablename} database table")
+        deleted_fraction = ndeleted / nrows_before if nrows_before > 0 else 1.0
+
+        print(f"Deleted {ndeleted} not-best record(s) from {tablename} database table " +
+              f"(about {nrows_before} before, fraction {deleted_fraction:.3f})")
 
         if ndeleted == 0:
             continue
@@ -552,6 +576,22 @@ if __name__ == '__main__':
             print(f"Dropping {tablename} database table...")
             execute_or_raise(dbh,[f"DROP TABLE {tablename};"],debug,
                              None,f"drop of {tablename}")
+        elif deleted_fraction >= recluster_deleted_fraction:
+
+            indexname = f"{tablename}_radec_idx"
+
+            records = execute_or_raise(dbh,[f"SELECT to_regclass('public.{indexname}') IS NOT NULL;"],debug,
+                                       None,f"existence check for {indexname}")
+
+            if records[0][0]:
+                print(f"Reclustering and analyzing {tablename} database table...")
+                execute_or_raise(dbh,[f"CLUSTER {tablename} USING {indexname};",f"ANALYZE {tablename};"],debug,
+                                 None,f"recluster of {tablename}")
+            else:
+                print(f"*** Warning: {indexname} does not exist, so {tablename} cannot be reclustered; " +
+                      "vacuuming and analyzing it instead...")
+                dbh.vacuum_analyze_table(tablename)
+
         else:
             print(f"Vacuuming and analyzing {tablename} database table...")
             dbh.vacuum_analyze_table(tablename)
@@ -560,7 +600,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to vacuum and analyze the Sources child tables =",
+    print("Elapsed time in seconds to vacuum, analyze or recluster the Sources child tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 

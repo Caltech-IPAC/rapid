@@ -340,12 +340,14 @@ log file in the working directory named after the stage, the processing date and
        images.
    * - 18
      - ``pruneNotBestSources.py``
-     - Deletes ``Sources`` child-table records of no-longer-best difference images, and drops
-       child tables left empty.
+     - Deletes ``Sources`` child-table records of no-longer-best difference images, drops
+       child tables left empty, and reclusters those that lost a large share of their records
+       (``[DATABASE_PRUNING] recluster_deleted_fraction``).
    * - 19
      - ``pruneNotBestXSources.py``
-     - Deletes ``XSources`` child-table records of no-longer-best difference images, and drops
-       child tables left empty.
+     - Deletes ``XSources`` child-table records of no-longer-best difference images, drops
+       child tables left empty, and reclusters those that lost a large share of their records
+       (``[DATABASE_PRUNING] recluster_deleted_fraction``).
    * - 20
      - ``produceAlertsForProcDate.py``
      - Produces alert packets for the difference images processed on this date.
