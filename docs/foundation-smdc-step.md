@@ -286,6 +286,7 @@ regression). A row whose finding a later row superseded says so.
 | window-gunzip | each gzipped window file is decompressed once per packet job, to a plain file beside its staged copy that forced and the cutouts both read (the trigger's difference and science images were read twice); on `rapid-rebuild:89` (m6a) the null epoch's packet job 18.18 → 15.27 s against run 142's, 181 packets, core and ring equal, packet content equal but for processing time and row ids | 143 | PR 476 |
 | port-schema-07 | the packets are alert schema 00.07 (`rapid.v00_07`, dev 883e3876), the eight Roman observation identifiers and `survey` filled from the official `exposures` row intake writes and `surveys`, `reliability`, `reliabilityThreshold` and `reliabilityVersion` null; `exposureTime`, null on every packet before (the join keyed `exposures` by the difference job), filled; schema statement `database/2026-10-26-exposure-identifiers.sql` (eight nullable columns, no backfill) applied 2026-10-26 21:17 UTC; on `rapid-rebuild:90` (m6a) the null epoch's 181 packets carry all eight identifiers, `survey` SOCSIMS, reliability null, core and ring equal to run 143 | 144 | PR 481; rapid_docs 136 |
 | sfft-default | the published differencer is SFFT with dev's prefilter, `[difference] diff_flavor` shipped `sfft` (PR 485 re-landed as 490 on Ben's acceptance of run 146, 2026-10-26 23:27 UTC); injected passes 4 to 6: 533 against ZOGY's 546 of 600, false positives per epoch 102.7 (119) against 213.3 (233); on `rapid-rebuild:93` (`0b7492fc`, `sha256:ed1dc64e…`, production `:84`) the null epoch's 86 packets, core +0.000445, ring −0.007365, against run 145's 86, +0.000463, −0.007423 (each run's reference built by its loop: rfid 90113 against 90110, both 3 frames, cov5percent 11.58) | 145, 146, 151 | PRs 485, 486, 490; rapid_docs 139 |
+| rb-port | dev's RuBR-AT real/bogus score (`compute_rb`, model `2026-10-06_canonical9_seed42`) on every SFFT candidate, computed in the difference job by a sidecar venv holding TensorFlow 2.20.0 and Keras 3.14.1 (temporary; the pipeline env unchanged), loaded as `sources.rb` and `rblabel`, nothing cut on it; parity with dev's own code on 20 candidates: max score difference 0.0, labels equal; schema statement `database/2026-10-27-real-bogus.sql` (two nullable columns, no backfill) applied 2026-10-27 02:11 UTC; on `rapid-rebuild:94` (`cb4ba528`, `sha256:e582cd19…`, production `:85`) injected epoch 4040101: 155 of 266 packets scored (run 146: 0 of 268), each equal to its `sources.rb`, threshold 0.5134, version `2026-10-06_canonical9_seed42`; 111 unscored (a NaN, a DQ-masked pixel, in the 64 px difference window, dev's rule); packet purity 0.64 (171 of 266) → 0.99 (99 of 100) at the threshold, detected 180 → 99 of 200; detected and false positives 180 / 95 against run 146's 180 / 97 | 152 | PRs 493; rapid_docs 140 |
 
 ## Current procedure
 
@@ -426,7 +427,15 @@ detected per magnitude bin and false positives per epoch, by
 
 **Settings in force.** The published catalog is SFFT's, through dev's
 prefilter, unless a run sets `difference.diff_flavor="zogy"`; ZOGY's
-catalogs are under every difference job's `diff/` either way. A flight overlay sets
+catalogs are under every difference job's `diff/` either way. Under SFFT
+the difference job scores every candidate with dev's RuBR-AT model
+(`[difference.rubrat]`), fetched from the bucket the SSM parameter
+`model_bucket_parameter` names under `model_key` (the `[kafka]` venue,
+no per-run `--set`; a run's `difference.rubrat.model_prefix` wins) and
+checked against its `SHA256SUMS`; `sources.rb` and `rblabel` hold it,
+the packet's three reliability fields carry it. SMDC's
+`sources_official` view predates the two columns: read them from
+`sources`. A flight overlay sets
 `[intake] gaia_proper_motion = true`; the SOC simulations leave it off.
 The loop plans a field's reference from the rows before the bound whose
 `overlapfields` list it; the live runs' references built before PR 450
