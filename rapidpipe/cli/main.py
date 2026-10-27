@@ -59,7 +59,10 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``publish --run [--settings FILE]`` produces the run's official packet
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
-  counts; a producer error exits non-zero with the set unstamped.
+  counts; a producer error exits non-zero with the set unstamped;
+- ``outage-probe --window --until [--scenario]`` meets the database
+  maintenance bracket with one probe scenario (``rapidpipe.cli.outage_probe``,
+  temporary: two windows, then deleted).
 
 A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
@@ -94,6 +97,7 @@ import psycopg2
 from rapidpipe import __version__
 from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
+from rapidpipe.cli import outage_probe
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
 from rapidpipe.products import storage
@@ -248,6 +252,21 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--once", action="store_true",
                              help="Run one pass and exit: 0, or 1 when a job of the run failed or was "
                                   "refused its binding; 64 when the first pass admits nothing.")
+
+    probe_parser = subparsers.add_parser(
+        "outage-probe", help="Meet the database maintenance bracket with one probe scenario.",
+        description="Run one scenario (0 fresh-login, 1 idle-connection, 2 in-flight) through the "
+                    "database client until --until, one JSON line per step, and write its timeline "
+                    "under RAPIDPIPE_OUTPUTS_ROOT/outage-probe/<window>/ (rapidpipe.cli.outage_probe).")
+    probe_parser.add_argument("--window", required=True, help="The window's date, YYYY-MM-DD: the product's identity.")
+    probe_parser.add_argument("--until", required=True, help="When to stop, ISO 8601 UTC, e.g. 2026-10-29T16:15:00Z.")
+    probe_parser.add_argument("--scenario", type=int, choices=(0, 1, 2),
+                              help="The scenario (default AWS_BATCH_JOB_ARRAY_INDEX).")
+    probe_parser.add_argument("--interval", type=float, default=5.0, help="Seconds between steps (default 5).")
+    probe_parser.add_argument("--hold", type=float, default=3.0,
+                              help="Seconds each in-flight transaction holds, at most 30 (default 3).")
+    probe_parser.add_argument("--stall", type=float, default=2.0,
+                              help="Seconds beyond a step's own work that count as a disturbance (default 2).")
 
     return parser
 
@@ -543,6 +562,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command in ("run", "job", "official", "publish", "loop"):
             return _foundation_command(args)
+        if args.command == "outage-probe":
+            return outage_probe.command(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary
         code = exit_code(exc)
         if isinstance(exc, CommandExit):
