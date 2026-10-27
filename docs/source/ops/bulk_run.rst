@@ -71,6 +71,12 @@ Follow the stages in order and do not omit any, since each relies on all the pre
      - ``pruneNotBestXMerges.py``
      - Deletes ``XMerges_<field>`` records of no-longer-best difference images.
    * - 18
+     - ``pruneNotBestSources.py``
+     - Deletes ``Sources`` child-table records of no-longer-best difference images.
+   * - 19
+     - ``pruneNotBestXSources.py``
+     - Deletes ``XSources`` child-table records of no-longer-best difference images.
+   * - 20
      - ``produceAlertsForProcDate.py``
      - Produces alert packets for the difference images processed on the processing date.
 
@@ -166,14 +172,14 @@ observation range whose request finished with ``status = 1``, so set that only i
 should treat the range as done (see :doc:`vpo`).
 
 ``NUM_CORES`` optionally sets the number of parallel processes of stages 1, 3, 4, 6 and 10 to
-18, for example:
+20, for example:
 
 .. code-block::
 
    export NUM_CORES=8
 
 If it is unset, each of these stages uses all the cores of the machine (``os.cpu_count()``).  It
-must be an integer: stages 1, 3, 4 and 6 quit with exit code 64 otherwise, and stages 10 to 18
+must be an integer: stages 1, 3, 4 and 6 quit with exit code 64 otherwise, and stages 10 to 20
 quit with a Python ``ValueError``.  Stages 7 and 9 also run in parallel, but ignore
 ``NUM_CORES`` and always use all the cores.  Set it lower to leave cores free for other work on
 the machine, or to limit the number of simultaneous database connections of the stages that
@@ -292,8 +298,8 @@ Stage 9: register post-processing pipelines
    python3.11 /code/pipeline/parallelRegisterCompletedJobsInDBAfterPostProc.py 20261015 >& register_postproc_pipeline_jobs_20261015.out
 
 
-Stages 10 to 18: database post-processing and alerts
-=======================================================
+Stages 10 to 20: database post-processing and alerts
+====================================================
 
 These take no command-line arguments; they work on the jobs of the processing date
 ``JOBPROCDATE`` and the processing request ``PROCREQ``.  The cross-matching stages (12
@@ -315,15 +321,17 @@ exit with code 0 without cross-matching anything if no exposure is in the range.
    python3.11 /code/pipeline/computeStatisticsForXAstroObjects.py >& computeStatisticsForXAstroObjects_20261015.out
    python3.11 /code/pipeline/pruneNotBestMerges.py >& pruneNotBestMerges_20261015.out
    python3.11 /code/pipeline/pruneNotBestXMerges.py >& pruneNotBestXMerges_20261015.out
+   python3.11 /code/pipeline/pruneNotBestSources.py >& pruneNotBestSources_20261015.out
+   python3.11 /code/pipeline/pruneNotBestXSources.py >& pruneNotBestXSources_20261015.out
    python3.11 /code/pipeline/produceAlertsForProcDate.py >& produceAlertsForProcDate_20261015.out
 
 Run them one at a time, each after the previous one has finished; check that each exits with
 code 0 (``echo $?``) before starting the next, since an exit code of 64 or higher is an error.
-Alert production (stage 18) only reads what the previous stages wrote, so it can be rerun on
+Alert production (stage 20) only reads what the previous stages wrote, so it can be rerun on
 its own.  To match a VPO run with ``[VPO_SETTINGS] load_sources_tables = False`` (see
 :doc:`vpo`), leave out the Sources stages (``loadPSFCatIntoDBSourcesTable.py``,
-``crossMatchSources.py``, ``computeStatisticsForAstroObjects.py`` and ``pruneNotBestMerges.py``)
-and alert production, which reads their tables.
+``crossMatchSources.py``, ``computeStatisticsForAstroObjects.py``, ``pruneNotBestMerges.py`` and
+``pruneNotBestSources.py``) and alert production, which reads their tables.
 
 The loading stages (10 and 11) prefilter the records they load, by ``sumrat``, the real/bogus
 score and, for XSources, the aperture SNR (``[DATABASE_PREFILTER]`` of the configuration file;
@@ -331,7 +339,7 @@ see :ref:`database prefilter <db-prefilter>`).  The loading stages also accept
 ``SKIPLOADING`` and ``DONTCHECKDONEFILE``, and alert production ``ALERTSMAXCHIPS`` and
 ``DONOTUPLOADPRODUCTS``, for testing; leave them unset for a normal run.
 
-The pruning stages (16 and 17) delete the ``Merges``/``XMerges`` records of sources whose
+The pruning stages 16 and 17 delete the ``Merges``/``XMerges`` records of sources whose
 difference image is no longer best.  By default they consider only the difference images of
 the request's own ``rid`` values that were superseded (``vbest = 0``), which is what reprocessing
 in the request does, and they finish at once if there are none.  ``PRUNEFULLSCAN=True`` instead
@@ -354,6 +362,14 @@ failed run of the same request is dropped when the stage starts.  While a prunin
    select relname from pg_class where relname like 'notbest_%';
 
 lists the table; it should be gone afterwards.
+
+The pruning stages 18 and 19 then delete the not-best records themselves from the request's
+``Sources`` and ``XSources`` child tables, after stages 16 and 17 have used them to find the
+not-best ``Merges``/``XMerges`` records.  They select the same way, by the request's own
+superseded difference images unless ``PRUNEFULLSCAN=True``, delete through the ``pid`` index of
+each child table, vacuum only the tables they deleted records from, and drop the ones left empty
+(a later loading stage recreates a dropped child table when it is needed again).  They exit with
+code 7 if the request has no child tables.
 
 
 Performance

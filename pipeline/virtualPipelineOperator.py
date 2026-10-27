@@ -22,7 +22,7 @@ import database.modules.utils.rapid_db as db
 
 
 swname = "virtualPipelineOperator.py"
-swvers = "1.12"
+swvers = "1.13"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -41,6 +41,8 @@ compute_statistics_for_astroobjects_code = '/code/pipeline/computeStatisticsForA
 compute_statistics_for_xastroobjects_code = '/code/pipeline/computeStatisticsForXAstroObjects.py'
 prune_notbest_merges_code = '/code/pipeline/pruneNotBestMerges.py'
 prune_notbest_xmerges_code = '/code/pipeline/pruneNotBestXMerges.py'
+prune_notbest_sources_code = '/code/pipeline/pruneNotBestSources.py'
+prune_notbest_xsources_code = '/code/pipeline/pruneNotBestXSources.py'
 produce_alerts_code = '/code/pipeline/produceAlertsForProcDate.py'
 launch_reference_image_pipelines_code = '/code/pipeline/launchBunchOfReferenceImagePipelines.py'
 # Python script /code/pipeline/parallelRegisterCompletedJobsInDB.py is dual purposed to
@@ -244,6 +246,8 @@ print("launch_science_pipelines_code =", launch_science_pipelines_code)
 print("register_science_pipeline_jobs_code =", register_science_pipeline_jobs_code)
 print("launch_postproc_pipelines_code =", launch_postproc_pipelines_code)
 print("register_postproc_pipeline_jobs_code =", register_postproc_pipeline_jobs_code)
+print("prune_notbest_sources_code =", prune_notbest_sources_code)
+print("prune_notbest_xsources_code =", prune_notbest_xsources_code)
 print("produce_alerts_code =", produce_alerts_code)
 
 
@@ -1366,6 +1370,55 @@ if __name__ == '__main__':
 
         end_time_benchmark = time.time()
         print("VPO Elapsed time in seconds after deleting not-best XMerges database records =",
+            end_time_benchmark - start_time_benchmark)
+        start_time_benchmark = end_time_benchmark
+
+
+        if load_sources_tables:
+
+            # Launch script to delete not-best Sources database records (after not-best Merges
+            # database records, which are found through them).
+
+            fname_out = "prune_notbest_sources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
+            prune_notbest_sources_cmd = [python_cmd,
+                                         prune_notbest_sources_code]
+
+            exitcode_from_prune_notbest_sources_cmd = util.execute_command(prune_notbest_sources_cmd,fname_out)
+
+            if exitcode_from_prune_notbest_sources_cmd >= 64:
+                print(f"*** Error: {prune_notbest_sources_cmd} returned exit code = {exitcode_from_prune_notbest_sources_cmd}; quitting...")
+                finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+            # Code-timing benchmark.
+
+            end_time_benchmark = time.time()
+            print("VPO Elapsed time in seconds after deleting not-best Sources database records =",
+                end_time_benchmark - start_time_benchmark)
+            start_time_benchmark = end_time_benchmark
+
+        else:
+            print("Skipping deleting not-best Sources database records (load_sources_tables = False)...")
+
+
+        # Launch script to delete not-best XSources database records (after not-best XMerges
+        # database records, which are found through them).
+
+        fname_out = "prune_notbest_xsources_code" + "_" + proc_date + "_req" + str(reqid) + ".out"
+        prune_notbest_xsources_cmd = [python_cmd,
+                                      prune_notbest_xsources_code]
+
+        exitcode_from_prune_notbest_xsources_cmd = util.execute_command(prune_notbest_xsources_cmd,fname_out)
+
+        if exitcode_from_prune_notbest_xsources_cmd >= 64:
+            print(f"*** Error: {prune_notbest_xsources_cmd} returned exit code = {exitcode_from_prune_notbest_xsources_cmd}; quitting...")
+            finalize_procreqs_and_exit(dbh,reqid,-1,64)
+
+
+        # Code-timing benchmark.
+
+        end_time_benchmark = time.time()
+        print("VPO Elapsed time in seconds after deleting not-best XSources database records =",
             end_time_benchmark - start_time_benchmark)
         start_time_benchmark = end_time_benchmark
 
