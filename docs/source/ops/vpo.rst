@@ -141,7 +141,7 @@ The database connection is taken from the usual ``DBNAME``, ``DBSERVER``, ``DBPO
 ``DBUSER`` and ``DBPASS`` variables.
 
 ``NUM_CORES`` is optional and is not read by the VPO itself, but the codes it launches inherit
-it.  It sets the number of parallel processes of stages 1, 3, 4, 6 and 10 to 18 (see
+it.  It sets the number of parallel processes of stages 1, 3, 4, 6 and 10 to 20 (see
 `Stages`_); if it is unset, each of them uses all the cores of the machine
 (``os.cpu_count()``).  Stages 7 and 9 ignore it and always use all the cores.  It must be an
 integer: otherwise stage 1 quits with exit code 64, which fails the processing request (see
@@ -339,17 +339,25 @@ log file in the working directory named after the stage, the processing date and
      - Deletes ``XMerges_<field>`` records for xsources from no-longer-best difference
        images.
    * - 18
+     - ``pruneNotBestSources.py``
+     - Deletes ``Sources`` child-table records of no-longer-best difference images, and drops
+       child tables left empty.
+   * - 19
+     - ``pruneNotBestXSources.py``
+     - Deletes ``XSources`` child-table records of no-longer-best difference images, and drops
+       child tables left empty.
+   * - 20
      - ``produceAlertsForProcDate.py``
      - Produces alert packets for the difference images processed on this date.
 
-Stages 10 through 17 pair up: each Sources stage has an XSources counterpart that does the
-same thing for the SExtractor catalogs.  Alert production (stage 18) currently covers
+Stages 10 through 19 pair up: each Sources stage has an XSources counterpart that does the
+same thing for the SExtractor catalogs.  Alert production (stage 20) currently covers
 Sources only.
 
 With ``[VPO_SETTINGS] load_sources_tables = False``, the VPO skips the Sources stages (10, 12,
-14 and 16), so the ``Sources``, ``Merges_<field>``, ``AstroObjects_<field>`` and
-``AstroObjectsMeta_<field>`` tables are not loaded, and it also skips alert production (18),
-which reads them.  The XSources stages (11, 13, 15 and 17) always run.  Each skipped stage
+14, 16 and 18), so the ``Sources``, ``Merges_<field>``, ``AstroObjects_<field>`` and
+``AstroObjectsMeta_<field>`` tables are not loaded, and it also skips alert production (20),
+which reads them.  The XSources stages (11, 13, 15, 17 and 19) always run.  Each skipped stage
 is noted in the VPO's log (``Skipping ... (load_sources_tables = False)...``) and has no
 log file of its own.
 
@@ -475,7 +483,7 @@ so two processing requests for the same processing date do not overwrite each ot
 files.  See :doc:`../prod/products` for the product layout.
 
 The launch stages record the ``reqid`` in the ``reqid`` column of each ``Jobs`` record they
-create or relaunch.  The later stages (the waits, the registrations, and stages 7 and 10 to 18)
+create or relaunch.  The later stages (the waits, the registrations, and stages 7 and 10 to 20)
 select only the ``Jobs`` records with that ``reqid``, so a processing request does not register,
 post-process, load, cross-match or alert on the jobs of another request for the same processing
 date.  They select by ``reqid`` alone, not by the day a job was launched or ended, so a request
@@ -511,10 +519,10 @@ Error handling
 ************************************
 
 Every stage is checked for its exit code.  An exit code of 64 or higher from any stage in
-1 through 17 is fatal: the VPO closes out the ``ProcReqs`` record with ``status = -1`` and
+1 through 19 is fatal: the VPO closes out the ``ProcReqs`` record with ``status = -1`` and
 exits with code 64, leaving the remaining stages unrun.
 
-Alert production (stage 18) is the exception.  It only reads database products populated by
+Alert production (stage 20) is the exception.  It only reads database products populated by
 the preceding stages, so a failure there is reported but does not abort the processing
 request, and the ``ProcReqs`` record is still closed out with ``status = 1``.
 
