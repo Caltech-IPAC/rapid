@@ -36,6 +36,9 @@ from tests.db.foundation_helpers import write_attempt
 from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, write_refcat
 
 SURVEY, DATASET, FIELD = "S", "D", 4658155
+#: The run's settings body: the packet table, and the real/bogus model whose version it stamps.
+RUN_SETTINGS = {"packet": {**SETTINGS, "rb_threshold": 0.5134, "rb_version": ""},
+                "difference": {"rubrat": {"model_prefix": "", "model_key": "rubrat/m-1"}}}
 IMAGE_KEY = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 8}
 OBJECT_KEY = {"dataset": DATASET, "survey": SURVEY, "field": FIELD}
 #: An exposures row's Roman observation identifiers, by column.
@@ -85,9 +88,9 @@ def image_rows(directory) -> dict[str, list[dict]]:
 
 def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_id: int = -1):
     """A live run's packet job over one imported epoch, and the import, stray and exposure jobs."""
-    live = create_run(conn, "tester", "live", "abc123", {"packet": SETTINGS}, SURVEY, DATASET)
+    live = create_run(conn, "tester", "live", "abc123", RUN_SETTINGS, SURVEY, DATASET)
     other = create_run(conn, "tester", "a recipe that is not live", "def456",
-                       {"packet": SETTINGS}, SURVEY, DATASET)
+                       RUN_SETTINGS, SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": live}}], "tester", "live")
     write_epoch(tmp_path / "e1", [(50, 50, 400.0)])
     gaia = tmp_path / "gaia.parquet"  # an empty Gaia product: no matches, not the contract here
