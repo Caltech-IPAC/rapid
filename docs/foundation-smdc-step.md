@@ -287,6 +287,7 @@ regression). A row whose finding a later row superseded says so.
 | port-schema-07 | the packets are alert schema 00.07 (`rapid.v00_07`, dev 883e3876), the eight Roman observation identifiers and `survey` filled from the official `exposures` row intake writes and `surveys`, `reliability`, `reliabilityThreshold` and `reliabilityVersion` null; `exposureTime`, null on every packet before (the join keyed `exposures` by the difference job), filled; schema statement `database/2026-10-26-exposure-identifiers.sql` (eight nullable columns, no backfill) applied 2026-10-26 21:17 UTC; on `rapid-rebuild:90` (m6a) the null epoch's 181 packets carry all eight identifiers, `survey` SOCSIMS, reliability null, core and ring equal to run 143 | 144 | PR 481; rapid_docs 136 |
 | sfft-default | the published differencer is SFFT with dev's prefilter, `[difference] diff_flavor` shipped `sfft` (PR 485 re-landed as 490 on Ben's acceptance of run 146, 2026-10-26 23:27 UTC); injected passes 4 to 6: 533 against ZOGY's 546 of 600, false positives per epoch 102.7 (119) against 213.3 (233); on `rapid-rebuild:93` (`0b7492fc`, `sha256:ed1dc64e…`, production `:84`) the null epoch's 86 packets, core +0.000445, ring −0.007365, against run 145's 86, +0.000463, −0.007423 (each run's reference built by its loop: rfid 90113 against 90110, both 3 frames, cov5percent 11.58) | 145, 146, 151 | PRs 485, 486, 490; rapid_docs 139 |
 | rb-port | dev's RuBR-AT real/bogus score (`compute_rb`, model `2026-10-06_canonical9_seed42`) on every SFFT candidate, computed in the difference job by a sidecar venv holding TensorFlow 2.20.0 and Keras 3.14.1 (temporary; the pipeline env unchanged), loaded as `sources.rb` and `rblabel`, nothing cut on it; parity with dev's own code on 20 candidates: max score difference 0.0, labels equal; schema statement `database/2026-10-27-real-bogus.sql` (two nullable columns, no backfill) applied 2026-10-27 02:11 UTC; on `rapid-rebuild:94` (`cb4ba528`, `sha256:e582cd19…`, production `:85`) injected epoch 4040101: 155 of 266 packets scored (run 146: 0 of 268), each equal to its `sources.rb`, threshold 0.5134, version `2026-10-06_canonical9_seed42`; 111 unscored (a NaN, a DQ-masked pixel, in the 64 px difference window, dev's rule); packet purity 0.64 (171 of 266) → 0.99 (99 of 100) at the threshold, detected 180 → 99 of 200; detected and false positives 180 / 95 against run 146's 180 / 97 | 152 | PRs 493; rapid_docs 140 |
+| sfft-block-base | dev's OpenUniverse `[difference.sfft]` block (cross-convolution, segmentation, gain-match catalogs, bsmask 50 / 100) is the base's and the HLWAS overlay drops it, HLWAS's resolved settings byte-identical (PR 495); on `rapid-rebuild:95` (`776bdc3b`, `sha256:c9c4ecfd…`, production `:86`), one epoch each, no `diff_flavor` override: HLWAS null 4040101 86 packets, core +0.000463, ring −0.007423, 293 / 293 candidates / kept against run 151's 86, +0.000445, −0.007365, 291 / 291 (rfid 90119 against 90113; run 145's rfid 90110 read 293 / 293, +0.000463, −0.007423, to the digit run 153's; cause of the spread unassigned); OpenUniverse 28737 detected 4 of 56, false positives 496, core −0.0057, ring −0.0005, candidates 1,300 against run 125's (ZOGY) 4 of 56, 493, −0.0202, +0.0136, 2,593; flight 1049 e4 core +0.0097, ring −0.0122, usable 0.781, 324 packets, difference 866 s against run 126's +0.0013, −0.0050, 0.781, 328, 222 s; the gate at `min_epochs` sends OpenUniverse's set under both and holds flight's under both on usable; GBTDS gb3 (epochs 2014201 and 2171201, run 157) and RimTimSim F213 4571 (run 156) fail every difference job, SFFT's kernel solve `Singular matrix`, exit 70, after about 60 and 33 minutes in SFFT (science frames of 144,464 and 82,866 SExtractor sources); RimTimSim's second attempt failed the same, after 52 minutes; no overlay pinned: OpenUniverse's SFFT set sends, and flight's, GBTDS's and RimTimSim's ZOGY rows (126, 139, 124) are held themselves; what GBTDS and RimTimSim publish is Ben's open ruling | 153, 154, 155, 156, 157 | PRs 495; rapid_docs 141 |
 
 ## Current procedure
 
@@ -364,7 +365,8 @@ PR 465's `ring_count` regression. Nor on `rapid-rebuild:91`
 (`rapid-rebuild-production:82`, PR 485 before its revert by PR 486) or
 `rapid-rebuild:92` (`rapid-rebuild-production:83`, ZOGY by default):
 `rapid-rebuild:93` (`rapid-rebuild-production:84`, `0b7492fc`, PR 490)
-publishes the SFFT default and supersedes both.
+publishes the SFFT default and supersedes both; `rapid-rebuild:95`
+(`rapid-rebuild-production:86`, `776bdc3b`, PR 495) is the newest.
 
 **A run.** One dataset name and one live run per proof; a run's bindings
 are its dataset's alone; two loops never run under one run at once. The
@@ -435,7 +437,13 @@ no per-run `--set`; a run's `difference.rubrat.model_prefix` wins) and
 checked against its `SHA256SUMS`; `sources.rb` and `rblabel` hold it,
 the packet's three reliability fields carry it. SMDC's
 `sources_official` view predates the two columns: read them from
-`sources`. A flight overlay sets
+`sources`. SFFT runs under dev's OpenUniverse `[difference.sfft]` block
+(cross-convolution, segmentation, gain-match catalogs, bsmask 50 / 100)
+for every dataset, the base's since sfft-block-base; dev's rule turns
+cross-convolution off for a RimTimSim file. An overlay reaches a run from
+the checkout at `rp run create`, which stores the resolved body; a job
+reads that body, never an overlay file, so an overlay edit needs no revision.
+A flight overlay sets
 `[intake] gaia_proper_motion = true`; the SOC simulations leave it off.
 The loop plans a field's reference from the rows before the bound whose
 `overlapfields` list it; the live runs' references built before PR 450
@@ -498,13 +506,14 @@ deleted on 2026-10-24: `validate_run.py` fails on them by design.
 Carried from part 13's results (through PR 471), with the earlier parts'
 items no later part closed; each names where its numbers are.
 
-- **SFFT, the default since sfft-default**: under the HLWAS OpenUniverse
-  block it trails ZOGY only at AB 26 and 26.5 at half the false positives
-  (runs 145, 146). Unmeasured: OpenUniverse, GBTDS, flight and RimTimSim
-  under the default; excluding the zeroed DQ cores from SFFT's fit
-  in the stage (PR 435); GBTDS's and RimTimSim's blocks. Under the
-  socsims block `n_sources_snr_gt20` saturates at the cap, so the gate's
-  count check cannot see an SFFT epoch off-scale (PR 432).
+- **SFFT, the default since sfft-default**: under the OpenUniverse
+  block it trails ZOGY on HLWAS only at AB 26 and 26.5 at half the false
+  positives (runs 145, 146). OpenUniverse, GBTDS, flight and RimTimSim
+  are sampled one epoch each under it (sfft-block-base, runs 154 to 157),
+  no more; excluding the zeroed DQ cores from SFFT's fit in the stage
+  (PR 435) is recorded, not built. On GBTDS and RimTimSim F213 every
+  difference job fails under the block (SFFT's `Singular matrix`, exit 70;
+  runs 156, 157): what those two publish is Ben's open ruling.
 - **The bright-star residual's cause**: flagged (bit 16384), not fixed;
   about 20 per epoch above S/N 20 on SCA 8 F146, two to three times that
   on SCAs 4 and 5 (parts 10, 11 step 3).
@@ -534,8 +543,8 @@ items no later part closed; each names where its numbers are.
 - **The OpenUniverse overlay** carries the science's own zero points and
   `sca_gain` 1.0, landed from branch `ou-zp/1-overlay` on Ben's ruling
   (2026-10-27) accepting false positives 493 against 492 inside the
-  capped 500 (PRs 451, 492); no run has yet read them from the overlay
-  rather than `--set`. Every OpenUniverse
+  capped 500 (PRs 451, 492); run 155 read them from the overlay
+  (sfft-block-base). Every OpenUniverse
   difference keeps 500 of 2,077 to 3,682 candidates, so its count below
   AB 25 measures the cap (part 12 step 3).
 - **Flight program 1049**: 341 unflagged recurrent hot pixels, 472 not
