@@ -78,9 +78,15 @@ def schema_columns(table: str) -> set[str]:
     return names - {"job", "created"}
 
 
+# dev's socsims [SFFT] block: no cross-convolution, so SFFT writes its plain file names.
+SOCSIMS_SFFT = {"crossconv_flag": False, "sfft_bsmask_value": "20000.0", "sfft_bsmask_radius": "30.0",
+                "sfft_use_gainmatch_catalogs": False, "sfft_use_segmentation": False}
+
+
 def settings(**tables) -> dict:
     body = copy.deepcopy(THIN["difference"])
     body["diff_flavor"] = "sfft"   # the SFFT-asserting tests below; the default is tested on its own
+    body["sfft"].update(SOCSIMS_SFFT)   # the file names below are this block's; the shipped one is tested on its own
     body["paths"]["cfg_path"] = str(cdf_dir())
     body["statistics"]["clip_correction_seed"] = 1
     for table, values in tables.items():
@@ -304,12 +310,16 @@ def test_the_packet_stage_reads_resolve_to_sffts_files_beside_the_published_imag
         assert (prefix / "diff" / (name + ".gz")).is_file(), name
 
 
-def test_the_shipped_default_publishes_sfft(tmp_path, files, fakes):
+def test_the_shipped_default_publishes_sffts_cross_convolved_block(tmp_path, files, fakes):
+    """The shipped SFFT block is dev's OpenUniverse one: its decorrelated image is the published one."""
     assert THIN["difference"]["diff_flavor"] == "sfft"
-    body = settings(); body["difference"]["diff_flavor"] = THIN["difference"]["diff_flavor"]
+    body = settings()
+    body["difference"]["diff_flavor"] = THIN["difference"]["diff_flavor"]
+    body["difference"]["sfft"] = copy.deepcopy(THIN["difference"]["sfft"])
     prefix = run_difference(tmp_path, files, body=body)
     assert manifest(prefix)["difference"]["differencer"] == "sfft"
-    assert (prefix / "diff" / "sfftdiffimage_masked.fits.gz").exists()
+    (row,) = read(prefix, "diffimages")
+    assert row["filename"].endswith("/diff/sfftdiffimage_dconv_masked.fits.gz")
 
 
 def test_zogy_selected_publishes_zogy(tmp_path, files, fakes):
