@@ -25,7 +25,7 @@ The team's images are in the SMDC account's private container registry, reposito
 REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
 aws ecr get-login-password --region us-east-1 | podman login --username AWS --password-stdin "$REGISTRY"
 TAG=$(aws ecr describe-images --region us-east-1 --repository-name rapid-pipeline --filter tagStatus=TAGGED \
-  --query 'reverse(sort_by(imageDetails[?imageTags[?starts_with(@, `rebuild-`)]], &imagePushedAt))[0].imageTags[0]' --output text)
+  --query 'reverse(sort_by(imageDetails[?imageTags[?starts_with(@, `rebuild-`)]], &imagePushedAt))[0].imageTags[0]' --output json | jq -r .)
 podman pull "$REGISTRY/rapid-pipeline:$TAG"
 export IMAGE=$REGISTRY/rapid-pipeline:$TAG
 ```
