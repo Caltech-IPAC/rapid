@@ -28,6 +28,15 @@ mapped for the listing, a pointing is the survey's observing-sequence row
 passes. With ``rimtimsim`` the source root holds RimTimSim's lite files,
 ``rimtimsim_WFI_<filter>_SCA<NN>_<exposure>_lite.fits.gz``, flat; a pointing
 is GBTDS's exposure number (``411``), the ``expid``, and there are no passes.
+With ``socsims-lite`` the source root holds `dev`'s socsims lite files,
+``<SOC stem>_cal_lite.fits.gz``, flat, listed and selected as the SOC's.
+
+``--expids`` bounds the selection by the intake's ``expid``, inclusive
+ranges ``LO-HI`` (a single id is ``ID``), comma separated, a stem or row
+admitted when its ``expid`` is in any of them, with the other terms. A SOC
+``expid`` packs pass, observation, visit and exposure in that order, so a
+range is a contiguous stretch of a pass's observations (pass 2 whole and
+pass 5 observation 3 visits 61 to 64 are ``2000000-2999999,5036101-5036401``).
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported (``failed``, with its scope) and
@@ -160,6 +169,9 @@ RTS_STEM = re.compile(r"rimtimsim_WFI_(?P<filter>F\d{3})_SCA(?P<sca>\d{2})_(?P<e
 RTS_SUFFIX = ".fits.gz"
 #: The ``[intake] reader`` whose stems are :data:`RTS_STEM`'s; every other is the SOC's.
 RIMTIMSIM = "rimtimsim"
+#: The ``[intake] reader`` of `dev`'s socsims lite files: SOC stems, :data:`LITE_SUFFIX`.
+SOCSIMS_LITE = "socsims-lite"
+LITE_SUFFIX = "_cal_lite.fits.gz"
 #: The readers whose data have no passes: a pointing is one integer, the row's ``expid``.
 PASSLESS = (OPENUNIVERSE, RIMTIMSIM)
 PENDING = ("launched", "running")
@@ -172,17 +184,25 @@ STAGES = ("psf", "intake", "reference", "difference", "packet")
 class Selection:
     """Filters (``F146``), SCAs, pointings (``(visit, exposure)``, or the observing sequence's row for
     :data:`OPENUNIVERSE`) and the survey's passes, ``None`` for all pointings or all passes; ``reader``
-    the run's ``[intake] reader``."""
+    the run's ``[intake] reader``; ``expids`` inclusive ``(lo, hi)`` ranges of the ``expid``, ``None``
+    for all."""
 
     filters: frozenset[str]
     scas: frozenset[int]
     pointings: frozenset | None
     passes: frozenset[int] | None = None
     reader: str = "soc-l2"
+    expids: tuple[tuple[int, int], ...] | None = None
 
     @classmethod
     def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all",
-              reader: str = "soc-l2") -> "Selection":
+              reader: str = "soc-l2", expids: str = "all") -> "Selection":
+        ranges = None
+        if expids != "all":
+            ranges = tuple(sorted((int(lo), int(hi or lo)) for lo, _, hi in
+                                  (r.strip().partition("-") for r in expids.split(","))))
+            if any(lo > hi for lo, hi in ranges):
+                raise ValueError(f"--expids {expids}: a range's low end is above its high end")
         if reader in PASSLESS:
             if passes != "all":
                 raise ValueError(f"a {reader} selection has no passes: select its pointings")
@@ -192,7 +212,10 @@ class Selection:
                 (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
         return cls(frozenset(f.strip().upper() for f in filters.split(",")),
                    frozenset(int(s) for s in scas.split(",")), points,
-                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader)
+                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader, ranges)
+
+    def admits_expid(self, expid: int) -> bool:
+        return self.expids is None or any(lo <= expid <= hi for lo, hi in self.expids)
 
     def admits_stem(self, stem: str) -> dict | None:
         """The stem's SCA, filter and pointing when the selection admits it, else ``None``."""
@@ -205,13 +228,15 @@ class Selection:
             return None
         if self.passes is not None and ids["pass"] not in self.passes:
             return None
+        if not self.admits_expid(ids["expid"]):
+            return None
         return {"sca": ids["sca"], "filter": ids["filter"], "expid": ids["expid"]}
 
     def admits_row(self, expid: int, sca: int, fid: int, fids: set[int]) -> bool:
         """Whether an L2 key is selected, ``fids`` the selected filters' fids; ``expid``
         packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits, or is the
         OpenUniverse pointing."""
-        if sca not in self.scas or fid not in fids:
+        if sca not in self.scas or fid not in fids or not self.admits_expid(expid):
             return False
         if self.reader in PASSLESS:
             return self.pointings is None or expid in self.pointings
@@ -224,7 +249,8 @@ class Selection:
         if self.reader not in PASSLESS and points != "all":
             points = [f"{v:03d}_{e:04d}" for v, e in points]
         return {"filters": sorted(self.filters), "scas": sorted(self.scas), "pointings": points,
-                "passes": "all" if self.passes is None else sorted(self.passes)}
+                "passes": "all" if self.passes is None else sorted(self.passes),
+                "expids": "all" if self.expids is None else [f"{lo}-{hi}" for lo, hi in self.expids]}
 
 
 def stem_expid(stem: str) -> int:
@@ -253,7 +279,7 @@ def stem_ids(stem: str) -> dict | None:
 
 
 def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]:
-    """Every ``_cal.asdf`` stem under ``source_root`` (``s3://bucket/prefix/``) in an observation of a
+    """Every ``_cal.asdf`` stem (``_cal_lite.fits.gz``, :data:`SOCSIMS_LITE`) under ``source_root`` (``s3://bucket/prefix/``) in an observation of a
     selected filter.
 
     An observation (``r<program><plan><pass><segment><observation>``, the
@@ -301,13 +327,14 @@ def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]
         if m["filter"].upper() in selection.filters:
             observations.append(observation)
     stems = []
+    suffix = LITE_SUFFIX if selection.reader == SOCSIMS_LITE else SUFFIX
     for observation in observations:
         for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket,
                                                                      Prefix=root + observation):
             for item in page.get("Contents", []):
                 name = item["Key"].rsplit("/", 1)[-1]
-                if name.endswith(SUFFIX):
-                    stems.append(name[: -len(SUFFIX)])
+                if name.endswith(suffix):
+                    stems.append(name[: -len(suffix)])
     return stems
 
 

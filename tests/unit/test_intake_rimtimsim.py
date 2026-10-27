@@ -8,6 +8,10 @@ file whose own filter or SCA contradicts its name fails, and one not in DN,
 without ``ZPTMAG``, or asked for a DQ mask is refused; under the dataset's
 overlay the stage reads ``<root><stem>.fits.gz`` and declares rows keyed by
 the exposure number with RimTimSim's ``program_id``.
+A socsims lite file (``<SOC stem>_cal_lite.fits.gz``): the SOC stem parses
+and names the file; the conversion keeps its DN, its WCS and inverse SIP,
+its own centre, and writes the stem's observation identifiers; under its
+overlay the stage reads it and keys the rows by the SOC ``expid``.
 """
 
 from __future__ import annotations
@@ -105,7 +109,7 @@ def test_a_file_not_in_dn_without_zptmag_or_asked_for_a_dq_mask_is_refused(tmp_p
         convert(tmp_path, dq_mask_bits=bits, **cards)
 
 
-def fake_connect(psf_filename: str):
+def fake_connect(psf_filename: str, fid: int = 4, sca: int = 2):
     class Cursor:
         def __enter__(self):
             return self
@@ -114,7 +118,7 @@ def fake_connect(psf_filename: str):
             return False
 
         def execute(self, statement, params):
-            assert "FROM psfs" in statement and params[1:] == (4, 2)  # K213, SCA 2
+            assert "FROM psfs" in statement and params[1:] == (fid, sca)  # K213, SCA 2 by default
 
         def fetchone(self):
             return (psf_filename,)
@@ -156,3 +160,81 @@ def test_the_stage_under_the_overlay_reads_the_lite_file_and_keys_the_rows_by_ex
     assert (l2file["expid"], l2file["sca"], l2file["fid"], l2file["zptmag"]) == (411, 2, 4, ZPTMAG)
     with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
         assert hdul["SCI"].header["FILTER"] == "K213"
+
+
+SS_STEM = "r0034001005001003061_0001_wfi08_f146"
+SS_OVERLAY = OVERLAY.parent / "gbtds-r00340-fakesrc.toml"
+
+
+def write_socsims(path: Path) -> np.ndarray:
+    """A socsims lite file as dev's converter wrote it: PRIMARY and SCI_ORIG, both with the keywords."""
+    header = fits.Header()
+    header.update({"WCSAXES": 2, "CRPIX1": (N + 1) / 2, "CRPIX2": (N + 1) / 2,
+                   "CD1_1": -2.6331e-05, "CD1_2": 1.5240e-05, "CD2_1": 1.5688e-05, "CD2_2": 2.5932e-05,
+                   "CUNIT1": "deg", "CUNIT2": "deg", "CTYPE1": "RA---TAN-SIP", "CTYPE2": "DEC--TAN-SIP",
+                   "CRVAL1": 267.5565, "CRVAL2": -29.8512, "RADESYS": "ICRS",
+                   "A_ORDER": 5, "B_ORDER": 5, "A_2_0": -3.06e-07, "B_0_2": 1.94e-06,
+                   "AP_ORDER": 3, "BP_ORDER": 3, "AP_2_0": 3.04e-07, "BP_0_2": -1.94e-06,
+                   "TARGAPER": "WFI_CEN", "TARGRA": 267.603154, "TARGDEC": -29.916446,
+                   "EXPTIME": 66.41188, "DATE-OBS": "2027-10-07T23:52:00.000", "MJD-OBS": 61685.99444,
+                   "SCA_NUM": 8, "FILTER": "W146", "ZPTMAG": 26.8266, "BUNIT": "DN"})
+    data = np.random.default_rng(1).normal(1281.0, 40.0, (N, N)).astype(">f4")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fits.HDUList([fits.PrimaryHDU(header=header), fits.ImageHDU(data, header, name="SCI_ORIG")]).writeto(path)
+    return data.astype(np.float32)
+
+
+def test_a_socsims_stem_parses_as_the_soc_stem_and_names_the_lite_file():
+    assert rts.parse_stem(SS_STEM) == {"program": 340, "execution_plan": 1, "pass": 5, "segment": 1,
+                                       "observation": 3, "visit": 61, "exposure": 1, "sca": 8,
+                                       "filter": "F146"}
+    assert rts.source_key(SS_STEM) == f"{SS_STEM}_cal_lite.fits.gz"
+
+
+def test_a_socsims_file_keeps_its_dn_wcs_and_centre_and_writes_the_stems_identifiers(tmp_path):
+    src = tmp_path / rts.source_key(SS_STEM)
+    data = write_socsims(src)
+    out = tmp_path / f"{SS_STEM}_cal.fits"
+    rts.lite_to_fits(src, out, sip_degree=5, sip_max_pix_error=0.1, nominal_zptmag={}, swname="test",
+                     swvers="test", created="2026-10-27T00:00:00Z")
+    with fits.open(out) as hdul, fits.open(src) as lite:
+        primary, sci = hdul[0].header, hdul["SCI"]
+        assert [h.name for h in hdul] == ["PRIMARY", "SCI"]
+        assert (primary["FILTER"], primary["SCA_NUM"], primary["ZPTMAG"]) == ("W146", 8, 26.8266)
+        assert (primary["PASS"], primary["OBSERVTN"], primary["VISIT"], primary["EXPOSURE"]) == (5, 3, 61, 1)
+        assert (primary["TARGRA"], primary["TARGDEC"]) == (267.603154, -29.916446)
+        np.testing.assert_allclose(sci.data, data, rtol=1e-6)
+        assert sci.header["AP_2_0"] == 3.04e-07 and sci.header["A_2_0"] == -3.06e-07
+        x, y = np.array([0.0, N - 1.0, 7.3]), np.array([0.0, N - 1.0, 20.1])
+        np.testing.assert_allclose(WCS(sci.header).all_pix2world(x, y, 0),
+                                   WCS(lite[1].header).all_pix2world(x, y, 0), atol=1e-12)
+
+
+def test_the_stage_under_the_socsims_overlay_keys_the_rows_by_the_soc_expid(tmp_path):
+    source = tmp_path / "source"
+    write_socsims(source / rts.source_key(SS_STEM))
+    yy, xx = np.mgrid[:9, :9]
+    psf = np.exp(-((xx - 4) ** 2 + (yy - 4) ** 2) / 4.0).astype(np.float32)
+    fits.PrimaryHDU(psf / psf.sum()).writeto(source / "psf.fits")
+    prefix = tmp_path / "outputs"
+    prefix.mkdir()
+    settings = {"intake": {"source_root": source.as_uri() + "/", "unsigned": False, "sip_degree": 5,
+                           "sip_max_pix_error": 0.1, "gzip_level": 1, "limmag_nsigma": 5.0,
+                           "limmag_clip_sigma": 3.0, "limmag_maxiters": 10, "nominal_zptmag": {},
+                           "dq_mask_bits": 0, "rederive_wcs": False, "crpix_shift": [0.0, 0.0],
+                           "program_id": -1, **tomllib.loads(SS_OVERLAY.read_text())["intake"]}}
+    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "ss1", "file": SS_STEM},
+                     survey="GBTDS", dataset="ss1", settings=settings,
+                     inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
+                              "binding": None},
+                             *({"kind": "expects", "product": p, "key": {}, "source_job": None,
+                                "binding": None} for p in ("l2files", "exposures"))],
+                     attempt=1, prefix=prefix.as_uri() + "/",
+                     connect=fake_connect((source / "psf.fits").as_uri(), fid=8, sca=8))
+    intake.run(job)
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["source"].endswith(f"/{SS_STEM}_cal_lite.fits.gz")
+    (exposure,) = pq.read_table(prefix / "exposures.parquet").to_pylist()
+    (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
+    assert (exposure["expid"], exposure["program_id"], exposure["visit"]) == (5036101, -1, 61)
+    assert (l2file["expid"], l2file["sca"], l2file["fid"], l2file["zptmag"]) == (5036101, 8, 8, 26.8266)

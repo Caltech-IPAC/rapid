@@ -26,7 +26,8 @@ unsigned = false
 # data model (dev's ingestL2Files.py, the only format dev reads), or
 # "openuniverse", OpenUniverse 2024's `<filter>/<pointing>/<stem>_simple.asdf`
 # (rapidpipe.science.intake_openuniverse), or "rimtimsim", RimTimSim's
-# `<stem>.fits.gz` as dev's converter made them (rapidpipe.science.intake_rimtimsim).
+# `<stem>.fits.gz` as dev's converter made them (rapidpipe.science.intake_rimtimsim),
+# or "socsims-lite", the same converter's socsims files, `<SOC stem>_cal_lite.fits.gz`.
 reader = "soc-l2"
 # dev's ingestL2Files.py: SIPDISTORTIONDEGREE's default, to_fits_sip's
 # max_pix_error, L2GZIPLEVEL's default (PR 291).
@@ -86,8 +87,9 @@ epsf_cache = ""
 
 [psf.epsf]
 # New: the CRDS ePSF reference the psf stage reduces for a file that names
-# none (a RimTimSim lite FITS, [intake] reader = "rimtimsim"), by filter;
-# a dataset's overlay names them. Empty: the file names its own (the SOC's).
+# none (a lite FITS, [intake] reader = "rimtimsim" or "socsims-lite"), by
+# filter, or by filter a list of 18, one per SCA from SCA 1; a dataset's
+# overlay names them. Empty: the file names its own (the SOC's).
 F062 = ""
 F087 = ""
 F106 = ""

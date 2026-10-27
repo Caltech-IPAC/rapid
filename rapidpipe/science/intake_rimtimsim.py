@@ -28,6 +28,18 @@ coefficient to fifth order present. What the file lacks, the reader says:
 - No Roman observation identifiers: the exposure number is ``OBSERVTN``,
   the others undefined; the image centre (the file's ``CRVAL``, ``CRPIX``
   at the centre) is ``TARGRA``, ``TARGDEC``.
+
+The same converter made `dev`'s socsims lite files (the SOC GBTDS
+simulation r00340 with the 2026-08-07 fake sources injected, Russ Laher's
+10/20 and 10/21/2026 runs), ``<stem>_cal_lite.fits.gz``
+with ``<stem>`` the SOC L2 file's (``r0034001005001003061_0001_wfi08_f146``):
+the image in DN in ``SCI_ORIG``, HDU 1, under the file's keywords (``FILTER``
+``W146``, ``SCA_NUM``, ``EXPTIME``, ``MJD-OBS``, ``ZPTMAG``, ``TARGRA``,
+``TARGDEC``) and the TAN-SIP WCS `dev` fitted to the re-derived gWCS, fifth
+order with its inverse. :func:`parse_stem` reads either name; a socsims
+file's Roman observation identifiers are its stem's, its centre its own
+``TARGRA``, ``TARGDEC``, its keywords ``HIERARCH meta socsims`` cards. No DQ
+array either (the converter dropped it).
 """
 
 from __future__ import annotations
@@ -54,23 +66,34 @@ STEM = re.compile(r"rimtimsim_WFI_(?P<filter>F\d{3})_SCA(?P<sca>\d{2})_(?P<expos
 #: The file's suffix under the source root.
 SUFFIX = ".fits.gz"
 
+#: A socsims lite stem, the SOC L2 file's: program, plan, pass, segment, observation, visit, exposure,
+#: SCA, filter (``rapidpipe.stages.intake``'s grammar).
+SOCSIMS_STEM = re.compile(r"r(?P<program>\d{5})(?P<execution_plan>\d{2})(?P<pass>\d{3})(?P<segment>\d{3})"
+                          r"(?P<observation>\d{3})(?P<visit>\d{3})_(?P<exposure>\d{4})_wfi(?P<sca>\d{2})"
+                          r"_(?P<filter>f\d{3})")
+
+#: A socsims file's suffix under the source root.
+SOCSIMS_SUFFIX = "_cal_lite.fits.gz"
+
 #: The WCS keywords carried from the file's image header into SCI.
 WCS_KEYWORDS = re.compile(r"WCSAXES|CRPIX\d|CRVAL\d|CD\d_\d|CTYPE\d|CUNIT\d|LONPOLE|LATPOLE|WCSNAME|"
-                          r"MJDREF|RADESYS|EQUINOX|[AB]_ORDER|[AB]_\d_\d")
+                          r"MJDREF|RADESYS|EQUINOX|[AB]P?_ORDER|[AB]P?_\d_\d")
 
 
 def parse_stem(stem: str) -> dict[str, int | str]:
-    """The identifiers a lite file name carries; ``ValueError`` for another name."""
-    match = STEM.fullmatch(stem)
-    if match is None:
-        raise ValueError(f"{stem!r} is not a RimTimSim lite file stem")
-    return {"filter": match["filter"], "sca": int(match["sca"]), "exposure": int(match["exposure"])}
+    """The identifiers a lite file name carries, a RimTimSim or a socsims one (the SOC stem's, the
+    filter as ``F146``); ``ValueError`` for another name."""
+    if match := STEM.fullmatch(stem):
+        return {"filter": match["filter"], "sca": int(match["sca"]), "exposure": int(match["exposure"])}
+    if match := SOCSIMS_STEM.fullmatch(stem):
+        return {**{k: int(v) for k, v in match.groupdict().items() if k != "filter"},
+                "filter": match["filter"].upper()}
+    raise ValueError(f"{stem!r} is not a RimTimSim or socsims lite file stem")
 
 
 def source_key(stem: str) -> str:
     """The file's path under the dataset's source root."""
-    parse_stem(stem)
-    return stem + SUFFIX
+    return stem + (SOCSIMS_SUFFIX if "pass" in parse_stem(stem) else SUFFIX)
 
 
 class _Node(dict):
@@ -97,15 +120,24 @@ def model(header: fits.Header, stem: str) -> _Node:
         raise ConversionError(f"{stem}: no ZPTMAG")
     exptime = float(header["EXPTIME"])
     start = Time(float(header["MJD-OBS"]), format="mjd", scale="utc")
-    observation = {name: None for name in ("program", "execution_plan", "pass", "segment",
-                                           "visit", "exposure", "visit_id", "observation_id")}
     own = {key.lower().replace("-", "_"): header[key] for key in header
            if key and not WCS_KEYWORDS.fullmatch(key) and key not in ("CHECKSUM", "DATASUM")
            and not key.startswith(("NAXIS", "XTENSION", "BITPIX", "PCOUNT", "GCOUNT"))}
+    instrument = _Node(optical_element=roman_filter, detector=f"WFI{ids['sca']:02d}")
+    exposure = _Node(exposure_time=exptime, start_time=start, end_time=start + TimeDelta(exptime, format="sec"))
+    if "pass" in ids:                      # socsims: the SOC stem's identifiers, the file's own centre
+        observation = {name: ids[name] for name in ("program", "execution_plan", "pass", "segment",
+                                                    "observation", "visit", "exposure")}
+        return _Node(
+            instrument=instrument, exposure=exposure,
+            pointing=_Node(target_aperture=str(header["TARGAPER"]).strip(),
+                           target_ra=float(header["TARGRA"]), target_dec=float(header["TARGDEC"])),
+            observation=_Node(observation, visit_id=None, observation_id=None),
+            socsims=_Node(own))
+    observation = {name: None for name in ("program", "execution_plan", "pass", "segment",
+                                           "visit", "exposure", "visit_id", "observation_id")}
     return _Node(
-        instrument=_Node(optical_element=roman_filter, detector=f"WFI{ids['sca']:02d}"),
-        exposure=_Node(exposure_time=exptime, start_time=start,
-                       end_time=start + TimeDelta(exptime, format="sec")),
+        instrument=instrument, exposure=exposure,
         pointing=_Node(target_ra=float(header["CRVAL1"]), target_dec=float(header["CRVAL2"])),
         observation=_Node(observation, observation=ids["exposure"]),
         rimtimsim=_Node(own))
@@ -114,15 +146,16 @@ def model(header: fits.Header, stem: str) -> _Node:
 def lite_to_fits(source_path, fits_path, *, distortion=None, sip_degree: int, sip_max_pix_error: float,
                  nominal_zptmag, swname: str, swvers: str, created: str,
                  dq_mask_bits: int = 0) -> dict[str, Any]:
-    """Convert one lite file, ``<stem>.fits.gz``, into the intake's FITS file; returns what
+    """Convert one lite file, ``<stem>.fits.gz`` (``<stem>_cal_lite.fits.gz``, socsims), into the intake's FITS file; returns what
     :func:`rapidpipe.science.intake.build_fits_file` returns. ``nominal_zptmag`` is not read: the
     file's own ``ZPTMAG`` is the zero point."""
     if distortion is not None:
-        raise ValueError("a RimTimSim file names no distortion reference: [intake] rederive_wcs is"
+        raise ValueError("a lite file names no distortion reference: [intake] rederive_wcs is"
                          " the SOC reader's")
     if dq_mask_bits:
-        raise ConversionError("a RimTimSim file has no DQ array: [intake] dq_mask_bits must be 0")
-    stem = Path(source_path).name.removesuffix(SUFFIX)
+        raise ConversionError("a lite file has no DQ array: [intake] dq_mask_bits must be 0")
+    name = Path(source_path).name
+    stem = name.removesuffix(SOCSIMS_SUFFIX) if name.endswith(SOCSIMS_SUFFIX) else name.removesuffix(SUFFIX)
     with fits.open(source_path, memmap=False) as hdul:
         header, data = hdul[1].header, hdul[1].data
         meta = model(header, stem)

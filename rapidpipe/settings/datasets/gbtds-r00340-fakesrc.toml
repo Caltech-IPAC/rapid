@@ -1,0 +1,58 @@
+# The overlay for dev's socsims lite files: STScI's SOC GBTDS simulation
+# r00340 with dev's fake variable sources injected, converted by dev to
+# `<SOC stem>_cal_lite.fits.gz` (the 2026-08-07 fake-source set), the
+# files Russ Laher's 10/20 and 10/21/2026 runs read; given at `rapidpipe run
+# create --overlay`. It holds only the keys whose value differs from the
+# shipped defaults (foundation-thin.toml, dev's values) for this dataset,
+# each with the measurement that earned it; a key the base does not have is
+# refused (rapidpipe.foundation.layers). `intake.source_root` (the copy's
+# prefix) and `reference.selection.before_mjd` come by `--set` at `run
+# create`. The measurements are runbook part 13 step socsims-1021's.
+
+[intake]
+# dev's converter's output (rapidpipe.science.intake_rimtimsim): the image in
+# DN in SCI_ORIG, the file's keywords, the TAN-SIP WCS dev fitted to the
+# re-derived gWCS. unsigned stays the base's false: the copy is in a private
+# bucket the job role reads.
+reader = "socsims-lite"
+# rederive_wcs stays false (no key): the file's WCS is dev's fix of the SOC
+# gWCS already (romancal's AssignWcsStep, then a fifth-order SIP fit), and a
+# lite file names no distortion reference. Through it the Gaia DR3 stars
+# sit (-0.028, -0.017) px from their centroids on 1,640 stars of
+# r0034001002001001001_0001_wfi01 (pass 2) and (+0.028, -0.024) px on 996
+# of r0034001005001003061_0001_wfi08 (pass 5), inside the gate's 0.25 px:
+# no crpix_shift either. dq_mask_bits stays 0: the
+# converter dropped the DQ plane, so nothing can be masked.
+# program_id stays the base's -1 (SOCSIMS), as gbtds-r00340.
+
+[psf.epsf]
+# A lite file names no ePSF reference. These are the references dev's
+# science-image PSFs for this run were built from (Jacob's
+# sciimage_psf_f146_scaNN.fits v2, 2026-08-21, each header's EPSFREF), SCA 1
+# to 18 in order; all 18 are in the run's epsf_cache.
+F146 = ["roman_wfi_epsf_0198.asdf", "roman_wfi_epsf_0147.asdf", "roman_wfi_epsf_0218.asdf",
+        "roman_wfi_epsf_0160.asdf", "roman_wfi_epsf_0180.asdf", "roman_wfi_epsf_0273.asdf",
+        "roman_wfi_epsf_0237.asdf", "roman_wfi_epsf_0276.asdf", "roman_wfi_epsf_0193.asdf",
+        "roman_wfi_epsf_0190.asdf", "roman_wfi_epsf_0245.asdf", "roman_wfi_epsf_0165.asdf",
+        "roman_wfi_epsf_0164.asdf", "roman_wfi_epsf_0242.asdf", "roman_wfi_epsf_0191.asdf",
+        "roman_wfi_epsf_0188.asdf", "roman_wfi_epsf_0187.asdf", "roman_wfi_epsf_0194.asdf"]
+
+[difference]
+# gbtds-r00340's: the bulge is confusion-limited, the reference PSF's star
+# selection finds no star on run 62's reference mosaic and the ePSF builder
+# cannot centre the crowded stamps, so ZOGY gets the science PSF for both
+# images, as run 17 did; Russ fed one PSF per SCA to both images likewise.
+reference_psf = "science"
+
+[difference.sfft]
+# dev's [SFFT] socsims block, as Russ ran it on 10/20 and 10/21/2026
+# (launchSingleSciencePipeline.ini, "--- socsims ---"): no cross-
+# convolution, the bright-source mask at 20000 DN/s within 30 px, no gain-
+# match catalogs, no segmentation. The base's OpenUniverse block fails
+# GBTDS's kernel solve (Singular matrix, runs 157 and 156); GBTDS ran SFFT
+# under this block and published on rapid 490 to 494.
+crossconv_flag = false
+sfft_bsmask_value = "20000.0"
+sfft_bsmask_radius = "30.0"
+sfft_use_gainmatch_catalogs = false
+sfft_use_segmentation = false

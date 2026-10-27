@@ -54,10 +54,12 @@ header carries ``PSFSRC`` (the galsim version) and ``PSFWAVE``; the manifest
 the same under ``psf``. The SOC path is unchanged.
 
 With ``[intake] reader = "rimtimsim"`` the file (`dev`'s converted lite
-FITS) names no reference either; ``[psf.epsf]`` names one per filter, the
+FITS) names no reference either; ``[psf.epsf]`` names one per filter (or a
+list, one per SCA from SCA 1, for a dataset of every detector), the
 CRDS reference for its detector and filter (the overlay's, with the
 context that chose it), and the stage reduces it as for a SOC file, the
-file unread and ``CRDSCTX`` empty.
+file unread and ``CRDSCTX`` empty; ``socsims-lite`` (`dev`'s converted
+socsims files, which name none) the same.
 """
 
 from __future__ import annotations
@@ -128,7 +130,7 @@ def run(job: JobContext) -> None:
         write(job, stamp, RAPID_TO_ROMAN_FILTER_NAMES[str(ids["filter"])], int(ids["sca"]), cards,
               timings, lap, source=None, psf=provenance)
         return
-    if source_settings.get("reader", "soc-l2") == "rimtimsim":
+    if source_settings.get("reader", "soc-l2") in ("rimtimsim", "socsims-lite"):
         source, cal = None, named_epsf(stem, settings["epsf"])
     else:
         source = source_settings["source_root"].rstrip("/") + "/" + stem + "_cal.asdf"
@@ -235,10 +237,12 @@ def cal_meta(path: Path) -> dict[str, str]:
 
 
 def named_epsf(stem: str, names: dict) -> dict[str, str]:
-    """A RimTimSim stem's ePSF reference, the one ``[psf.epsf]`` names for its filter, as
+    """A lite stem's ePSF reference (RimTimSim's or socsims'), the one ``[psf.epsf]`` names for its filter, as
     :func:`cal_meta` returns a SOC file's; no CRDS context."""
     ids = intake_rimtimsim.parse_stem(stem)
     name = names.get(str(ids["filter"]), "")
+    if isinstance(name, list):                 # one per SCA, SCA 1 first
+        name = name[int(ids["sca"]) - 1] if len(name) >= int(ids["sca"]) else ""
     if not name:
         raise ValueError(f"{stem}: the file names no ePSF reference and [psf.epsf] {ids['filter']} is empty")
     return {"epsf": name, "context": "", "detector": f"WFI{int(ids['sca']):02d}", "filter": str(ids["filter"])}
