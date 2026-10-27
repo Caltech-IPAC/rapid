@@ -337,9 +337,14 @@ The AstroObjectsMeta records written before 10/21/2026 for aids without an Astro
 remain until those AstroObjects records are rebuilt or the orphaned records are deleted; the
 next run of the script no longer writes them.
 
-Because reprocessing generates new product versions (usually latest is best), there are
-separate processes that remove not-best lightcurve data points from the Sources and Merges_<field> database tables,
-and then explicitly clusters, vacuums, and analyzes these database tables.
+Because reprocessing generates new product versions (usually latest is best), the VPO removes the
+lightcurve data points of not-best difference images (``vbest = 0``) at the end of each processing
+request (see :doc:`../ops/vpo`).  ``pipeline/pruneNotBestMerges.py`` and ``pruneNotBestXMerges.py``
+first delete their Merges_<field> and XMerges_<field> records, which they find through the Sources and
+XSources records; ``pipeline/pruneNotBestSources.py`` and ``pruneNotBestXSources.py`` then delete the
+Sources and XSources records themselves.  Each script vacuums and analyzes the tables it deleted records
+from, and drops those left empty (a dropped Sources or XSources child table is recreated by the loader
+when it is needed again).
 
 The Sources and XSources database tables have the ``rb`` float column for storing real-bogus scores,
 computed by the RuBR-AT Machine-Learning classifier, which is optimized for Roman WFI data.
