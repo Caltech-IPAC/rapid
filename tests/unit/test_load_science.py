@@ -182,6 +182,24 @@ def test_source_set_carries_the_pixel_columns_null_where_the_catalog_has_none():
     assert [older.column(c).null_count for c in ("sumrat", "nneg", "nbad")] == [2, 2, 2]
 
 
+def test_source_set_loads_the_score_as_rb_and_the_label_as_rblabel_null_where_unscored():
+    import pyarrow as pa
+
+    from rapidpipe.science.load.catalogs import source_set
+
+    rows = {name: [1.0, 1.0] for name, _ in catalogs.CATALOG_COLUMNS}
+    rows.update(id=[1, 2], ra=[10.0] * 2, dec=[-5.0] * 2, x_fit=[5.0, 6.0],
+                flux_fit=[50.0, 10.0], flux_err=[1.0, 1.0])
+    key = {"dataset": "D", "expid": 1, "sca": 2, "fid": 3}
+    scored = pa.table({**rows, "rb_score": [0.75, np.nan],
+                       "rb_label": pa.array([1, -1], pa.int16())})
+    table, _ = source_set(scored, key, 7, 60000.0, 10, 10, max_sources=0)
+    assert [table.column(c).to_pylist() for c in ("sid", "rb", "rblabel")] == [
+        [1, 2], [0.75, None], [1, -1]]
+    zogy, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
+    assert [zogy.column(c).null_count for c in ("rb", "rblabel")] == [2, 2]
+
+
 def _prefilter_rows(x_fit, sumrat, flux_fit):
     import pyarrow as pa
 

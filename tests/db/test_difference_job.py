@@ -20,6 +20,7 @@ from tests.support.fakedifftools import (
     FakePsfCatalog,
     FakeReferencePsf,
     FakeToolRunner,
+    fake_rb_model,
     fake_sip_to_pv,
     write_epoch,
 )
@@ -72,7 +73,7 @@ def test_job_local_publishes_a_bound_difference_image_and_source_set(connect, tm
     runner, catalog = FakeToolRunner(), FakePsfCatalog()
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
         runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog,
-        reference_psf=FakeReferencePsf()))
+        reference_psf=FakeReferencePsf(), rb_model=fake_rb_model))
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", (tmp_path / "outputs").as_uri())
     key = {"dataset": DATASET, "expid": EXPID, "sca": SCA, "fid": FID}
     inputs = [{"product": "l2files", "key": key, "source_job": l2_job},

@@ -150,6 +150,7 @@ def write_epoch(directory: Path, *, seed: int = 20260922, magzp: float | None = 
     sci_header["EXPTIME"] = EXPTIME
     sci_header["ZPTMAG"] = ZPTMAG
     sci_header["SCA_NUM"] = 7
+    sci_header["FILTER"] = "F184"
     raw = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(data=sci.astype(np.float32),
                                                          header=sci_header)])
     raw.writeto(paths["science"].with_suffix(""))
@@ -248,6 +249,8 @@ class FakeToolRunner:
                 names.append("bkgest")
             elif len(args) > 1 and args[1].endswith("py_zogy.py"):
                 names.append("zogy")
+            elif args[1:3] == ["-m", "rapidpipe.science.difference.realbogus"]:
+                names.append("rubrat")
             else:
                 names.append(args[0])
         return names + ["sfft"] * len(self.shell_calls)
@@ -264,9 +267,17 @@ class FakeToolRunner:
             self._bkgest(args, cwd)
         elif len(args) > 1 and args[1].endswith("py_zogy.py"):
             self._zogy(args, cwd)
+        elif args[1:3] == ["-m", "rapidpipe.science.difference.realbogus"]:
+            self._realbogus(args, cwd)
         else:
             raise AssertionError(f"unexpected tool call {args!r}")
         return 0
+
+    def _realbogus(self, args, cwd: Path) -> None:
+        """The sidecar's own entry, in process, with :class:`FakeRbClassifier` for the model."""
+        from rapidpipe.science.difference import realbogus
+
+        realbogus.main(args[3:], load=lambda *files: FakeRbClassifier())
 
     def run_shell(self, command: str, *, cwd: Path, check: bool = True) -> int:
         self.shell_calls.append(command)
@@ -413,9 +424,36 @@ def _write_psfcat_parquet(path: Path, peaks) -> None:
         "roundness2": 0.0 * ones, "n_pixels": 25 * ones.astype(int), "peak": flux / 10.0}), path)
 
 
+class FakeRbClassifier:
+    """`dev`'s ``RealBogusClassifier.score_arrays`` contract without TensorFlow: every source
+    scored ``1 - 1 / (1 + |flux_fit|)``, labelled at :attr:`threshold`; the calls recorded."""
+
+    threshold = 0.5
+
+    def __init__(self):
+        self.calls = []
+
+    def score_arrays(self, science, reference, difference, detections, *, filter_name):
+        import pandas as pd
+
+        self.calls.append({"filter": filter_name, "rows": len(detections)})
+        score = 1.0 - 1.0 / (1.0 + np.abs(detections["flux_fit"].to_numpy()))
+        return pd.DataFrame({"rb_score": score, "rb_valid": np.ones(len(score), bool),
+                             "rb_label": (score >= self.threshold).astype(int),
+                             "rb_status": np.full(len(score), "")})
+
+
+def fake_rb_model(rubrat):
+    """No model fetched: a model record naming files nobody reads (``Toolkit.rb_model``)."""
+    from rapidpipe.science.difference.realbogus import MODEL_FILES, Model
+
+    return Model(rubrat["model_prefix"] or "s3://inputs/" + rubrat["model_key"],
+                 {key: Path(rubrat[key]) for key in MODEL_FILES})
+
+
 def fake_toolkit():
     """Every external tool faked, for a test to put in place of ``difference.toolkit``."""
     from rapidpipe.stages.difference import Toolkit
 
     return Toolkit(runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog(),
-                   reference_psf=FakeReferencePsf())
+                   reference_psf=FakeReferencePsf(), rb_model=fake_rb_model)

@@ -108,13 +108,13 @@ def test_load_fits_image_reads_the_first_image_hdu(tmp_path):
     assert cutouts.load_fits_image(tmp_path / "missing.fits") == (None, None)
 
 
-def _alert(sid=1, *, prv=(), cutout=None):
-    source = _source(sid)
+def _alert(sid=1, *, prv=(), cutout=None, source=None, reliability=(None, None)):
+    source = source or _source(sid)
     obj = ObjectRecord.from_row(_object_row(900, sid), strict=True)
     ss = crossmatch.associate_ss(source, None)
     return assemble.assemble_alert(source, obj, list(prv), ss_matches=ss, ref_matches=None,
                                    ned_matches=None, cutouts=Cutouts(difference=cutout),
-                                   time_proc=61274.0)
+                                   time_proc=61274.0, reliability=reliability)
 
 
 def test_assemble_alert_is_devs_packet():
@@ -148,12 +148,22 @@ def test_a_program_with_no_surveys_row_gives_survey_null():
     assert assemble.build_dia_source(source)["survey"] is None
 
 
-def test_the_three_reliability_fields_are_null_even_with_a_score_staged():
-    source = _source(1, rb=0.9, rblabel=1, aid=900)
-    source.rb_threshold, source.rb_version = 0.5, "model"
-    dia = assemble.build_dia_source(source)
-    assert (dia["reliability"], dia["reliabilityThreshold"], dia["reliabilityVersion"]) == (
-        None, None, None)
+def _reliability(record):
+    return record["reliability"], record["reliabilityThreshold"], record["reliabilityVersion"]
+
+
+def test_a_scored_trigger_carries_its_score_and_the_runs_threshold_and_model():
+    earlier = _source(2, mjdobs=61200.0, aid=900, rb=0.2, rblabel=0)
+    alert = _alert(source=_source(1, rb=0.9, rblabel=1), prv=[earlier],
+                   reliability=(0.5134, "model-a"))
+    assert _reliability(alert["diaSource"]) == (pytest.approx(0.9), pytest.approx(0.5134), "model-a")
+    # a prior detection keeps its own score, without the run's threshold and model (dev)
+    assert _reliability(alert["prvDiaSources"][0]) == (pytest.approx(0.2), None, None)
+
+
+def test_an_unscored_trigger_carries_none_of_the_three():
+    alert = _alert(source=_source(1, rb=None, rblabel=-1), reliability=(0.5134, "model-a"))
+    assert _reliability(alert["diaSource"]) == (None, None, None)
 
 def _container(sids, cutout_bytes, marker=b"0123456789abcdef"):
     buf = io.BytesIO()

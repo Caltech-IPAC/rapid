@@ -69,6 +69,26 @@ RUN if [ "$RAPID_INSTALL_REQUIREMENTS" = "1" ]; then \
       ${RAPID_PYTHON} -m pip install --no-cache-dir -r /code/requirements.txt; \
     fi
 
+# Temporary, removable as one layer (rapid_docs decisions.md, rb-port; the
+# long-term home of ML dependencies is an open ruling): the real/bogus
+# classifier's sidecar. TensorFlow and Keras stay out of the base
+# environment, requirements.txt and the import gate; this virtual
+# environment, made by the base interpreter with its packages visible,
+# adds only them and what they need that the base lacks, every wheel
+# pinned by version and hash (requirements-rubrat.lock, resolved against
+# the base environment), --no-deps so nothing is resolved here. The
+# difference stage runs the classifier through it as a subprocess
+# ([difference.rubrat] python). The CI stand-in (another Python, no
+# science stack) skips it: the lock's wheels are for the base's Python.
+ARG RUBRAT_VENV=/opt/rapid/venvs/rubrat
+COPY requirements-rubrat.lock /tmp/requirements-rubrat.lock
+RUN if [ "$RAPID_INSTALL_REQUIREMENTS" != "1" ]; then \
+      ${RAPID_PYTHON} -m venv --system-site-packages ${RUBRAT_VENV} && \
+      ${RUBRAT_VENV}/bin/python -m pip install --no-cache-dir --no-deps --require-hashes \
+        -r /tmp/requirements-rubrat.lock && \
+      ${RUBRAT_VENV}/bin/python -c "import tensorflow, keras, modules.rubrat.inference.classifier, modules.rubrat.model.model_factory; print('rubrat sidecar', tensorflow.__version__, keras.__version__)"; \
+    fi && rm -f /tmp/requirements-rubrat.lock
+
 # Import gate: a base environment missing a runtime dependency fails here,
 # at build time, rather than surfacing later as a failed Batch job. The
 # module list is `import-gate.py`, kept in step with requirements.txt --

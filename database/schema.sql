@@ -389,6 +389,8 @@ CREATE TABLE sources (
     sumrat real,                                     -- dev's pixel columns (rapidpipe.science.difference.columns),
     nneg smallint,                                   -- on a 5 x 5 stamp after a 64 px local background; null where
     nbad smallint,                                   -- unmeasurable (stamp off the image) and on rows made before them
+    rb real,                                         -- dev's RuBR-AT score (rapidpipe.science.difference.realbogus), SFFT
+    rblabel smallint,                                -- only; label 1 real, 0 bogus, -1 not scored; null: not computed
     UNIQUE (job, sid)
 );
 

@@ -7,9 +7,10 @@ functions over plain records instead of methods over a live provider:
 - the registry check run at import (``_validate_registry``) and the
   registry-driven builders (``build_record`` and ``build_*``), unchanged;
 - :func:`assemble_alert`: `dev`'s ``assemble_alert_for_source``, given the
-  object, history, matches and cutouts the provider used to fetch; `dev`'s
-  stamping of ``rb_threshold`` and ``rb_version`` (883e3876) is not taken,
-  the reliability params being stubs here (rapid_docs ``decisions.md``);
+  object, history, matches and cutouts the provider used to fetch, and
+  `dev`'s stamping of ``rb_threshold`` and ``rb_version`` (883e3876) passed
+  in as ``reliability``, stamped only on a scored trigger (``source.rb``
+  not null), where `dev` stamps every trigger;
 - :func:`load_schema`: the packaged ``schema/<major>/<minor>/*.avsc``,
   checked against the registry first (:func:`schema_problems`, standing in
   for `dev`'s unported ``gen_schema.schema_problems``);
@@ -232,18 +233,23 @@ def assemble_alert(source: Source, obj: ObjectRecord, prv: list[Source], *,
                    lvs_matches: list[LvsMatch] | None = None,
                    gaia_matches: list[GaiaMatch] | None = None,
                    forced: list[ForcedPhot] | None = None,
-                   time_proc: float | None = None) -> dict[str, Any]:
+                   time_proc: float | None = None,
+                   reliability: tuple[float | None, str | None] = (None, None)) -> dict[str, Any]:
     """`dev`'s ``assemble_alert_for_source``, with the provider's answers passed in.
 
     ``ss_matches`` must come from :func:`~rapidpipe.science.alerts.crossmatch.associate_ss`
     (it sets ``source.is_ss_candidate``, which the diaSource record reads).
     ``time_proc`` defaults to now, as `dev` stamps it. Each match list is
-    None when that cross-match did not run, as in `dev`.
+    None when that cross-match did not run, as in `dev`. ``reliability`` is
+    the run's ``(rb_threshold, rb_version)``, stamped on the trigger when it
+    was scored; prior detections keep both null, as in `dev`.
     """
     source.aid = obj.aid
     if time_proc is None:
         time_proc = float(Time.now().mjd)  # pyright: ignore[reportArgumentType]
     source.time_proc = float(time_proc)
+    if source.rb is not None:
+        source.rb_threshold, source.rb_version = reliability
 
     prv_dia_sources = [build_dia_source(p) for p in prv] if prv else None
 

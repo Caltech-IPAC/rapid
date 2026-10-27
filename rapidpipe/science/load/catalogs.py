@@ -73,6 +73,12 @@ CATALOG_COLUMNS: tuple[tuple[str, str], ...] = (
 PIXEL_COLUMNS: tuple[tuple[str, Any], ...] = (
     ("sumrat", np.float64), ("nneg", np.int16), ("nbad", np.int16))
 
+#: `dev`'s real/bogus columns (rapidpipe.science.difference.realbogus), catalog to database
+#: (963eb440: ``rb_score`` -> ``rb``, ``rb_label`` -> ``rblabel``): an unscored source's NaN
+#: score is null, its label -1; a catalog without them (ZOGY's) loads both null.
+RB_COLUMNS: tuple[tuple[str, str, Any], ...] = (
+    ("rb_score", "rb", np.float64), ("rb_label", "rblabel", np.int16))
+
 #: `dev`'s edge margin of the database prefilter, in pixels (57559572,
 #: ``loadSECatIntoDBSourcesTable.py``): a source whose nearest pixel is
 #: within it of the image edge is rejected, its 5 x 5 sumrat stamp not
@@ -192,7 +198,7 @@ def prefilter(catalog, naxis1: int, naxis2: int, sumrat_prefilter_threshold: flo
     position at least :data:`EDGE_MARGIN` from every edge (57559572, `dev`'s
     XSources loader). Both differ from `dev`'s PSF path, which passes a
     missing sumrat and has no edge cut (decisions.md, dev-prefilter). `dev`'s
-    ``rb > 0`` applies only where a score exists; the rebuild has none.
+    ``rb > 0`` is not applied: nothing is cut on the score (decisions.md, rb-port).
     """
     n = catalog.num_rows
     sumrat = (catalog.column("sumrat").to_numpy().astype(float)
@@ -222,7 +228,8 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     candidates being the sources inside the bounds with a finite ratio that
     pass the prefilter, before the cap. `dev`'s ``sumrat``, ``nneg`` and
     ``nbad`` are carried from the catalog, null where it has no value or no
-    such column.
+    such column, and its ``rb_score`` and ``rb_label`` as ``rb`` and
+    ``rblabel`` (:data:`RB_COLUMNS`).
     """
     import pyarrow as pa
 
@@ -246,6 +253,9 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     for name, kind in PIXEL_COLUMNS:  # NaN, or a catalog made before them: null, as dev loads -999
         values = column(name)[chosen].astype(float) if name in catalog.column_names else np.full(n, np.nan)
         columns[name] = pa.array(np.nan_to_num(values).astype(kind), mask=~np.isfinite(values))
+    for name, db, kind in RB_COLUMNS:
+        values = column(name)[chosen].astype(float) if name in catalog.column_names else np.full(n, np.nan)
+        columns[db] = pa.array(np.nan_to_num(values).astype(kind), mask=~np.isfinite(values))
     return pa.table({
         "sid": columns["id"].astype(np.int64),
         "dataset": [key["dataset"]] * n, "expid": np.full(n, key["expid"]),

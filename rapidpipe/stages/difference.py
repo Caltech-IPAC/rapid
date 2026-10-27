@@ -157,8 +157,10 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import logging
 import math
+import os
 import shutil
 import sys
 import time
@@ -189,6 +191,7 @@ from rapidpipe.science.difference import (
     metrics as quality,
     psf,
     psfcat,
+    realbogus,
     reformat,
     refpsf,
     repair,
@@ -245,6 +248,11 @@ DIFFIMAGES_SCHEMA = pa.schema([
 ])
 
 
+def _fetch_rb_model(rubrat: dict[str, Any]) -> realbogus.Model:
+    """The real/bogus model at ``[difference.rubrat]``'s prefix, fetched and verified."""
+    return realbogus.fetch_model(realbogus.model_prefix(rubrat), rubrat, get)
+
+
 @dataclass
 class Toolkit:
     """The stage's boundary with external software; a test replaces :func:`toolkit`.
@@ -254,13 +262,17 @@ class Toolkit:
     ``psf_catalog`` makes one Photutils catalog
     (:func:`rapidpipe.science.difference.psfcat.psf_catalog`'s signature);
     ``reference_psf`` measures the reference PSF
-    (:func:`rapidpipe.science.difference.refpsf.measure`'s signature).
+    (:func:`rapidpipe.science.difference.refpsf.measure`'s signature);
+    ``rb_model`` fetches the real/bogus model (:func:`_fetch_rb_model`); the
+    classifier itself runs through ``runner``, in the sidecar
+    (:func:`rapidpipe.science.difference.realbogus.command`).
     """
 
     runner: Any = field(default_factory=ToolRunner)
     sip_to_pv: Callable = resample._default_sip_to_pv
     psf_catalog: Callable = psfcat.psf_catalog
     reference_psf: Callable = refpsf.measure
+    rb_model: Callable = _fetch_rb_model
 
 
 def toolkit() -> Toolkit:
@@ -500,6 +512,7 @@ class _Catalogs:
     parquet: dict[str, str | None] = field(default_factory=dict)
     bits: int = 0
     pixel_columns_s: float | None = None
+    rb: dict[str, Any] | None = None
 
 
 def _sextractor_catalogs(*, kit: Toolkit, work_dir: Path, settings: dict[str, Any],
@@ -568,6 +581,9 @@ def run(job: JobContext) -> None:
     inputs = read_inputs(job)
     kit = toolkit()
     seed = _seed(settings)
+    flavor = settings.get("diff_flavor", "sfft")
+    # The real/bogus model is SFFT-trained: it scores SFFT's catalog only when SFFT is published.
+    rb_model = kit.rb_model(settings["rubrat"]) if flavor == "sfft" else None
 
     paths = settings["paths"]
     cfg_path = paths["cfg_path"]
@@ -805,19 +821,23 @@ def run(job: JobContext) -> None:
                   nan_indices=(nan_indices_sciimage, nan_indices_refimage),
                   reformatted_science_image=reformatted_science_image_filename,
                   gain_times_exptime=sca_gain * inputs.exptime, thresh=thresh)
+    rb = None if rb_model is None else (rb_model, realbogus.filter_of(w(science_image_filename)))
     sfft_names, sfft_catalogs = _run_sfft(
         science_image_filename=science_image_filename,
         scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
         refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
         science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
-        **common)
+        rb=rb, **common)
     infobits |= sfft_catalogs.bits
     metrics["pixel_columns_s"] = sfft_catalogs.pixel_columns_s
+    if sfft_catalogs.rb is not None:
+        sfft_catalogs.rb.update(model=rb_model.prefix, version=rb_model.version)
+        metrics["rb_s"] = sfft_catalogs.rb["call_seconds"]
+        metrics["n_rb_scored"] = sfft_catalogs.rb["scored"]
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         _run_naive(**common)
 
     # Rows: the published differencer's image and positive PSF-fit catalog ([difference] diff_flavor).
-    flavor = settings.get("diff_flavor", "sfft")
     if flavor == "sfft":
         published_image, published_unc, published_psf = (
             sfft_names["diffimage"], sfft_names["diffimage_unc"], sfft_names["diffpsf"])
@@ -904,6 +924,7 @@ def run(job: JobContext) -> None:
             "sfft_source_counts": {"sextractor": sfft_catalogs.sextractor,
                                    "photutils": sfft_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
+            "rb": sfft_catalogs.rb,
             "infobits_science_l2": inputs.infobits_science,
             "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
         metrics=metrics)
@@ -1181,7 +1202,7 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               filename_bkg_subbed_science_image, gainmatched_reference, resampled_cov_map,
               nan_indices, scigainmatch_catalog, refgainmatch_catalog, science_psf,
               reference_psf, reformatted_science_image, gain_times_exptime,
-              thresh) -> tuple[dict[str, str], _Catalogs]:
+              thresh, rb=None) -> tuple[dict[str, str], _Catalogs]:
     """SFFT's command, then its masking, uncertainty and catalogs; ``(file names, catalogs)``.
 
     A nonzero exit raises :class:`~rapidpipe.science.difference.tools.ToolFailed`
@@ -1190,6 +1211,13 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
     Empty ``[sfft] python_cmd`` means the stage's own interpreter, the
     same convention ``[paths] python`` uses for ZOGY; empty
     ``activate_cmd`` means no activation (see ``sfft.shell_command``).
+
+    ``rb``, ``(model, filter)`` or ``None``, adds `dev`'s real/bogus
+    columns to the positive catalog after the pixel columns
+    (:func:`_score_rb`), from the images `dev` scores: the
+    background-subtracted science image, the resampled gain-matched
+    reference and the image the catalog was fitted on. The negative
+    catalog, a diagnostic no stage reads, is not scored.
     """
     s = settings["sfft"]
     crossconv_flag = bool(s["crossconv_flag"])
@@ -1261,7 +1289,37 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         if catalogs.parquet[sign]:
             columns.add_pixel_columns(w(catalogs.parquet[sign]), w(image), settings)
     catalogs.pixel_columns_s = round(time.perf_counter() - start, 3)
+    if rb is not None and catalogs.parquet["positive"]:
+        model, filter_name = rb
+        catalogs.rb = _score_rb(kit, work_dir, settings["rubrat"], model, filter_name,
+                                w(catalogs.parquet["positive"]),
+                                w(filename_bkg_subbed_science_image), w(gainmatched_reference),
+                                w(diffimage))
     return names, catalogs
+
+
+def _score_rb(kit, work_dir: Path, rubrat: dict[str, Any], model, filter_name: str,
+              catalog: Path, science: Path, reference: Path, difference: Path) -> dict[str, Any]:
+    """The sidecar's scored catalog in place of ``catalog``; its summary, with the call's seconds.
+
+    The scored catalog must hold the catalog's ids in its order: scoring
+    selects nothing (a mismatch raises ``RuntimeError``).
+    """
+    output = catalog.with_name(catalog.stem + "_rubrat.parquet")
+    start = time.perf_counter()
+    kit.runner.run(realbogus.command(rubrat["python"], catalog, output, science, reference,
+                                     difference, filter_name, model, rubrat), cwd=work_dir)
+    seconds = round(time.perf_counter() - start, 3)
+    before = pq.read_table(catalog, columns=["id"]).column("id")
+    after = pq.read_table(output, columns=["id"]).column("id")
+    if not before.equals(after):
+        raise RuntimeError(f"{output.name}: {len(after)} ids, {catalog.name} {len(before)}, "
+                           "not the same in order")
+    summary_file = realbogus.summary_path(output)
+    summary = json.loads(summary_file.read_text())
+    os.replace(output, catalog)
+    summary_file.unlink()
+    return {**summary, "call_seconds": seconds}
 
 
 def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_image,

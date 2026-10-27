@@ -80,9 +80,10 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   ``gaia_max_matches``; ``refStarMatches``/``refGalaxyMatches`` from the
   reference mosaic catalog, likewise; ``ssMatches``, ``nedMatches`` and
   ``lvsMatches`` null (not run: deferred by the plan).
-- ``reliability``, ``reliabilityThreshold`` and ``reliabilityVersion``
-  null: the rebuild runs no real/bogus scorer (the registry's stubs;
-  rapid_docs ``decisions.md``), where `dev` fills them.
+- ``reliability`` from ``sources.rb`` (the difference job's real/bogus
+  score, SFFT only), and on a scored trigger ``reliabilityThreshold`` and
+  ``reliabilityVersion`` from ``[packet] rb_threshold`` and ``rb_version``
+  (:func:`reliability`); all three null on an unscored source.
 - three cutouts, ``(2 stamp_half_width + 1)`` pixels square from the
   difference image, the background-subtracted science image and the
   resampled gain-matched reference beside it, off-chip pixels zero.
@@ -138,6 +139,7 @@ from rapidpipe.science.alerts.crossmatch import (
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES, extract_stamp, load_fits_image
 from rapidpipe.science.alerts.records import (
     ALERTABLE_FLAGS, Cutouts, ForcedPhot, ObjectRecord, Source)
+from rapidpipe.science.difference.realbogus import version_of
 from rapidpipe.science.statistics.sums import Sums
 
 logger = logging.getLogger(__name__)
@@ -179,7 +181,7 @@ SOURCE_COLUMNS = (
     "s.job AS source_job, s.dataset, s.sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.xfit, s.yfit,"
     " s.xerr, s.yerr, s.fluxfit, s.fluxerr, s.flags, s.field, s.hp6, s.hp9, s.pid,"
     " s.isdiffpos, s.qfit, s.cfit, s.redchi, s.npixfit, s.sharpness, s.roundness1,"
-    " s.roundness2, s.peak, f.filter AS band, e.job AS exposure_job, e.exptime,"
+    " s.roundness2, s.peak, s.rb, s.rblabel, f.filter AS band, e.job AS exposure_job, e.exptime,"
     " e.program_id, e.execution_plan, e.pass AS obs_pass, e.segment, e.observation, e.visit,"
     " e.exposure, e.observation_id, sv.program_title AS survey")
 #: The exposure is the official ``exposures`` row of the source's (dataset, expid), the one intake
@@ -559,7 +561,8 @@ def _gaia_catalog(path: Path, mjd: float):
 def run(job: JobContext) -> None:
     read = _read(job)
     summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
-                        sync_seed=f"{job.job}/{job.attempt}")
+                        sync_seed=f"{job.job}/{job.attempt}",
+                        reliability=reliability(job.settings))
     # A source set with no triggers is a set of no packets, validly; one with triggers is not.
     job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
                         ("external", "external.parquet")],
@@ -569,11 +572,25 @@ def run(job: JobContext) -> None:
                                 "n_packets_bright_footprint": summary["packets_bright_footprint"]})
 
 
+def reliability(settings: dict) -> tuple[float, str]:
+    """A scored trigger's ``(reliabilityThreshold, reliabilityVersion)``, `dev`'s ``[ALERTS]`` rule.
+
+    ``[packet] rb_threshold``, and ``rb_version`` or, when empty, the
+    version of the ``[difference.rubrat]`` model (the last path component of
+    its ``model_prefix``, else of its ``model_key``).
+    """
+    rubrat = settings["difference"]["rubrat"]
+    version = (settings["packet"]["rb_version"]
+               or version_of(rubrat["model_prefix"] or rubrat["model_key"]))
+    return float(settings["packet"]["rb_threshold"]), version
+
+
 def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
-              sync_seed: str) -> dict:
+              sync_seed: str, reliability: tuple[float | None, str | None] = (None, None)) -> dict:
     """Build the packet set from what was read; write its files under ``path``.
 
-    ``prefix`` is ``path``'s URL, recorded in the index. Returns the
+    ``prefix`` is ``path``'s URL, recorded in the index. ``reliability`` is
+    stamped on every scored trigger (:func:`reliability`). Returns the
     manifest's ``packet`` summary: counts, the Avro size and the timing.
     """
     trigger_mjd = read.trigger_image.mjdobs
@@ -648,7 +665,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                       if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
             alert = assemble_alert(source, obj, prv, ss_matches=None, ref_matches=ref_matches,
                                    ned_matches=None, lvs_matches=None, gaia_matches=gaia_matches,
-                                   cutouts=cutouts, forced=forced, time_proc=time_proc)
+                                   cutouts=cutouts, forced=forced, time_proc=time_proc,
+                                   reliability=reliability)
             container.write(alert)
             container.flush()  # one record per block: the index's locator is exact
             order.append((source, aid))

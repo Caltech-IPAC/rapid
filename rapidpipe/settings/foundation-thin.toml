@@ -119,6 +119,13 @@ gaia_max_matches = 3
 # Reference-catalog star and galaxy matches (dev providers.py), likewise.
 refcat_radius_arcsec = 5.0
 refcat_max_matches = 3
+# [ALERTS] rb_threshold and rb_version: a scored trigger's reliabilityThreshold
+# and reliabilityVersion. rb_threshold MUST equal threshold.json of the
+# [difference.rubrat] model (dev's rule); rb_version "" is that model's
+# version, the last path component of its prefix. An unscored trigger
+# (sources.rb null) carries neither.
+rb_threshold = 0.5134
+rb_version = ""
 
 [batch]
 # New, not dev's: the most jobs one loop pass submits, in stage order; the
@@ -657,8 +664,9 @@ lower_median = false
 # sumrat is above this, finite (a null sumrat is rejected, where dev passes
 # it), and its nearest pixel is at least 2 px from the image edge (dev's
 # XSources loader, 57559572, a module constant). "" applies none of it (dev:
-# the section missing). dev's rb_prefilter_threshold is not here: the
-# rebuild computes no real-bogus score.
+# the section missing). dev's rb_prefilter_threshold (0.0: a scored source
+# with rb <= 0 is not loaded) is not here: nothing is cut on the score
+# (rapid_docs decisions.md, rb-port).
 sumrat_prefilter_threshold = 0.4
 
 [difference.extra_catalog_cols]
@@ -673,6 +681,33 @@ nneg_nbad_stamp_size = 5
 # (250 SCAs, socsims 20260821).
 pixel_cols_bkg_box = 64
 pixel_cols_bkg_filter_size = 3
+
+[difference.rubrat]
+# [RUBRAT]: the RuBR-AT real/bogus classifier (modules/rubrat, dev's
+# compute_rb; rapidpipe.science.difference.realbogus) scores every source of
+# SFFT's positive PSF-fit catalog, rb_score and rb_label, a column of the
+# catalog and of `sources` (rb, rblabel), under diff_flavor = "sfft" only:
+# the model is SFFT-trained, so under "zogy" nothing is scored. The model is
+# a prefix holding SHA256SUMS and the three files below, each verified. New,
+# not dev's (dev: s3_prefix): model_prefix, a full s3:// or file:// prefix,
+# set by --set for a run; "" (shipped) reads the bucket from the SSM
+# parameter model_bucket_parameter, as [kafka] names its deployment values,
+# under model_key. The model's version is the prefix's last path component.
+# New, not dev's: python, the interpreter the classifier runs under, a
+# subprocess: the image's sidecar virtual environment, the only one holding
+# TensorFlow and Keras (the Containerfile; temporary, rapid_docs
+# decisions.md, rb-port). "" is the stage's own interpreter.
+python = "/opt/rapid/venvs/rubrat/bin/python"
+model_prefix = ""
+model_bucket_parameter = "/rapid/scratch/s3/inputs-bucket"
+model_key = "rubrat/2026-10-06_canonical9_seed42"
+checkpoint = "best.keras"
+feats_scaler = "canonical_9.json"
+threshold_json = "threshold.json"
+# Survey context token the model was trained with: 0 = HLTDS, 1 = GBTDS.
+survey_id = 0
+# Sources per model prediction batch.
+batch_size = 256
 
 [difference.fake_sources]
 # [FAKE_SOURCES]. Fake-source injection is not ported; true is refused
