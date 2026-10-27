@@ -271,7 +271,7 @@ regression). A row whose finding a later row superseded says so.
 | flight-first | program 1049's four F158 WFI02 epochs, overlay `flight-1049.toml` (HLWAS's DQ mask, no WCS correction): 328 packets; its hand reference for e4 superseded by ref-overlap | 118 | PRs 443, 445; rapid_docs 123 |
 | ou-gain | OpenUniverse's `scalefacref` 2.2 is the socsim reference zero point (10^(0.4 × 0.8564) = 2.2006), not `sca_gain`; on the science's own it reads 1.018, outside 0.94 to 1.01, so the overlay stays | 121, 123 | PR 448 |
 | self-contained | every live run's L2, truth and Gaia are in the inputs bucket (139 objects copied under `g0008-selfcontained/`, 489 verified in place); no run of 1 to 124 names an IMSS bucket | | PR 449; rapid_docs 124 |
-| ou-zp | acceptance failed: the science's own zero points with `sca_gain = 1.0` hold every line but false positives 493 against at most 492; the overlay unchanged, the candidate on branch `ou-zp/1-overlay` | 125 | PR 451 |
+| ou-zp | the science's own zero points with `sca_gain = 1.0` hold every line but false positives 493 against at most 492; landed on the overlay on Ben's ruling (2026-10-27) accepting the 493, no tolerance rule added | 125 | PRs 451, 492 |
 | ref-overlap | a field's reference from every row before the bound whose `overlapfields` list it, of any SCA, as dev: flight e4 with no hand job; HLWAS injected 546 of 600 | 126, 127 | PRs 450, 452; rapid_docs 125 |
 | gaia-pm | `[intake] gaia_proper_motion` carries Gaia's stars to the frame's mid-exposure, shipped `false`, `flight-1049.toml` `true`: flight dy −0.56..−0.35 → −0.060..−0.038 px; acceptance failed on e4's dx −0.0909 against 0.09, the setting left in force; GBTDS SCA 2's offset is not proper motion | 128 to 130 | PRs 453, 454 |
 | forced-growth | a set's `forced` rows are its objects times its window images; 4.83 M rows, 1.02 GB; on the breadth runs a field's rows grow quadratically in epoch, copies 0.57 of run 38's | 36 to 38 | PR 455 |
@@ -522,11 +522,11 @@ items no later part closed; each names where its numbers are.
   clears both core and ring (PR 462); the next lever is the reference PSF
   itself or a matched-width kernel, a code knob. r00342's F213 has the
   same kind of width mismatch (part 12 step 5).
-- **The OpenUniverse overlay** stays on the socsim zero points and
-  `sca_gain` 2; the candidate on branch `ou-zp/1-overlay` fails only on
-  false positives 493 against 492 inside the capped 500, and a tolerance
-  from the count's own spread is the team's open question (rapid_docs
-  `decisions.md`, open questions; PR 451). Every OpenUniverse
+- **The OpenUniverse overlay** carries the science's own zero points and
+  `sca_gain` 1.0, landed from branch `ou-zp/1-overlay` on Ben's ruling
+  (2026-10-27) accepting false positives 493 against 492 inside the
+  capped 500 (PRs 451, 492); no run has yet read them from the overlay
+  rather than `--set`. Every OpenUniverse
   difference keeps 500 of 2,077 to 3,682 candidates, so its count below
   AB 25 measures the cap (part 12 step 3).
 - **Flight program 1049**: 341 unflagged recurrent hot pixels, 472 not
