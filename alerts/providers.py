@@ -2599,9 +2599,17 @@ class AlertDataProvider:
         history inside the window is read first and only the epochs it is
         missing are measured (normally the chip's own; everything, for a
         new object), then the touched month files are rewritten. Without
-        a store everything in the window is measured. A failure anywhere
-        is logged and leaves the cache empty: the chip's alerts still
-        ship, with null prvDiaForcedSources, rather than aborting.
+        a store everything in the window is measured.
+
+        Failures degrade rather than abort, each logged at ERROR with its
+        traceback and named in the chip's summary line: a store read
+        failure measures the whole window from scratch and skips the
+        write-back (no ETags to write safely against); a measurement
+        failure keeps the stored rows as the chip's history (so the
+        chip's own epoch is missing from the alerts); a write failure
+        keeps the merged rows for the alerts but not the store. Only a
+        failure of the chip's own database queries leaves the cache empty
+        and the alerts with null prvDiaForcedSources.
 
         A stored history measured at a different position than the
         object's forced position (by more than FORCED_POSITION_TOL_DEG) is
@@ -2639,21 +2647,37 @@ class AlertDataProvider:
             mjd_lo = (None if self.forced_window_days is None
                       else float(chip["mjdobs"]) - self.forced_window_days)
 
+            # Each step below degrades on its own rather than voiding the
+            # chip's forced photometry: the alerts ship with whatever rows
+            # are available, and every fallback is logged at ERROR.
+            fallback: list[str] = []
+
             # 1. stored histories inside the window, one read per object
             histories: dict[int, np.ndarray] = {}
             etags: dict[int, dict] = {}
+            store_read_ok = self.forced_store is not None
             if self.forced_store is not None:
                 read = lambda aid: fp.read_object_history(            # noqa: E731
                     self.forced_store, objects[aid][1], aid, mjd_lo, mjd_hi)
-                for aid, (table, tags) in zip(aids, fp.run_parallel(read, aids, FORCED_STORE_WORKERS)):
-                    pos = objects[aid][0]
-                    if len(table) and (np.abs(table["ra"] - pos.ra).max() > FORCED_POSITION_TOL_DEG
-                                       or np.abs(table["dec"] - pos.dec).max() > FORCED_POSITION_TOL_DEG):
-                        logger.warning("pid=%s aid=%d: stored forced photometry was measured at a "
-                                       "different position; discarding %d rows and recomputing",
-                                       pid, aid, len(table))
-                        table = table[:0]
-                    histories[aid], etags[aid] = table, tags
+                try:
+                    for aid, (table, tags) in zip(aids, fp.run_parallel(read, aids, FORCED_STORE_WORKERS)):
+                        pos = objects[aid][0]
+                        if len(table) and (np.abs(table["ra"] - pos.ra).max() > FORCED_POSITION_TOL_DEG
+                                           or np.abs(table["dec"] - pos.dec).max() > FORCED_POSITION_TOL_DEG):
+                            logger.warning("pid=%s aid=%d: stored forced photometry was measured at a "
+                                           "different position; discarding %d rows and recomputing",
+                                           pid, aid, len(table))
+                            table = table[:0]
+                        histories[aid], etags[aid] = table, tags
+                except Exception:
+                    # Without the stored rows the window is measured from
+                    # scratch, and nothing is written back: a write without
+                    # the read's ETags could overwrite another worker's rows.
+                    logger.exception("pid=%s: stored forced photometry could not be read after %.1f s; "
+                                     "measuring the whole window from scratch and NOT writing it back",
+                                     pid, time.time() - t0)
+                    histories, etags, store_read_ok = {}, {}, False
+                    fallback.append("store read failed")
             t_read = time.time() - t0
 
             # 2. the images holding the positions, then only the missing pairs
@@ -2670,15 +2694,25 @@ class AlertDataProvider:
             images = [image for image in images if len(image.position_index)]
             t_search = time.time() - t0
 
-            # 3. measure the missing pairs
-            new_rows = self._run_forced(pid, images, positions)
+            # 3. measure the missing pairs (a per-image failure is skipped
+            #    inside run_prev_images; this guards the run as a whole)
+            try:
+                new_rows = self._run_forced(pid, images, positions)
+            except Exception:
+                n_stored = sum(len(h) for h in histories.values())
+                logger.exception("pid=%s: forced photometry of %d images failed after %.1f s; alerts "
+                                 "fall back to the %d stored rows (the chip's own epoch is NOT among them)",
+                                 pid, len(images), time.time() - t0, n_stored)
+                new_rows = np.zeros(0, dtype=fp.FORCED_TABLE_DTYPE)
+                fallback.append("measurement failed")
             t_fit = time.time() - t0
 
             # 4. merge, write back the touched months, cache
             merged = {aid: (histories.get(aid, new_rows[:0]), new_rows[new_rows["aid"] == aid])
                       for aid in aids}
             tables = {aid: fp.merge_rows(hist, new) for aid, (hist, new) in merged.items()}
-            if self.forced_store is not None:
+            n_files = 0
+            if store_read_ok and len(new_rows):
                 def write(aid):
                     new = merged[aid][1]
                     if not len(new):
@@ -2694,18 +2728,28 @@ class AlertDataProvider:
                         tables[aid] = fp.merge_rows(latest, new)
                         fp.write_object_history(self.forced_store, field, aid, tables[aid], periods, tags)
                     return len(periods)
-                n_files = sum(fp.run_parallel(write, aids, FORCED_STORE_WORKERS))
-            else:
-                n_files = 0
+                try:
+                    n_files = sum(fp.run_parallel(write, aids, FORCED_STORE_WORKERS))
+                except Exception:
+                    # the alerts still carry the merged rows; only the store
+                    # misses this chip's epoch until the next chip measures it
+                    logger.exception("pid=%s: forced photometry history could not be written after %.1f s; "
+                                     "the %d new rows ship in the alerts but are not stored",
+                                     pid, time.time() - t0, len(new_rows))
+                    fallback.append("store write failed")
             table = np.concatenate([tables[aid] for aid in aids]) if aids else new_rows
             self._chip_forced = np.sort(table, order=["aid", "mjdobs"])
             t_total = time.time() - t0
             logger.info("pid=%s: forced photometry: %d objects, %d stored rows read; measured "
                         "%d of %d images in the window (%d new rows); %d month files written; "
-                        "read %.1f s, search %.1f s, stage+fit %.1f s, write %.1f s, total %.1f s",
+                        "read %.1f s, search %.1f s, stage+fit %.1f s, write %.1f s, total %.1f s%s",
                         pid, len(aids), sum(len(h) for h in histories.values()), len(images),
                         n_candidates, len(new_rows), n_files, t_read, t_search - t_read,
-                        t_fit - t_search, t_total - t_fit, t_total)
+                        t_fit - t_search, t_total - t_fit, t_total,
+                        f"; FALLBACK: {', '.join(fallback)}" if fallback else "")
+            if fallback:
+                logger.error("pid=%s: forced photometry degraded (%s); alerts carry %d rows for %d objects",
+                             pid, ", ".join(fallback), len(table), len(aids))
         except Exception:
             logger.exception("pid=%s: forced photometry failed after %.1f s; alerts will "
                              "carry null prvDiaForcedSources", pid, time.time() - t0)

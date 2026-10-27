@@ -806,6 +806,53 @@ def test_history_at_another_position_is_discarded_and_recomputed(chip_data, synt
     assert len(hist) == 2 and np.allclose(hist["ra"], chip_data.objects[aid]["ra0"])
 
 
+def test_measurement_failure_falls_back_to_the_stored_history(chip_data, synthetic_chip, tmp_path,
+                                                              objects_on_chip, caplog, monkeypatch):
+    store = str(tmp_path / "store")
+    search = FakeSearch(synthetic_chip, tmp_path)
+    run_chip(chip_data, search, store, caplog)
+    # drop the chip's own epoch (rid 11, at CHIP_MJDOBS) from every object so
+    # the next run must measure it
+    for aid in chip_data.objects:
+        hist, _ = read_object_history(store, CHIP_FIELD, aid)
+        write_object_history(store, CHIP_FIELD, aid, hist[hist["rid"] != 11], [period_key(CHIP_MJDOBS)])
+
+    def boom(self, pid, images, positions):
+        raise RuntimeError("staging exploded")
+    monkeypatch.setattr("alerts.providers.AlertDataProvider._run_forced", boom)
+    forced, log = run_chip(chip_data, search, store, caplog)
+    # the alerts carry the stored epoch, not nothing
+    assert [f.mjdobs for f in forced] == [CHIP_MJDOBS - 1.0]
+    assert "fall back to the" in log and "staging exploded" in log
+    assert "FALLBACK: measurement failed" in log and "forced photometry degraded" in log
+    assert "(0 new rows)" in log and "0 month files written" in log
+    # nothing was written: the store still lacks the chip's own epoch
+    aid = sorted(chip_data.objects)[0]
+    assert read_object_history(store, CHIP_FIELD, aid)[0]["rid"].tolist() == [12]
+
+
+def test_store_read_failure_measures_from_scratch_and_does_not_write(chip_data, synthetic_chip, tmp_path,
+                                                                     objects_on_chip, caplog, monkeypatch):
+    store = str(tmp_path / "store")
+    search = FakeSearch(synthetic_chip, tmp_path)
+    run_chip(chip_data, search, store, caplog)
+    aid = sorted(chip_data.objects)[0]
+    stored_before, _ = read_object_history(store, CHIP_FIELD, aid)
+
+    def boom(*args, **kwargs):
+        raise OSError("endpoint unreachable")
+    monkeypatch.setattr("alerts.forced_phot.read_object_history", boom)
+    forced, log = run_chip(chip_data, search, store, caplog)
+    # the whole window is measured, the alerts are complete, the store is untouched
+    assert [f.mjdobs for f in forced] == [CHIP_MJDOBS - 1.0, CHIP_MJDOBS]
+    assert "could not be read" in log and "NOT writing it back" in log
+    assert "measured 2 of 2 images" in log and "0 month files written" in log
+    assert "FALLBACK: store read failed" in log
+    monkeypatch.undo()
+    stored_after, _ = read_object_history(store, CHIP_FIELD, aid)
+    assert stored_after["forced_id"].tolist() == stored_before["forced_id"].tolist()
+
+
 def test_forced_photometry_without_a_store_recomputes_every_run(chip_data, synthetic_chip, tmp_path, objects_on_chip, caplog):
     search = FakeSearch(synthetic_chip, tmp_path)
     forced, log = run_chip(chip_data, search, None, caplog)

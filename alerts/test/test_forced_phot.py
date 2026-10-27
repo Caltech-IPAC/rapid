@@ -26,7 +26,7 @@ from alerts.forced_phot import (CONE_RADIUS_DEG, FLAG_NONFINITE,
                                 forced_photometry, load_psf, open_image,
                                 project_positions, psfphot, q3c_search,
                                 read_positions_csv, run_prev_images,
-                                sci_psf_basename, write_measurements_csv,
+                                write_measurements_csv,
                                 diff_uncert_basename, sci_uncert_basename,
                                 StaleWriteError, list_object_periods,
                                 merge_rows, object_period_path, object_prefix,
@@ -241,8 +241,9 @@ def test_q3c_search_query_shape_and_row_mapping():
     assert img.diff_filename == f"{JOB_DIR}/sfftdiffimage_masked.fits"
     assert img.sci_filename == f"{JOB_DIR}/{SCI_BASENAME}"
     assert img.diff_psf == f"{JOB_DIR}/sfftdiffpsf.fits"
-    # psfs.filename basename with "_normalized" (commissioning: phavg family)
-    assert img.sci_psf == f"{JOB_DIR}/sciimage_psf_phavg_fid8_sca07_normalized.fits"
+    # the psfs-table file itself, not the job directory's normalized copy
+    # (which is named after whichever psfs row was best when the job ran)
+    assert img.sci_psf == "s3://psfs/sciimage_psf_phavg_fid8_sca07.fits"
     assert img.diff_uncert == f"{JOB_DIR}/sfftdiffimage_uncert_masked.fits"
     assert img.sci_uncert == f"{JOB_DIR}/r10_reformatted_unc.fits"
     assert img.l2_filename == "s3://l2/r10.fits.gz"
@@ -272,10 +273,6 @@ def test_q3c_search_without_psfs_row_has_no_science_psf():
 
 
 def test_psf_basenames_follow_the_job_directory_convention():
-    # science PSF: psfs.filename basename, ".fits" -> "_normalized.fits"
-    assert sci_psf_basename("s3://b/psfs/sciimage_psf_phavg_fid5_sca11.fits") \
-        == "sciimage_psf_phavg_fid5_sca11_normalized.fits"
-    assert sci_psf_basename("sciimage_psf_f146_sca09.fits") == "sciimage_psf_f146_sca09_normalized.fits"
     assert diff_psf_basename("sfftdiffimage_dconv_masked.fits") == "sfftdiffpsf_dconv.fits"
     # uncertainty images: "uncert_" inserted; the sfft branch writes one name
     # for plain and dconv runs; the science one follows the L2 basename
@@ -287,9 +284,7 @@ def test_psf_basenames_follow_the_job_directory_convention():
     assert sci_uncert_basename("x.fits") == "x_reformatted_unc.fits"
     with pytest.raises(ValueError):
         diff_uncert_basename("naive_diffimage_masked.fits")
-    # an unexpected name or flavor must fail before anything is staged
-    with pytest.raises(ValueError):
-        sci_psf_basename("s3://b/psfs/sciimage_psf_phavg_fid5_sca11.fits.gz")
+    # an unexpected flavor must fail before anything is staged
     with pytest.raises(ValueError):
         diff_psf_basename("naive_diffimage_masked.fits")
 
@@ -580,6 +575,28 @@ def test_run_prev_images_failure_is_skipped_or_raised(synthetic_chip, tmp_path, 
     assert "rid=11" in caplog.text and "1 image-product measurements failed" in caplog.text
     with pytest.raises(FileNotFoundError):
         list(run_prev_images(images, positions, stage, products=("diff",), strict=True))
+
+
+def test_run_prev_images_stages_the_science_psf_first_and_reports_a_missing_one_once(
+        synthetic_chip, tmp_path, caplog):
+    image_path, psf_path, sources = synthetic_chip
+    img = open_image(image_path)
+    positions = sky_positions(img.wcs, [(sources[0][0], sources[0][1])])
+    staging = tmp_path / "staging"; staging.mkdir(); stage = CopyingStage(str(staging))
+    missing = "/nonexistent/psfs/sciimage_psf_f146_sca07.fits"
+    images = [prev_image(11, 61680.1, image_path, psf_path, position_index=[0], sci_psf=missing),
+              prev_image(12, 61680.2, image_path, psf_path, position_index=[0], sci_psf=missing)]
+    with caplog.at_level("WARNING"):
+        out = list(run_prev_images(images, positions, stage))
+    # diff products still measured; science skipped for both epochs
+    assert [(i.rid, p) for i, p, _ in out] == [(11, "diff"), (12, "diff")]
+    # the PSF was tried once, up front, and no science image was staged for it
+    assert stage.calls[0] == missing and stage.calls.count(missing) == 1
+    assert caplog.text.count("science PSF") == 1 and "2 image-product measurements failed" in caplog.text
+    # diff staging also asks for the PSF before the image
+    assert stage.calls.index(psf_path) < stage.calls.index(image_path)
+    with pytest.raises(FileNotFoundError):
+        list(run_prev_images(images, positions, stage, strict=True))
 
 
 def test_run_prev_images_uses_the_records_uncertainty_by_default(synthetic_chip, tmp_path, tpv_header, caplog):

@@ -1428,9 +1428,12 @@ Problems found in alert production:
   Total                                                                                           701,341
   =====================================================================  =================  =============
 
-  The science-image PSF is now taken from the PSFs database table, and the code uses the current best PSF version
-  (``sciimage_psf_f146_scaNN.fits``, version 2, from 8/21/2026), whereas the job directories of the 7/6/2026 and
-  7/22/2026 tests hold the version-1 PSF (``WFI_SCANN_F146_PSF_DET_DIST_normalized.fits``).  Selecting the PSF
-  version that was current when each difference image was made fixes this.  The missing image products belong to
+  The science-image PSF was looked up in the PSFs database table (the current best version,
+  ``sciimage_psf_f146_scaNN.fits``, version 2, from 8/21/2026) but then expected as a normalized copy in each
+  epoch's job directory, whereas the job directories of the 7/6/2026 and 7/22/2026 tests hold the version-1 PSF
+  (``WFI_SCANN_F146_PSF_DET_DIST_normalized.fits``); which version a job used is not recorded in the database.
+  Fixed 10/27/2026: the forced photometry now stages the PSFs-table file itself (from the pipeline-files bucket,
+  once per filter and SCA per chip) and normalizes it in memory, so every epoch is measured with the current best
+  PSF and no job-directory PSF copy is read.  The missing image products belong to
   difference images of 6/6/2026, 6/24/2026, and the failed processing request 5 whose DiffImages records are still
   best but whose files are not in S3; those records should be marked as such.
