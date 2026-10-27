@@ -297,6 +297,9 @@ class FakeToolRunner:
         diff = "sfftdiffimage_dconv_masked.fits" if crossconv else "sfftdiffimage_masked.fits"
         fits.PrimaryHDU(data=(sci_data - ref_data).astype(np.float32), header=header).writeto(
             Path(cwd) / diff, overwrite=True)
+        if crossconv:   # SFFT writes the cross-convolved difference beside the decorrelated one
+            fits.PrimaryHDU(data=(sci_data - ref_data).astype(np.float32), header=header).writeto(
+                Path(cwd) / "sfftdiffimage_cconv_masked.fits", overwrite=True)
         soln = "sfftsoln_cconv.fits" if crossconv else "sfftsoln.fits"
         fits.PrimaryHDU(data=np.ones((3, 3), dtype=np.float32)).writeto(Path(cwd) / soln, overwrite=True)
         psf_name = "sfftdiffpsf_dconv.fits" if crossconv else "sfftdiffpsf.fits"

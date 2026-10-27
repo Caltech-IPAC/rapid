@@ -191,7 +191,7 @@ psf = 2048
 # to +0.0032, ring -0.0000 to +0.0017, inside both bounds, which stay.
 # SFFT's core +0.251 to +0.271 (ring -0.002 to +0.021) under the socsims
 # block is its bright-star residual, a failure the bounds hold, never a
-# healthy range; under the HLWAS overlay's [difference.sfft] block (run 113)
+# healthy range; under the OpenUniverse [difference.sfft] block (run 113)
 # core -0.0002 to +0.0004, ring -0.0092 to -0.0069, inside both.
 snr_gt20_factor = 3.0
 core_fraction_max_abs = 0.025
@@ -473,7 +473,7 @@ max_sources = 500
 # 478, 2026-10-26, registers SFFT's image only) and the team (Ben,
 # 2026-10-26), with dev's prefilter ([difference.database_prefilter]); a run
 # or an overlay selects zogy (--set difference.diff_flavor="zogy"). The
-# measured trade, HLWAS 001_0001 SCA 8 F146 under the HLWAS overlay's
+# measured trade, HLWAS 001_0001 SCA 8 F146 under the OpenUniverse
 # [difference.sfft] block (runs 145, 146 against ZOGY's 144, 127): injected
 # passes 4 to 6, detected 533 of 600 against 546, the loss at AB 26 to 26.5;
 # false positives per epoch 102.7 against 213.3; null-epoch packets 86
@@ -563,13 +563,32 @@ zogy_output_diffpsf_file = "diffpsf.fits"
 zogy_output_scorrimage_file = "scorrimage.fits"
 
 [difference.sfft]
-# [SFFT] (socsims block).
+# [SFFT], dev's OpenUniverse block, not its socsims block (crossconv_flag
+# false, bsmask 20000 / 30, no gain-match catalogs, no segmentation), which
+# dev ships for socsim data: a divergence (rapid_docs decisions.md,
+# 2026-10-27) for a property of the stage, not of a dataset. Under the
+# socsims block the stage's zeroed DQ-masked science cores enter the kernel
+# fit and pull its photometric ratio down. Measured on one epoch pair,
+# HLWAS 001_0001 SCA 8 F146 pass 4 against run 81's reference, the same
+# bytes (sfft-core, 2026-10-24): the zeroed cores are 5,096 px, 0.03% of
+# the frame, 31% of the sum of the reference's squared pixels; core
+# fraction +0.251, ring +0.021 under the socsims block; this block masks
+# every source with FLUX_MAX >= 50 within 100 px and fits the 1.6% of
+# pixels left on the segmentation's sources, cross-convolved: core -0.000,
+# ring -0.009 (ZOGY -0.001, +0.002), S/N > 20 candidates 184 positive and
+# 12 negative against 771 and 300, 179 of the epoch's 200 injected sources
+# in its PSF-fit catalog against 130. Its reference catalog selects 62
+# sources and its decorrelation sigmas come from pixels 96% segmentation
+# background, so neither of dev's ini caveats on this block holds there.
+# The catalog path alone (sfft_use_gainmatch_catalogs = true at 20000)
+# selects nothing and reproduces the socsims block to the digit. Moved here
+# from the HLWAS overlay (sfft-block-base), which carried it since sfft-core.
 run_sfft = true
-crossconv_flag = false
-sfft_bsmask_value = "20000.0"
-sfft_bsmask_radius = "30.0"
-sfft_use_gainmatch_catalogs = false
-sfft_use_segmentation = false
+crossconv_flag = true
+sfft_bsmask_value = "50.0"
+sfft_bsmask_radius = "100.0"
+sfft_use_gainmatch_catalogs = true
+sfft_use_segmentation = true
 sfft_code = "/code/modules/sfft/sfft_rapid_rimtimsim.py"
 # The interpreter that runs sfft_code; empty means the interpreter
 # running this stage (the pipeline image's main conda environment, where
@@ -581,8 +600,8 @@ python_cmd = ""
 # deactivation -- run python_cmd directly. `dev` hard-codes
 # "source /sfft_env/bin/activate" for its own venv image. New default.
 activate_cmd = ""
-# SFFT runs as `dev` runs it; its files stay under the job's prefix and
-# are not published as rows (a run has one differencer: ZOGY).
+# SFFT runs as `dev` runs it; under diff_flavor = "zogy" its files stay
+# under the job's prefix and are not published as rows.
 
 [difference.naive_diffimage]
 # [NAIVE_DIFFIMAGE]. The naive subtraction runs as `dev` runs it and is
