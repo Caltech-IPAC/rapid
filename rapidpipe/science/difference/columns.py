@@ -18,9 +18,10 @@ The copy is in memory; the image itself is unchanged.
 
 A source whose position is not finite, whose stamp leaves the image or
 whose filtered stamp has no usable pixel gets NaN, where `dev` writes
-``-999`` and its loader loads NULL. `dev` falls back to the unsubtracted
-image when the background fails; here the failure fails the job, as every
-fault in the stage does.
+``-999`` and its loader loads NULL. When the background fails (photutils
+drops every mesh box that keeps under 90 % of its pixels after the 3-sigma
+clip, as on a heavy-tailed SFFT difference), the columns are measured on
+the image itself, as `dev` does, with a warning.
 
 `dev`'s functions read and write FITS files; these take arrays, and the
 catalog is the parquet file the stage publishes, rewritten with the three
@@ -32,7 +33,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Sequence
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 #: The columns, in `dev`'s order.
 PIXEL_COLUMNS = ("sumrat", "nneg", "nbad")
@@ -163,8 +168,13 @@ def pixel_columns(data: np.ndarray, x, y, settings: dict[str, Any]) -> dict[str,
     ``[SUMRAT]``) and ``extra_catalog_cols`` (``[EXTRA_CATALOG_COLS]``).
     """
     s, e = settings["sumrat"], settings["extra_catalog_cols"]
-    image = subtract_local_background(data, box_size=int(e["pixel_cols_bkg_box"]),
-                                      filter_size=int(e["pixel_cols_bkg_filter_size"]))
+    try:
+        image = subtract_local_background(data, box_size=int(e["pixel_cols_bkg_box"]),
+                                          filter_size=int(e["pixel_cols_bkg_filter_size"]))
+    except ValueError as exc:
+        # dev's _compute_pixel_catalog_cols: the columns on the image itself.
+        logger.warning("pixel columns: the local background failed (%s); measured on the image itself", exc)
+        image = np.asarray(data, dtype=np.float64)
     nneg, nbad = nneg_nbad(image, x, y, stamp_size=int(e["nneg_nbad_stamp_size"]))
     return {"sumrat": sumrat(image, x, y, stamp_size=int(s["stamp_size"]),
                              filter_size=int(s["filter_size"]),

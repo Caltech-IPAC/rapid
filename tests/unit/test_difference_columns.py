@@ -6,7 +6,8 @@ stamp leaves the image (`dev`'s ``test_nneg_nbad.py``); sumrat is near 1 on
 a point source and near 0 on a dipole, and about 0 on noise with the true
 median, about -0.32 with ZTF's lower median; the local background removes
 a constant pedestal and keeps the non-finite pixels, so the columns of a
-source on a pedestal are those of the source alone; the catalog gains the
+source on a pedestal are those of the source alone; where the background
+fails, the columns are those of the image itself (`dev`); the catalog gains the
 three columns and keeps every other column and its row order.
 """
 
@@ -109,6 +110,20 @@ def test_a_source_on_a_pedestal_measures_as_the_source_alone():
     assert plain < 0.9                                  # the pedestal pulls the stamp down
     assert measured["sumrat"][0] == pytest.approx(1.0, abs=1e-6)
     assert measured["nneg"][0] == 0
+
+
+def test_a_failed_background_measures_the_columns_on_the_image_itself():
+    pytest.importorskip("photutils")
+    rng = np.random.default_rng(7)
+    # 15 % of pixels 30 times wider: the clip leaves every 64 px box under photutils' 90 %
+    data = np.where(rng.random((128, 128)) < 0.15, rng.normal(0, 30, (128, 128)),
+                    rng.normal(0, 1, (128, 128)))
+    with pytest.raises(ValueError):
+        columns.subtract_local_background(data, box_size=64)
+    x, y = [40.0, 90.0], [40.0, 70.0]
+    measured = columns.pixel_columns(data, x, y, SETTINGS)
+    np.testing.assert_array_equal(measured["sumrat"], columns.sumrat(data, x, y))
+    np.testing.assert_array_equal(measured["nneg"], columns.nneg_nbad(data, x, y)[0])
 
 
 def test_the_catalog_gains_the_three_columns_and_keeps_the_rest(tmp_path):
