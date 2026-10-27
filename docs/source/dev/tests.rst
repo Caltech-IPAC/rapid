@@ -144,6 +144,8 @@ Date              Software modification
                     after pruning the Merges/XMerges records; alert production is now stage 20 (PR #504).
                   * A Sources or XSources child table that loses at least ``[DATABASE_PRUNING] recluster_deleted_fraction = 0.2`` of its records to that pruning is reclustered,
                     instead of only vacuumed, so that it does not keep the deleted records' space.
+                  * Reference-image pipelines now run on 4-vCPU AWS Batch machines (revision 5 of the ``rapid_reference_image_pipeline`` job definition, ``[AWS_BATCH] refimage_job_definition``),
+                    and ``[AWAICGEN] awaicgen_num_threads`` changed from 2 to 4 to match (PR #506).
 ===============   ===============================================================================================================================================================================================================================
 
 
