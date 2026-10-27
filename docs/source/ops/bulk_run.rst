@@ -72,10 +72,12 @@ Follow the stages in order and do not omit any, since each relies on all the pre
      - Deletes ``XMerges_<field>`` records of no-longer-best difference images.
    * - 18
      - ``pruneNotBestSources.py``
-     - Deletes ``Sources`` child-table records of no-longer-best difference images.
+     - Deletes ``Sources`` child-table records of no-longer-best difference images, and
+       reclusters tables that lost a large share of their records.
    * - 19
      - ``pruneNotBestXSources.py``
-     - Deletes ``XSources`` child-table records of no-longer-best difference images.
+     - Deletes ``XSources`` child-table records of no-longer-best difference images, and
+       reclusters tables that lost a large share of their records.
    * - 20
      - ``produceAlertsForProcDate.py``
      - Produces alert packets for the difference images processed on the processing date.
