@@ -482,6 +482,14 @@ part 11 step 7.
 
 The scratch prefixes of runs 13 to 16, 18 to 45, 51, 52, 55 and 56 were
 deleted on 2026-10-24: `validate_run.py` fails on them by design.
+One-time cleanup, Ben 2026-10-27 06:27 UTC (socsims-1021): the prefixes
+of runs 1 to 11 (8 never had one), 61, 63, 119, 120, 131 and 132 and the
+pre-foundation `rapidpipe-firstrun/` were removed, 7,514 objects, 259.6
+GB. Their database rows and bindings stay, and so does run 9's live
+binding for `socsims-fakesrc-20260807`. The rows of runs 1, 3, 9 and 10
+still appear in the views and point at removed products, until a later
+rebinding or removal that nobody has ruled. `inj/` was kept because it is
+run 71's source root.
 
 ## If a step fails
 
