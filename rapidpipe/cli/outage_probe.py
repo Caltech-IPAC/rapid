@@ -195,7 +195,8 @@ def run(*, window: str, until: dt.datetime, index: int, outputs_root: str, attem
         errors += sum(1 for e in probe.events[n:] if e.get("ok") is False or e.get("outcome") == "error")
         if clock() >= until.timestamp():
             break
-        sleep(interval)
+        if scenario != "in-flight":     # its transactions run back to back
+            sleep(interval)
     probe.close()
     disturbed = errors > 0 or slowest > stall
     summary = {"window": window, "scenario": scenario, "index": index, "attempt": attempt,
