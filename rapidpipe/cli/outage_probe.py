@@ -42,17 +42,31 @@ timeline shows no disturbance (no error, no step slower than ``--stall``
 seconds beyond its own work) ends ``bracket not met``, exit 0: inconclusive,
 never a pass.
 
-The bracket (rapid_systems ``op-db-maintenance.sh`` in the Thursday window,
-15:00 UTC): the schedule submits at 14:58 UTC, each scenario prepares its
-state at once and holds it, exercising at intervals until ``--until``, so
-it spans the bracket whenever it lands before then; nothing in the job
-detects the bracket's phases. Overlap is proven after the fact: the
-reader joins these timestamps against the PAUSE, restart and reopen lines
-of that window's ``rapid-maintenance-canary`` CodeBuild log, and reads
-which branch the window took (patch: PAUSE then RESUME; reboot: the
-pooler stopped and started with the host) from the same record. The
-expected offsets and branches are in the pull request that added this
-module (rapid PR, outage-probe-prep) and the runbook's part-13 row.
+The bracket (rapid_systems ``op-db-maintenance.sh``, inside the Thursday
+window that starts at 15:00 UTC): the canary's rehearsal first, then on
+rapid-db the pooler masked, ``dnf update``, then PAUSE on a held admin
+session and the drain (``db_drain_max_seconds`` 120). Its PAUSE came 11:51
+after the window build's start on 2026-10-22 (the hand re-run, all eight
+hosts) and 10:04 on 2026-10-27 (two hosts): about 15:12 UTC, later by up to
+31 minutes when the canary's start meets a capacity refusal. Then one of
+three branches, chosen at run time by what ``dnf`` installed: no reboot
+(RESUME on the held session after seconds; clients held, not refused),
+reboot (the pooler stays paused and masked, the host reboots, a fresh
+pgbouncer starts; about 3:10 PAUSE to reopen on 2026-10-22 and 10-27,
+clients refused) or roll (8:25 on 2026-10-12). Expected: 2026-10-29 no
+reboot (rapid-db took the new kernel and pooler on 2026-10-27; low
+confidence), 2026-11-05 reboot. The branch each window took is read from
+its own record, never from this expectation.
+
+How the jobs meet it: the schedule submits at 14:58 UTC with ``--until``
+16:15 UTC; each scenario prepares its state at once and holds it,
+exercising until ``--until``, so it spans any bracket that starts before
+then (15:00 + 12 + 31 + a 15-minute hold is 15:58). Nothing in the job
+detects the bracket's phases. Overlap is proven after the fact: the reader
+joins these timestamps against the PAUSE (the fence marker's epoch), RESUME
+or pooler start and the pooled ``SELECT 1`` lines of that window's
+``rapid-maintenance-canary`` CodeBuild log, and reads the branch from the
+same log's ``branch:`` line.
 """
 
 from __future__ import annotations
