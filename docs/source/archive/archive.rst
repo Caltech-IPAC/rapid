@@ -27,10 +27,12 @@ The volume and cost estimates in this document rely on the following assumptions
 * GRISM and PRISM (spectroscopic) exposures are excluded; RAPID processes imaging modes only
 * Observation plan based on the provisional Roman scheduled observations; detailed mission plan is TBD
 * Reference images are assumed to exist for all observed sky tiles and filters (upper bound on difference-image volume)
-* Only ZOGY positive difference-image products are delivered to MAST; SFFT, Naive, and negative images are excluded
+* Only SFFT positive difference-image products are delivered to MAST; ZOGY, Naive, and negative images are excluded
+* SFFT is run without PSF cross-convolution, as in the 2026-10-21 run; with ``--crossconv`` (as for the OpenUniverse sims) a 67 MB cross-convolved image is added per SCA image
+* The SFFT SExtractor difference-image catalog (116 MB, as a text file with extra columns) is delivered in full; it is 46% of the per-SCA volume, so a trimmed or binary (Parquet) catalog would reduce the volume materially *(TBD: catalog contents and format for delivery)*
 * Alert rates: 2,000 candidates/SCA for galactic surveys (GBTDS, GPS), 500/SCA for extragalactic (HLTDS, HLWAS) *(TBD: filtering thresholds, real/bogus classifier performance)*
-* Alert packet size: 60 KB AVRO, consistent with Rubin/LSST estimates *(TBD: final RAPID alert schema and contents)*
-* Product sizes measured from the 2026-02-27 pipeline test run (OpenUniverse simulated data)
+* Alert packet size: 197 KB AVRO, measured as archived (with cutouts, previous detections and forced photometry) *(TBD: final RAPID alert schema and contents)*
+* Difference-image and alert product sizes measured from the 2026-10-21 pipeline test run (``s3://rapid-product-files/20261021/req7/``, SOC simulated data, F146, 1998 SCA images); reference-image product sizes from the 2026-02-27 run (OpenUniverse simulated data), since no reference images were made in the 2026-10-21 run
 * Image products converted from FITS to ASDF for MAST delivery; sizes may change slightly *(TBD: conversion pipeline)*
 * AWS costs use public on-demand list pricing (us-east-1, March 2026); actual costs depend on negotiated rates
 * Cost-optimization strategies have not yet been evaluated in detail; the AWS cost estimates below are based on simple extrapolations and should be treated as an initial planning guide rather than an optimized operations budget
@@ -104,9 +106,9 @@ Data Products
 Product Sizes
 =============
 
-Product sizes are measured from the 2026-02-27 pipeline test run using OpenUniverse simulated data. The pipeline currently generates products with three differencing methods (ZOGY, SFFT, Naive) in both positive and negative directions. For archive delivery to MAST, only **ZOGY positive** products are planned; SFFT and Naive products are retained internally for algorithm evaluation.
+Difference-image and alert product sizes are measured from the 2026-10-21 pipeline test run (``s3://rapid-product-files/20261021/req7/``, 1998 SCA images of SOC simulated data); reference-image product sizes are from the 2026-02-27 run using OpenUniverse simulated data. The pipeline currently generates products with three differencing methods (ZOGY, SFFT, Naive) in both positive and negative directions. Only the SFFT difference image is registered in the operations database, and ZOGY and Naive products can be switched off (see :doc:`/prod/products`). For archive delivery to MAST, only **SFFT positive** products are planned.
 
-This reduces the per-SCA archive footprint from 816 MB (all methods, both directions) to **204 MB** (ZOGY positive only). The per-SCA archive volume is dominated by three 67 MB FITS images (difference image, uncertainty map, and SCORR image), which together account for 99% of the footprint. Catalogs and PSFs are negligible by comparison.
+This reduces the per-SCA archive footprint from 1.5 GB (all methods, both directions) to **253 MB** (SFFT positive only). The per-SCA archive volume is dominated by the SExtractor catalog (116 MB, 46%) and two 67 MB FITS images (difference image and uncertainty map, 53%). The PSF-fit catalog and PSFs are negligible by comparison.
 
 Product Inventory
 =================
@@ -196,7 +198,7 @@ Product Inventory
      -
      -
    * - **Difference** (per SCA image)
-     - Difference image (ZOGY)
+     - Difference image (SFFT)
      - 67 MB
      - 9.8 M
      - 654 TB
@@ -204,15 +206,7 @@ Product Inventory
      - FITS
      - ASDF
    * -
-     - Uncertainty map (ZOGY)
-     - 67 MB
-     - 9.8 M
-     - 654 TB
-     - Prompt
-     - FITS
-     - ASDF
-   * -
-     - SCORR image (ZOGY)
+     - Uncertainty map (SFFT)
      - 67 MB
      - 9.8 M
      - 654 TB
@@ -221,41 +215,41 @@ Product Inventory
      - ASDF
    * -
      - Difference PSF
-     - 29 KB
+     - 20 KB
      - 9.8 M
-     - 0.3 TB
+     - 0.2 TB
      - Prompt
      - FITS
      - ASDF
    * -
      - SExtractor catalog
-     - 2.5 MB
+     - 116 MB
+     - 9.8 M
+     - 1.14 PB
+     - Prompt
+     - Text
+     - Parquet
+   * -
+     - PSF-fit catalog (Parquet)
+     - 2.4 MB
      - 9.8 M
      - 24 TB
      - Prompt
      - Parquet
      - Parquet
    * -
-     - PSF-fit catalog (Parquet)
-     - 0.3 MB
-     - 9.8 M
-     - 3 TB
-     - Prompt
-     - Parquet
-     - Parquet
-   * -
      - Science image PSF
-     - 43 KB
+     - 20 KB
      - 9.8 M
-     - 0.4 TB
+     - 0.2 TB
      - Prompt
      - FITS
      - ASDF
    * -
      - *Subtotal*
-     - *204 MB*
+     - *253 MB*
      -
-     - *2.0 PB*
+     - *2.5 PB*
      -
      -
      -
@@ -269,9 +263,9 @@ Product Inventory
      -
    * - **Alerts**
      - Alert packets
-     - 60 KB
+     - 197 KB
      - 12.5 G
-     - 0.75 PB
+     - 2.5 PB
      - Prompt / DR
      - AVRO
      - AVRO
@@ -303,7 +297,7 @@ Product Inventory
      -
      -
      -
-     - **2.8 PB**
+     - **5.0 PB**
      -
      -
      -
@@ -338,14 +332,14 @@ Each incoming SCA image is differenced against the best available reference imag
 
 The pipeline currently evaluates three differencing methods:
 
-* **ZOGY** --- the primary method, producing a difference image, SCORR (signal-to-noise) image, uncertainty map, and PSF model.
-* **SFFT** --- cross-convolution subtraction, producing decorrelated and cross-convolved images.
-* **Naive** --- simple pixel-by-pixel subtraction as a diagnostic baseline.
+* **SFFT** --- the primary method, and the only one registered in the operations database, producing a difference image, uncertainty map, and difference PSF (with ``--crossconv``, a decorrelated difference image and a cross-convolved image).
+* **ZOGY** --- optional (``[ZOGY] run_zogy``), producing a difference image, SCORR (signal-to-noise) image, uncertainty map, and PSF model.
+* **Naive** --- optional (``[NAIVE_DIFFIMAGE] naive_diffimage_flag``), simple pixel-by-pixel subtraction as a diagnostic baseline.
 
 For each method, SExtractor and PhotUtils PSF-fit catalogs are generated from both positive and negative difference images. Gain matching and sub-pixel alignment of the reference image are performed before differencing.
 
 .. note::
-   For archive delivery to MAST, only **ZOGY positive** difference-image products are planned. SFFT and Naive outputs are used internally for algorithm comparison and are excluded from the volume estimates in this document.
+   For archive delivery to MAST, only **SFFT positive** difference-image products are planned. ZOGY and Naive outputs, if made, are used internally for algorithm comparison and are excluded from the volume estimates in this document.
 
 For details on the differencing algorithms and PSF handling, see :doc:`/pl/pl`. A complete listing of all difference-image products is in :doc:`/prod/products`.
 
@@ -435,16 +429,21 @@ RAPID will deliver products to MAST on a **monthly** schedule throughout the nom
 Each monthly delivery will include:
 
 * New and updated reference images, coverage maps, uncertainty images, and catalogs
-* All ZOGY positive difference images, SCORR images, uncertainty maps, PSFs, and catalogs produced since the previous delivery (one set per SCA image)
+* All SFFT positive difference images, uncertainty maps, PSFs, and catalogs produced since the previous delivery (one set per SCA image)
 * Updated light-curve catalogs (Parquet export from the operations database)
 * Archived alert packets (AVRO tarballs covering the preceding month)
 * Forced-photometry results
 
-Based on the provisional mission schedule, the estimated average monthly delivery is approximately **33 TB** of difference-image products, plus reference-image updates and alert-archive tarballs. The total mission archive volume is estimated to be **2.8 PB**:
+Based on the provisional mission schedule, the estimated average monthly delivery is approximately **41 TB** of difference-image products, plus reference-image updates and alert-archive tarballs. The total mission archive volume is estimated to be **5.0 PB**:
 
-* 2.0 PB of difference-image products
-* 0.75 PB of archived alert packets
+* 2.5 PB of difference-image products
+* 2.5 PB of archived alert packets
 * 0.08 PB of reference images and catalogs
+
+.. note::
+   The plots below, the reprocessing figures and the AWS cost estimates were made by the archive model
+   (``rapid_model.py``) with the earlier product sizes (2.8 PB total) and have not yet been regenerated
+   with the sizes above.
 
 .. image:: volume_by_ccs.png
 
@@ -468,9 +467,9 @@ Each reprocessing regenerates all products from the beginning of the mission. Du
 
 The overlap effectively doubles the storage requirement at each reprocessing event:
 
-* **Baseline final storage**: 2.8 PB (single copy of all products)
-* **Peak at end-of-mission reprocessing**: 5.6 PB beginning on 2031-12-29 (old + new versions)
-* The 2-year reprocessing peak reaches 3.0 PB (on a 1.5 PB baseline)
+* **Baseline final storage**: 5.0 PB (single copy of all products)
+* **Peak at end-of-mission reprocessing**: 10.0 PB beginning on 2031-12-29 (old + new versions)
+* The 2-year reprocessing peak reaches about 5.4 PB (on a 2.7 PB baseline), scaled from the earlier model's 3.0 PB on 1.5 PB
 
 .. image:: reprocessing_storage.png
 
@@ -479,6 +478,8 @@ Products are versioned in the :doc:`operations database </db/db>` with a ``vbest
 
 Estimated AWS Costs
 ************************************
+
+These cost estimates were computed with the earlier product sizes (2.8 PB total) and have not yet been updated for the 5.0 PB estimated above; the S3 storage cost, which dominates, would grow roughly in proportion to the volume.
 
 The following cost estimates are based on public AWS on-demand pricing for the us-east-1 region (March 2026). All figures use list prices and simple first-order operating assumptions; they are intended as a planning guide, not as an optimized cost model. A discount variable (``AWS_DISCOUNT``) is available in ``rapid_model.py`` for modeling negotiated or reserved-instance rates.
 
@@ -521,7 +522,7 @@ The following cost estimates are based on public AWS on-demand pricing for the u
    * - Average per year
      - $587 K
 
-S3 storage dominates (74% of total cost) and grows steadily as the archive accumulates. Compute costs are relatively modest for routine processing but spike during the three reprocessing events, particularly the end-of-mission reprocessing which re-runs all 9.8 M SCA images. Total 5-year cost is estimated at $2.9 M at list price; the separate 5.6 PB end-of-mission overlap peak occurs after the 60 modeled mission months. Kafka/MSK is a minor fixed cost.
+S3 storage dominates (74% of total cost) and grows steadily as the archive accumulates. Compute costs are relatively modest for routine processing but spike during the three reprocessing events, particularly the end-of-mission reprocessing which re-runs all 9.8 M SCA images. Total 5-year cost is estimated at $2.9 M at list price; the separate end-of-mission overlap peak occurs after the 60 modeled mission months. Kafka/MSK is a minor fixed cost.
 
 These estimates exclude data-transfer (egress) costs, database hosting (RDS/EC2 for PostgreSQL), and any operational overhead. Cost-reduction options such as negotiated pricing, reserved instances, Spot usage for Batch, storage-tiering choices, delivery-format tuning, and refinements to reprocessing scope have not yet been analyzed in detail and could reduce the extrapolated costs significantly.
 
@@ -533,7 +534,12 @@ Test Data Access
 
 RAPID pipeline products from testing with OpenUniverse and RimTimSim simulated data are publicly available. See :doc:`/dev/tests` and :doc:`/prod/products` for full details.
 
-The latest large-scale test run (processing date 2026-02-27) is accessible at:
+The large-scale test run whose difference-image and alert products are sized above (processing date 2026-10-21, processing request 7) is accessible at:
+
+* **Products:** ``https://rapid-product-files.s3.us-west-2.amazonaws.com/20261021/req7/``
+* **Logs:** ``https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20261021/req7/``
+
+The earlier large-scale test run whose reference-image products are sized above (processing date 2026-02-27) is accessible at:
 
 * **Products:** ``https://rapid-product-files.s3.us-west-2.amazonaws.com/20260227/``
 * **Logs:** ``https://rapid-pipeline-logs.s3.us-west-2.amazonaws.com/20260227/``

@@ -29,7 +29,7 @@ import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
 
 swname = "awsBatchSubmitJobs_launchSingleSciencePipeline.py"
-swvers = "1.0"
+swvers = "1.1"
 
 # Use the science pipeline's config file (all parameters in one file).
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
@@ -272,6 +272,8 @@ zogy_dict["zogy_output_diffpsf_file"] = config_input['ZOGY']['zogy_output_diffps
 zogy_dict["zogy_output_scorrimage_file"] = config_input['ZOGY']['zogy_output_scorrimage_file']
 if 'zogy_sn_sr_from_uncertainty_maps' in config_input['ZOGY']:
     zogy_dict["zogy_sn_sr_from_uncertainty_maps"] = config_input['ZOGY']['zogy_sn_sr_from_uncertainty_maps']
+if 'run_zogy' in config_input['ZOGY']:
+    zogy_dict["run_zogy"] = config_input['ZOGY']['run_zogy']
 
 
 # Get the swarp parameters.  Some of these parameters will be overwritten by this script.

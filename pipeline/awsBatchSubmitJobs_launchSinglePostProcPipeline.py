@@ -12,6 +12,7 @@ associated post-processing pipeline for the same exposure-SCA image (indexed by 
 
 
 import boto3
+from botocore.exceptions import ClientError
 import os
 import ast
 import configparser
@@ -25,7 +26,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "awsBatchSubmitJobs_launchSinglePostProcPipeline.py"
-swvers = "1.0"
+swvers = "1.1"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -129,7 +130,6 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 postproc_job_config_filename_base = config_input['JOB_PARAMS']['postproc_job_config_filename_base']
 postproc_product_config_filename_base = config_input['JOB_PARAMS']['postproc_product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-zogy_output_diffimage_file = config_input['ZOGY']['zogy_output_diffimage_file']
 ppid_post_proc = int(config_input['POST_PROC']['ppid'])
 
 
@@ -367,9 +367,6 @@ if __name__ == '__main__':
 
     job_config['AWAICGEN'] = {}
     job_config['AWAICGEN']['awaicgen_output_mosaic_image_file'] = awaicgen_output_mosaic_image_file
-
-    job_config['ZOGY'] = {}
-    job_config['ZOGY']['zogy_output_diffimage_file'] = zogy_output_diffimage_file
 
 
     # Write output config file for job.

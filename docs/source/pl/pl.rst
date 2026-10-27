@@ -316,7 +316,12 @@ Image Differencing
 ************************************
 
 
-An implementation of the ZOGY algorithm will be used for image differencing in the RAPID pipeline.  ZOGY requires
+The RAPID pipeline makes difference images with SFFT, and optionally with ZOGY (``[ZOGY] run_zogy``) and by naive
+subtraction (``[NAIVE_DIFFIMAGE] naive_diffimage_flag``).  Only the SFFT difference image is registered in the
+database and used downstream (see :doc:`../prod/products`).  The rest of this section was written for ZOGY, but the
+input requirements apply to SFFT as well.
+
+An implementation of the ZOGY algorithm was originally planned for image differencing in the RAPID pipeline.  ZOGY requires
 the input images to be gain-matched and resampled to the same grid frame of reference in terms of pixel scale,
 position, and orientation.  The input science image can be arbitrarily rotated on the sky, whereas the
 input reference image is constructed to be north up (zero degrees rotation on the sky), and centered on

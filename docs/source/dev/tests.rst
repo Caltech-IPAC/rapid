@@ -136,6 +136,17 @@ Date              Software modification
                     ``docker run -it --entrypoint bash --name russ-test-jobsubmit  --shm-size=64g -e TMPDIR=/dev/shm
                     -v /home/ubuntu/work/test_20261021:/work -e OMP_NUM_THREADS=1 -e OPENBLAS_NUM_THREADS=1 -e MKL_NUM_THREADS=1
                     -e NUMEXPR_NUM_THREADS=1 public.ecr.aws/y9b1s7h8/rapid_science_pipeline:latest``
+10/26/2026        * Only the SFFT difference image is registered in the DiffImages database table, from the new ``[SFFT]`` section of the product config file (replacing ``[ZOGY]``);
+                    ``[SFFT] run_sfft`` must be True, and a job that does not run SFFT or whose SFFT fails exits with code 65 (replacing exit code 4) (PR #478).
+                  * New ``[ZOGY] run_zogy`` flag (default True) skips the ZOGY products; naive products are skipped with ``[NAIVE_DIFFIMAGE] naive_diffimage_flag = False`` (PR #478).
+                  * New ``[VPO_SETTINGS] load_sources_tables`` flag (default True): False skips loading the Sources, Merges, AstroObjects and AstroObjectsMeta tables, and alert production;
+                    the [X]tables are always loaded (PR #479).
+10/27/2026        * The VPO now deletes the not-best (``vbest = 0``) records of the Sources and XSources child tables (new stages 18 and 19, ``pruneNotBestSources.py`` and new ``pruneNotBestXSources.py``),
+                    after pruning the Merges/XMerges records; alert production is now stage 20 (PR #504).
+                  * A Sources or XSources child table that loses at least ``[DATABASE_PRUNING] recluster_deleted_fraction = 0.2`` of its records to that pruning is reclustered,
+                    instead of only vacuumed, so that it does not keep the deleted records' space.
+                  * Reference-image pipelines now run on 4-vCPU AWS Batch machines (revision 5 of the ``rapid_reference_image_pipeline`` job definition, ``[AWS_BATCH] refimage_job_definition``),
+                    and ``[AWAICGEN] awaicgen_num_threads`` changed from 2 to 4 to match (PR #506).
 ===============   ===============================================================================================================================================================================================================================
 
 

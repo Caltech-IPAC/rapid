@@ -34,7 +34,7 @@ nside9 = 2**level9
 
 
 swname = "parallelRegisterCompletedJobsInDB.py"
-swvers = "1.0"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 
@@ -176,8 +176,6 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 awaicgen_output_mosaic_image_file = config_input['AWAICGEN']['awaicgen_output_mosaic_image_file']
-zogy_output_diffimage_file_from_config = config_input['ZOGY']['zogy_output_diffimage_file']
-zogy_output_diffimage_file = zogy_output_diffimage_file_from_config.replace(".fits","_masked.fits")
 ppid_science_pipeline = int(config_input['SCI_IMAGE']['ppid'])
 ppid_refimage_pipeline = int(config_input['REF_IMAGE']['ppid'])
 
@@ -582,6 +580,14 @@ def _run_single_core_job(jids,log_fnames,index_thread):
         reference_image_found = False
         rfid = None
 
+        # Only SFFT difference images are registered, from the [SFFT] section of the product config
+        # file (science pipeline 1.1 and later).
+
+        registered_diffimage_file = None
+
+        if downloaded_from_bucket and 'SFFT' in product_config_input:
+            registered_diffimage_file = os.path.basename(product_config_input['SFFT']['sfft_output_diffimage_file'])
+
         product_bucket = s3_resource.Bucket(product_s3_bucket_base)
 
         job_prefix = proc_subdir + '/jid' + str(jid) + '/'
@@ -850,12 +856,13 @@ def _run_single_core_job(jids,log_fnames,index_thread):
 
             # Difference image.
 
-            fh.write(f"===> zogy_output_diffimage_file = {zogy_output_diffimage_file}\n")
+            fh.write(f"===> registered_diffimage_file = {registered_diffimage_file}\n")
             fh.write(f"===> product_bucket_object.key = {product_bucket_object.key}\n")
 
-            if f"{job_prefix}{zogy_output_diffimage_file}" == product_bucket_object.key:
+            if registered_diffimage_file is not None and \
+                f"{job_prefix}{registered_diffimage_file}" == product_bucket_object.key:
 
-                fh.write("Found in difference image in S3 product bucket: {}\n".format(zogy_output_diffimage_file))
+                fh.write("Found in difference image in S3 product bucket: {}\n".format(registered_diffimage_file))
 
                 difference_image_found = True
 
@@ -863,17 +870,17 @@ def _run_single_core_job(jids,log_fnames,index_thread):
                 # Harvest select product metadata from product config file
 
                 try:
-                    zogy_output_diffimage_file_checksum = product_config_input['ZOGY']['zogy_output_diffimage_file_checksum']
+                    sfft_output_diffimage_file_checksum = product_config_input['SFFT']['sfft_output_diffimage_file_checksum']
                 except:
-                    zogy_output_diffimage_file_checksum = 'Not found'
+                    sfft_output_diffimage_file_checksum = 'Not found'
 
-                if zogy_output_diffimage_file_checksum != 'Not found':
+                if sfft_output_diffimage_file_checksum != 'Not found':
 
-                    rid_diffimage = product_config_input['ZOGY']['rid']
-                    ppid_diffimage = product_config_input['ZOGY']['ppid']
+                    rid_diffimage = product_config_input['SFFT']['rid']
+                    ppid_diffimage = product_config_input['SFFT']['ppid']
 
 
-                    rfid_diffimage = product_config_input['ZOGY']['rfid']
+                    rfid_diffimage = product_config_input['SFFT']['rfid']
 
                     if rfid_diffimage == "None":
 
@@ -890,32 +897,32 @@ def _run_single_core_job(jids,log_fnames,index_thread):
 
                         rfid_diffimage = rfid
 
-                    ra0_diffimage = product_config_input['ZOGY']['ra0']
-                    dec0_diffimage = product_config_input['ZOGY']['dec0']
-                    ra1_diffimage = product_config_input['ZOGY']['ra1']
-                    dec1_diffimage = product_config_input['ZOGY']['dec1']
-                    ra2_diffimage = product_config_input['ZOGY']['ra2']
-                    dec2_diffimage = product_config_input['ZOGY']['dec2']
-                    ra3_diffimage = product_config_input['ZOGY']['ra3']
-                    dec3_diffimage = product_config_input['ZOGY']['dec3']
-                    ra4_diffimage = product_config_input['ZOGY']['ra4']
-                    dec4_diffimage = product_config_input['ZOGY']['dec4']
+                    ra0_diffimage = product_config_input['SFFT']['ra0']
+                    dec0_diffimage = product_config_input['SFFT']['dec0']
+                    ra1_diffimage = product_config_input['SFFT']['ra1']
+                    dec1_diffimage = product_config_input['SFFT']['dec1']
+                    ra2_diffimage = product_config_input['SFFT']['ra2']
+                    dec2_diffimage = product_config_input['SFFT']['dec2']
+                    ra3_diffimage = product_config_input['SFFT']['ra3']
+                    dec3_diffimage = product_config_input['SFFT']['dec3']
+                    ra4_diffimage = product_config_input['SFFT']['ra4']
+                    dec4_diffimage = product_config_input['SFFT']['dec4']
 
-                    fid_diffimage = product_config_input['ZOGY']['fid']
-                    sca_diffimage = product_config_input['ZOGY']['sca']
-                    nsexcatsources_diffimage = product_config_input['ZOGY']['nsexcatsources']
-                    scalefacref_diffimage = product_config_input['ZOGY']['scalefacref']
-                    dxrmsfin_diffimage = product_config_input['ZOGY']['dxrmsfin']
-                    dyrmsfin_diffimage = product_config_input['ZOGY']['dyrmsfin']
-                    dxmedianfin_diffimage = product_config_input['ZOGY']['dxmedianfin']
-                    dymedianfin_diffimage = product_config_input['ZOGY']['dymedianfin']
+                    fid_diffimage = product_config_input['SFFT']['fid']
+                    sca_diffimage = product_config_input['SFFT']['sca']
+                    nsexcatsources_diffimage = product_config_input['SFFT']['nsexcatsources']
+                    scalefacref_diffimage = product_config_input['SFFT']['scalefacref']
+                    dxrmsfin_diffimage = product_config_input['SFFT']['dxrmsfin']
+                    dyrmsfin_diffimage = product_config_input['SFFT']['dyrmsfin']
+                    dxmedianfin_diffimage = product_config_input['SFFT']['dxmedianfin']
+                    dymedianfin_diffimage = product_config_input['SFFT']['dymedianfin']
 
-                    checksum_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_checksum']
-                    filename_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file']
-                    status_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_status']
-                    infobits_diffimage = product_config_input['ZOGY']['zogy_output_diffimage_file_infobits']
+                    checksum_diffimage = product_config_input['SFFT']['sfft_output_diffimage_file_checksum']
+                    filename_diffimage = product_config_input['SFFT']['sfft_output_diffimage_file']
+                    status_diffimage = product_config_input['SFFT']['sfft_output_diffimage_file_status']
+                    infobits_diffimage = product_config_input['SFFT']['sfft_output_diffimage_file_infobits']
 
-                    infobits_refimage = product_config_input['ZOGY']['awaicgen_output_mosaic_image_infobits']
+                    infobits_refimage = product_config_input['SFFT']['awaicgen_output_mosaic_image_infobits']
 
 
                     # Insert record in DiffImages database table.

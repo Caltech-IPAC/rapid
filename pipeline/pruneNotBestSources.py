@@ -1,8 +1,12 @@
 '''
-Requires that pruneNotBestMerges.py is executed before pruneNotBestSources.py as there are dependencies.
+Delete records from the Sources_<obs_date>_<sca> database tables that are associated with
+difference images which are no longer best (vbest=0 in the associated DiffImages record), for
+the jobs of the given processing request, and drop the child tables left empty.
+pruneNotBestMerges.py must be executed first, since it finds the not-best Merges_<field>
+records through the Sources records.  pruneNotBestXSources.py does the same thing for the
+XSources tables (SExtractor catalogs).
 '''
 
-import boto3
 import os
 import configparser
 from datetime import datetime, timezone
@@ -15,7 +19,7 @@ import database.modules.utils.rapid_db as db
 import modules.utils.rapid_pipeline_subs as util
 
 swname = "pruneNotBestSources.py"
-swvers = "1.0"
+swvers = "1.2"
 cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
@@ -54,6 +58,23 @@ if proc_date is None:
     print("*** Error: Env. var. JOBPROCDATE not set; quitting...")
     exit(64)
 
+print("proc_date =",proc_date)
+
+
+# PROCREQ of the processing request.  This is the reqid of the ProcReqs database
+# record that the VPO creates.  Only the Jobs records of this processing request
+# (Jobs.reqid) are processed, so that other processing requests for the same
+# processing date are left alone.
+
+proc_req = os.getenv('PROCREQ')
+
+if proc_req is None:
+
+    print("*** Error: Env. var. PROCREQ not set; quitting...")
+    exit(64)
+
+print("proc_req =",proc_req)
+
 
 # Other required environment variables.
 
@@ -88,30 +109,51 @@ product_s3_bucket_base = config_input['JOB_PARAMS']['product_s3_bucket_base']
 job_config_filename_base = config_input['JOB_PARAMS']['job_config_filename_base']
 product_config_filename_base = config_input['JOB_PARAMS']['product_config_filename_base']
 
-output_psfcat_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_filename'])
-output_psfcat_finder_filename = str(config_input['PSFCAT_DIFFIMAGE']['output_zogy_psfcat_finder_filename'])
-
-naxis1 = int(config_input['INSTRUMENT']['naxis1_sciimage'])
-naxis2 = int(config_input['INSTRUMENT']['naxis2_sciimage'])
-
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 naxis1_sciimage = int(config_input['INSTRUMENT']['naxis1_sciimage'])
 naxis2_sciimage = int(config_input['INSTRUMENT']['naxis2_sciimage'])
 
 
-# Number of parallel worker processes.
-# os.cpu_count() returns None when the number of cores cannot be determined.
+# A child table that loses at least this fraction of its records is reclustered on its sky-position
+# index (CLUSTER rewrites it compactly, in order); otherwise it is only vacuumed and analyzed, which
+# leaves the space of the deleted records in the table file.
+
+recluster_deleted_fraction = config_input.getfloat('DATABASE_PRUNING','recluster_deleted_fraction',fallback=0.2)
+
+print("recluster_deleted_fraction =",recluster_deleted_fraction)
+
+
+# Number of parallel worker processes: environment variable NUM_CORES if set, otherwise all
+# the cores (os.cpu_count() returns None when the number of cores cannot be determined).
 # Database connections are opened by each worker process itself, since psycopg2
 # connections cannot be shared across processes.
 
-num_cores = os.cpu_count() or 1
+num_cores = os.getenv('NUM_CORES')
+
+if num_cores is None:
+    num_cores = os.cpu_count() or 1
+else:
+    num_cores = int(num_cores)
 
 print("num_cores =",num_cores)
 
 
-# Get S3 client.
+# PRUNEFULLSCAN=True finds the not-best Sources by scanning the processing request's Sources child
+# tables in full, which also finds those of difference images set to vbest = 0 by hand or by
+# another processing request.  By default (unset or False), only the difference images of the
+# request's own rids are considered (see find_notbest_pids_by_table), which is much faster.
 
-s3_client = boto3.client('s3')
+full_scan_str = os.getenv('PRUNEFULLSCAN')
+
+if full_scan_str is None or full_scan_str == "False":
+    full_scan = False
+elif full_scan_str == "True":
+    full_scan = True
+else:
+    print(f"*** Error: Env. var. PRUNEFULLSCAN must be True or False (PRUNEFULLSCAN={full_scan_str}); quitting...")
+    exit(64)
+
+print("full_scan =",full_scan)
 
 
 #-------------------------------------------------------------------------------------------------------------
@@ -122,11 +164,26 @@ def execute_or_raise(dbh,sql_queries,thread_debug,fh,context):
 
     '''
     Execute a list of SQL queries and raise RuntimeError if the database reports an error.
+    dbh.execute_sql_queries does not raise, and resets dbh.exit_code on every call, so each
+    call must be checked right away.
 
-    dbh.execute_sql_queries does not raise on failure: it prints, rolls back, sets
-    dbh.exit_code and returns None.  It also resets dbh.exit_code to zero at the start of
-    every call, so a failure that is not checked immediately is erased by the next
-    successful query.  Every call must therefore be checked right away.
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    sql_queries : list of str
+        SQL queries to execute.
+    thread_debug : int
+        Debug level passed to dbh.execute_sql_queries.
+    fh : file object or None
+        Log file, closed after the error message is written to it; None to skip.
+    context : str
+        What the queries do, for the error message.
+
+    Returns
+    -------
+    records : list of tuple
+        Records returned by the last query.
     '''
 
     records = dbh.execute_sql_queries(sql_queries,thread_debug)
@@ -145,11 +202,84 @@ def execute_or_raise(dbh,sql_queries,thread_debug,fh,context):
     return records
 
 
-def run_single_core_job(sources_table_names,index_thread):
+def find_notbest_pids_by_table(dbh,sources_child_tables,rids):
 
     '''
-    Remove records from Sources_<obs_date>_<sca> database tables associated with sources
-    that are no longer best (vbest=0 in associated Diffimages table).
+    Find the not-best difference images (vbest = 0) of the processing request's rids, grouped by
+    the Sources child table that holds their records (sources_<obs_date>_<sca>).
+
+    Parameters
+    ----------
+    dbh : database.modules.utils.rapid_db.RAPIDDB
+        Open database connection.
+    sources_child_tables : list of str
+        Names of the existing sources_<obs_date>_<sca> child tables of the processing request.
+    rids : list of int
+        L2Files rids of the processing request's science-pipeline jobs.
+
+    Returns
+    -------
+    pids_by_table : dict
+        Lists of not-best pids, keyed by child-table name; only existing child tables are
+        included.  A DiffImages record is set to vbest = 0 when a newer version for the same rid
+        is registered, which happens when this processing request reprocesses the rid.
+    '''
+
+    pids_by_table = {}
+
+    if len(rids) == 0:
+        return pids_by_table
+
+    rids_str = ",".join(str(int(rid)) for rid in sorted(set(rids)))
+
+    query = "SELECT d.pid,cast(l.dateobs as date),l.sca " +\
+            "FROM diffimages AS d " +\
+            "JOIN l2files AS l ON d.rid = l.rid " +\
+            f"WHERE d.ppid = {ppid} " +\
+            "AND d.vbest = 0 " +\
+            f"AND d.rid IN ({rids_str});"
+
+    records = execute_or_raise(dbh,[query],0,None,"lookup of not-best difference images")
+
+    print(f"Number of not-best difference images of the processing request's rids = {len(records)}")
+
+    existing_tables = set(sources_child_tables)
+
+    for record in records:
+        pid = int(record[0])
+        obs_date = str(record[1]).replace("-","")
+        sources_tablename = f"sources_{obs_date}_{record[2]}"
+
+        if sources_tablename not in existing_tables:
+            print(f"{sources_tablename} database table is not a child table of this request; skipping pid={pid}...")
+            continue
+
+        pids_by_table.setdefault(sources_tablename,[]).append(pid)
+
+    return pids_by_table
+
+
+def run_single_core_job(work_items,index_thread):
+
+    '''
+    Delete the not-best records of the Sources_<obs_date>_<sca> database tables assigned to this
+    worker, those whose difference image is no longer best (vbest=0 in the DiffImages table).
+
+    Parameters
+    ----------
+    work_items : list of tuple
+        (sources_tablename, pids) for every child table to prune; worker index_thread takes every
+        num_cores-th one.  pids is the list of not-best pids whose records are deleted, or None to
+        delete the records of every DiffImages record with vbest = 0 (full scan).
+    index_thread : int
+        Index of this worker process.
+
+    Returns
+    -------
+    ndeleted_by_table : dict
+        (number of records deleted, number of records before the delete), keyed by child-table
+        name.  The number before is the planner's estimate (pg_class.reltuples, kept current by
+        the ANALYZE of the loading stage), or an exact count if the table was never analyzed.
     '''
 
 
@@ -163,9 +293,9 @@ def run_single_core_job(sources_table_names,index_thread):
 
     thread_debug = 0
 
-    n_sources_table_names = len(sources_table_names)
+    n_work_items = len(work_items)
 
-    print("index_thread,n_sources_table_names =",index_thread,n_sources_table_names)
+    print("index_thread,n_work_items =",index_thread,n_work_items)
 
     thread_work_file = swname.replace(".py","_thread") + str(index_thread) + ".out"
 
@@ -190,57 +320,50 @@ def run_single_core_job(sources_table_names,index_thread):
     fh.write(f"\nStart of run_single_core_job: index_thread={index_thread}, dbh={dbh}\n")
 
 
-    # Loop over all sources_<obs_date>_* database tables associated with this thread
-    # and prune not-best sources: delete every record whose pid refers to a DiffImages
-    # record that is no longer best (vbest=0).
+    # Loop over the child tables associated with this thread and delete their not-best records.
 
-    my_sources_table_names = list(range(index_thread, n_sources_table_names, num_cores))
-    for index_sources_table_names in my_sources_table_names:
+    ndeleted_by_table = {}
 
-        sources_tablename = sources_table_names[index_sources_table_names]
+    for index_work_item in range(index_thread, n_work_items, num_cores):
 
-        fh.write("Loop start: index_sources_table_names,sources_tablename = " +
-                 f"{index_sources_table_names},{sources_tablename}\n")
+        sources_tablename,pids = work_items[index_work_item]
 
+        fh.write(f"Loop start: index_work_item,sources_tablename = {index_work_item},{sources_tablename}\n")
 
-        # An empty Sources child table is dropped by the vacuum phase of this script,
-        # so it may be absent when this script is rerun for the same processing date.
+        if pids is None:
+            query = f"WITH deleted AS (DELETE FROM {sources_tablename} AS a USING diffimages AS b " +\
+                    "WHERE a.pid = b.pid AND b.vbest = 0 RETURNING 1) SELECT count(*) FROM deleted;"
+        else:
+            pids_str = ",".join(str(int(pid)) for pid in sorted(set(pids)))
+            query = f"WITH deleted AS (DELETE FROM {sources_tablename} " +\
+                    f"WHERE pid IN ({pids_str}) RETURNING 1) SELECT count(*) FROM deleted;"
 
-        sql_queries = [f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;"]
-        records = execute_or_raise(dbh,sql_queries,thread_debug,fh,
-                                   f"existence check for {sources_tablename}")
+        query_nrows = f"SELECT reltuples FROM pg_class WHERE oid = 'public.{sources_tablename}'::regclass;"
+        records = execute_or_raise(dbh,[query_nrows],thread_debug,fh,f"row-count estimate of {sources_tablename}")
+        nrows_before = int(records[0][0])
 
-        if not records or not records[0][0]:
+        if nrows_before < 0:
+            records = execute_or_raise(dbh,[f"SELECT count(*) FROM {sources_tablename};"],thread_debug,fh,
+                                       f"row count of {sources_tablename}")
+            nrows_before = int(records[0][0])
 
-            fh.write(f"{sources_tablename} database table does not exist; skipping...\n")
-            fh.flush()
-
-            continue
-
-        query = (f"DELETE FROM {sources_tablename} AS a "
-                 f"USING diffimages AS b "
-                 f"WHERE a.pid = b.pid AND b.vbest = 0;")
-
-        fh.write(f"Deleting not-best records in {sources_tablename} database table...\n")
+        fh.write(f"Deleting not-best records in {sources_tablename} database table ({nrows_before} records)...\n")
         fh.flush()
 
-        execute_or_raise(dbh,[query],thread_debug,fh,
-                         f"delete of not-best records from {sources_tablename}")
+        records = execute_or_raise(dbh,[query],thread_debug,fh,
+                                   f"delete of not-best records from {sources_tablename}")
+
+        ndeleted = int(records[0][0])
+        ndeleted_by_table[sources_tablename] = (ndeleted,nrows_before)
 
 
         # Code-timing benchmark.
 
         thread_end_time_benchmark = time.time()
         diff_time_benchmark = thread_end_time_benchmark - thread_start_time_benchmark
-        fh.write("Elapsed time in seconds to delete not-best record(s) from " +
-                 f"{sources_tablename} database table = {diff_time_benchmark}\n")
+        fh.write(f"Deleted {ndeleted} not-best record(s) from {sources_tablename} database table " +
+                 f"in {diff_time_benchmark} seconds\n")
         thread_start_time_benchmark = thread_end_time_benchmark
-
-
-        # End of loop over sources_table_names.
-
-        fh.write("Loop end: index_sources_table_names,sources_tablename = " +
-                 f"{index_sources_table_names},{sources_tablename}\n")
 
 
         # Flush write buffer.
@@ -263,12 +386,27 @@ def run_single_core_job(sources_table_names,index_thread):
 
     fh.close()
 
-    message = f"Finish normally for index_thread = {index_thread}"
-
-    return message
+    return ndeleted_by_table
 
 
-def execute_parallel_processes(sources_table_names,num_cores=None):
+def execute_parallel_processes(work_items,num_cores=None):
+
+    '''
+    Run run_single_core_job in num_cores worker processes, and exit with code 64 if any fails.
+
+    Parameters
+    ----------
+    work_items : list of tuple
+        (sources_tablename, pids) for every child table to prune (see run_single_core_job).
+    num_cores : int, optional
+        Number of worker processes; all available cores if None.
+
+    Returns
+    -------
+    ndeleted_by_table : dict
+        (number of records deleted, number of records before the delete), keyed by child-table
+        name (see run_single_core_job).
+    '''
 
     if num_cores is None:
         num_cores = os.cpu_count() or 1   # Use all available cores if not specified
@@ -277,18 +415,20 @@ def execute_parallel_processes(sources_table_names,num_cores=None):
 
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
         # Submit all tasks to the executor and store the futures in a list
-        futures = [executor.submit(run_single_core_job,sources_table_names,thread_index) for thread_index in range(num_cores)]
+        futures = [executor.submit(run_single_core_job,work_items,thread_index) for thread_index in range(num_cores)]
 
         # Iterate over completed futures and update progress
         for i, future in enumerate(as_completed(futures)):
             index = futures.index(future)  # Find the original index/order of the completed future
             print(f"Completed: {i+1} processes, lastly for index={index}")
 
+    ndeleted_by_table = {}
     failures = []
     for future in futures:
         index = futures.index(future)
         try:
-            print(future.result())
+            ndeleted_by_table.update(future.result())
+            print(f"Finish normally for index_thread = {index}")
         except Exception as e:
             failures.append(e)
             print(f"*** Error in thread index {index} = {e}")
@@ -296,6 +436,8 @@ def execute_parallel_processes(sources_table_names,num_cores=None):
     if failures:
         print(f"*** Error(s) from {len(failures)} worker(s); quitting...")
         exit(64)
+
+    return ndeleted_by_table
 
 
 #################
@@ -306,8 +448,8 @@ if __name__ == '__main__':
 
 
     '''
-    Launch parallel tasks to delete all not-best Sources_<obs_date>_<sca> database records
-    for observation dates that are associated with the given processing date.
+    Launch parallel tasks to delete the not-best Sources_<obs_date>_<sca> database records of
+    the jobs of the given processing request.
     '''
 
 
@@ -319,11 +461,11 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Look up for the given processing date the Sources child table names
-    # that were cross-matched.
+    # Look up for the given processing request the Sources child table names that were
+    # cross-matched, and its jobs.
 
-    source_tables_to_crossmatch_tuples_list,_,_,_ = \
-        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,
+    source_tables_to_crossmatch_tuples_list,_,_,meta_list = \
+        util.lookup_source_tables_to_crossmatch_and_distinct_fields(dbh,proc_date,ppid,reqid=proc_req,
                                                                     naxis1=naxis1_sciimage,naxis2=naxis2_sciimage)
 
     sources_child_tables = []
@@ -334,12 +476,32 @@ if __name__ == '__main__':
 
         sources_tablename = f"sources_{obs_date}_{sca}"
 
-        sources_child_tables.append(sources_tablename)
+
+        # An empty Sources child table is dropped by this script, so it may be absent
+        # when this script is rerun for the same processing request.
+
+        sql_queries = [f"SELECT to_regclass('public.{sources_tablename}') IS NOT NULL;"]
+        records = execute_or_raise(dbh,sql_queries,0,None,f"existence check for {sources_tablename}")
+
+        if records[0][0]:
+            sources_child_tables.append(sources_tablename)
+        else:
+            print(f"{sources_tablename} database table does not exist; skipping...")
 
     if len(sources_child_tables) == 0:
         print("*** Error: No Sources child tables found;  quitting...")
         dbh.close()
         exit(7)
+
+
+    # The child tables to prune, with the not-best pids to delete from each (None for a full scan).
+
+    if full_scan:
+        work_items = [(sources_tablename,None) for sources_tablename in sources_child_tables]
+    else:
+        rids = [meta_dict["rid"] for meta_dict in meta_list]
+        pids_by_table = find_notbest_pids_by_table(dbh,sources_child_tables,rids)
+        work_items = sorted(pids_by_table.items())
 
 
     # Close the main database connection before the parallel phase, rather than leaving
@@ -349,6 +511,11 @@ if __name__ == '__main__':
 
     if dbh.exit_code >= 64:
         exit(dbh.exit_code)
+
+    if len(work_items) == 0:
+        print("No not-best difference images of this processing request; nothing to delete.")
+        print("terminating_exitcode =",0)
+        exit(0)
 
 
     # Code-timing benchmark.
@@ -360,15 +527,15 @@ if __name__ == '__main__':
 
 
     ################################################################################
-    # Execute tasks for sources_child_tables in parallel, with the number of parallel
-    # threads equal to the number of cores on the job-launcher machine.
+    # Execute tasks for the child tables in parallel, with the number of parallel
+    # processes equal to num_cores (at most the number of child tables).
     ################################################################################
 
-    if num_cores > 1:
-        execute_parallel_processes(sources_child_tables,num_cores)
+    if min(num_cores,len(work_items)) > 1:
+        ndeleted_by_table = execute_parallel_processes(work_items,min(num_cores,len(work_items)))
     else:
-        thread_index = 0
-        run_single_core_job(sources_child_tables,thread_index)
+        num_cores = 1
+        ndeleted_by_table = run_single_core_job(work_items,0)
 
 
     # Code-timing benchmark.
@@ -387,19 +554,17 @@ if __name__ == '__main__':
         exit(dbh.exit_code)
 
 
-    # Vacuum and analyze sources database tables for given proc_date.  Drop table if empty.
+    # Vacuum and analyze the Sources child tables that records were deleted from, or recluster
+    # those that lost at least recluster_deleted_fraction of their records.  Drop a table left empty.
 
-    for tablename in sources_child_tables:
+    for tablename,(ndeleted,nrows_before) in sorted(ndeleted_by_table.items()):
 
+        deleted_fraction = ndeleted / nrows_before if nrows_before > 0 else 1.0
 
-        # The table may already have been dropped by an earlier run of this script.
+        print(f"Deleted {ndeleted} not-best record(s) from {tablename} database table " +
+              f"(about {nrows_before} before, fraction {deleted_fraction:.3f})")
 
-        sql_queries = [f"SELECT to_regclass('public.{tablename}') IS NOT NULL;"]
-        records = execute_or_raise(dbh,sql_queries,debug,None,
-                                   f"existence check for {tablename}")
-
-        if not records or not records[0][0]:
-            print(f"{tablename} database table does not exist; skipping...")
+        if ndeleted == 0:
             continue
 
         query = f"SELECT EXISTS (SELECT 1 FROM {tablename} LIMIT 1);"
@@ -411,6 +576,22 @@ if __name__ == '__main__':
             print(f"Dropping {tablename} database table...")
             execute_or_raise(dbh,[f"DROP TABLE {tablename};"],debug,
                              None,f"drop of {tablename}")
+        elif deleted_fraction >= recluster_deleted_fraction:
+
+            indexname = f"{tablename}_radec_idx"
+
+            records = execute_or_raise(dbh,[f"SELECT to_regclass('public.{indexname}') IS NOT NULL;"],debug,
+                                       None,f"existence check for {indexname}")
+
+            if records[0][0]:
+                print(f"Reclustering and analyzing {tablename} database table...")
+                execute_or_raise(dbh,[f"CLUSTER {tablename} USING {indexname};",f"ANALYZE {tablename};"],debug,
+                                 None,f"recluster of {tablename}")
+            else:
+                print(f"*** Warning: {indexname} does not exist, so {tablename} cannot be reclustered; " +
+                      "vacuuming and analyzing it instead...")
+                dbh.vacuum_analyze_table(tablename)
+
         else:
             print(f"Vacuuming and analyzing {tablename} database table...")
             dbh.vacuum_analyze_table(tablename)
@@ -419,7 +600,7 @@ if __name__ == '__main__':
     # Code-timing benchmark.
 
     end_time_benchmark = time.time()
-    print("Elapsed time in seconds to vacuum and analyze all Sources child tables =",
+    print("Elapsed time in seconds to vacuum, analyze or recluster the Sources child tables =",
         end_time_benchmark - start_time_benchmark)
     start_time_benchmark = end_time_benchmark
 
