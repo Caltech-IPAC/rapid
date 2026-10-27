@@ -13,6 +13,7 @@ This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) 
 - `podman` (or `docker` under the same commands) and `jq`, and this checkout, with your shell at its top.
 - At least 16 GB of memory (the difference peaked at 15.2 GB) and 2 GB of disk.
 - Network access to the public bucket `s3://stpubdata` (read unsigned, no AWS account) and to `https://roman-crds.stsci.edu` (the PSF stage's reference).
+- The RuBR-AT model, which scores the SFFT difference's candidates: the difference job reads it as a Batch job does, the bucket from the SSM parameter `[difference.rubrat] model_bucket_parameter` names and the files under its `model_key`, so it runs on a RAPID host under the host's instance role (`rapid_systems`' `cloudformation/rapid-storage-buckets.yaml` carries the read).
 - The pipeline image: the team's `rapid-pipeline:rebuild-<sha>`, pulled as [The image](#the-image) says, or one you build ([`containers/README.md`](containers/README.md)).
 - A Gaia DR3 catalog covering the field, as one Parquet file: [The Gaia catalog](#the-gaia-catalog) builds the team's `gaia-dr3-hlwas-r00342-box.parquet`.
 - PostgreSQL 18 as the public `docker.io/library/postgres:18` image, the one CI uses.
@@ -25,7 +26,7 @@ The team's images are in the SMDC account's private container registry, reposito
 REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
 aws ecr get-login-password --region us-east-1 | podman login --username AWS --password-stdin "$REGISTRY"
 TAG=$(aws ecr describe-images --region us-east-1 --repository-name rapid-pipeline --filter tagStatus=TAGGED \
-  --query 'reverse(sort_by(imageDetails[?imageTags[?starts_with(@, `rebuild-`)]], &imagePushedAt))[0].imageTags[0]' --output text)
+  --query 'reverse(sort_by(imageDetails[?imageTags[?starts_with(@, `rebuild-`)]], &imagePushedAt))[0].imageTags[0]' --output json | jq -r .)
 podman pull "$REGISTRY/rapid-pipeline:$TAG"
 export IMAGE=$REGISTRY/rapid-pipeline:$TAG
 ```
@@ -34,7 +35,7 @@ The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rap
 
 ### The Gaia catalog
 
-The team's file is every column of Gaia DR3 over the HLWAS r00342 footprint's box with a 0.2-degree margin, from the public ESA Gaia archive; the query is in the file's own metadata. This builds it in the image, in the current directory, in about 20 seconds (34,171 rows, 152 columns, 16 MB):
+The team's file is every column of Gaia DR3 over the HLWAS r00342 footprint's box with a 0.2-degree margin, from the public ESA Gaia archive; the query is in the file's own metadata. This builds it in the image, in the current directory, in about 20 seconds to a minute and a half (152 columns; 34,171 rows, 16 MB, on 2026-10-26, and 23,499 and 19,082 rows on two builds on 2026-10-27, the archive printing a "release 3.15" banner; the team's copy is the 34,171-row file):
 
 ```sh
 podman run --rm -i -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/python3 "$IMAGE" - <<'EOF'
@@ -60,7 +61,7 @@ export IMAGE=<the pipeline image>                 # e.g. rapid-pipeline:rebuild-
 export GAIA=$PWD/gaia-dr3-hlwas-r00342-box.parquet  # The Gaia catalog, above
 export PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=rapid PGUSER=postgres PGPASSWORD=local
 export RAPIDPIPE_OUTPUTS_ROOT=file:///work/out    # ./rapid-local/out, as the container sees it
-export AWS_REGION=us-east-1                       # the public bucket's region
+export AWS_DEFAULT_REGION=us-east-1               # the buckets' and SSM's region (boto3 reads this name, not AWS_REGION)
 export RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9 RAPIDPIPE_KAFKA_TOPIC=local RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES=1048576
 # The team's database and Batch instead:
 #   unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS RAPIDPIPE_KAFKA_TOPIC RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES
@@ -68,10 +69,10 @@ export RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9 RAPIDPIPE_KAFKA_TOPIC=local
 #   (or keep PGHOST, PGPORT and PGDATABASE and export RAPID_DB_SECRET_ID=<the database secret> for the credential)
 #   export RAPIDPIPE_OUTPUTS_ROOT=s3://<bucket>/<prefix>
 #   export RAPIDPIPE_BATCH_JOB_QUEUE=<the Batch job queue>
-#   export AWS_PROFILE=<your profile> AWS_REGION=<the deployment's region>
+#   export AWS_PROFILE=<your profile> AWS_DEFAULT_REGION=<the deployment's region>
 R=$PWD L=$PWD/rapid-local                         # this checkout and the run's working directory
 ctr() { podman run --rm --pod rapid-local -v "$L:/work:Z" -v "$R/scripts:/scripts:ro,z" \
-  -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e RAPIDPIPE_OUTPUTS_ROOT -e AWS_REGION \
+  -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e RAPIDPIPE_OUTPUTS_ROOT -e AWS_DEFAULT_REGION \
   -e RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS -e RAPIDPIPE_KAFKA_TOPIC -e RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES \
   --entrypoint "$1" "$IMAGE" "${@:2}"; }
 rp() { ctr /usr/local/bin/rapidpipe-entrypoint "$@"; }     # the rapidpipe command line, in the image
