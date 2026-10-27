@@ -7,13 +7,17 @@ Example:
 
     python docs/make_onorbit_test_entry.py virtualPipelineOperator_20261021.out \
         --stream-log stream_l2_files_20261021.out --ingest-log ingestL2Files_20261021.out \
-        --job-logs-dir job_logs_20261021
+        --job-logs-dir job_logs_20261021 --count-db
 """
 
 import argparse
 import configparser
+import json
+import os
 import re
 import statistics
+import subprocess
+import sys
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,6 +26,10 @@ from pathlib import Path
 DEFAULT_RST = Path(__file__).resolve().parent / "source" / "dev" / "onorbit_tests.rst"
 # Configuration file the AWS Batch job launchers read; [JOB_PARAMS] job_logs_s3_bucket_base is the job-logs bucket.
 DEFAULT_INI = Path(__file__).resolve().parent.parent / "cdf" / "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
+# Script that counts the Merges, AstroObjects and AstroObjectsMeta records (and their X counterparts)
+# for the fields of a processing date.
+COUNT_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "count_astroobjects_merges_for_procdate.py"
+COUNT_TABLES = ["Merges", "AstroObjects", "AstroObjectsMeta", "XMerges", "XAstroObjects", "XAstroObjectsMeta"]
 
 # Doc labels for the stages timed by "VPO Elapsed time in seconds (to|after) <stage> = <sec>".
 VPO_STAGE_LABELS = {
@@ -55,9 +63,13 @@ ALERT_LABELS = [
     ("n_chips_ok", "Number of chips processed successfully"),
     ("n_chips_failed", "Number of chips failed"),
     ("n_alerts", "Number of alerts archived"),
-    ("n_sources_dropped", "Number of sources dropped"),
+    # produceAlertsForProcDate.py sums the per-chip n_failed (sources whose alert could not be built) into this key.
+    ("n_sources_dropped", "Sources whose alert could not be built"),
     ("n_archive_bytes", "Total size of Avro alert archives, bytes"),
 ]
+
+# Timing fields of the per-chip "forced photometry: ..." line of alerts/providers.py.
+FORCED_PHOT_STEPS = ["read", "search", "stage+fit", "write", "total"]
 
 # Roman L2 filenames start with r<5-digit program ID><14 more digits>_<4 digits>_wfi<SCA>_<filter>
 ROMAN_FILENAME_RE = re.compile(r"\br(\d{5})\d{14}_\d{4}_wfi(\d{2})_(f\d{3})", re.IGNORECASE)
@@ -218,6 +230,26 @@ def job_logs_bucket(ini_path):
         raise SystemExit(f"No [JOB_PARAMS] job_logs_s3_bucket_base in {ini_path}")
 
 
+def normalize_message(line):
+    """
+    Replace the numbers in a log message by ``N`` so that per-job or per-chip messages collapse together.
+
+    Numbers (with any decimals) are replaced; digits after a letter or "." are kept, so that e.g. s3:// and
+    python3.11 survive, except in jidN and reqN.
+
+    Parameters
+    ----------
+    line : str
+        Log message.
+
+    Returns
+    -------
+    message : str
+        The normalized message, truncated to 160 characters.
+    """
+    return re.sub(r"(?<![A-Za-z.])\d+(?:\.\d+)?|(?<=jid)\d+|(?<=req)\d+", "N", line.strip())[:160]
+
+
 def parse_vpo(text, reqid=None):
     """
     Extract the run settings, stage timings, job counts, failures and alert summary from VPO STDOUT.
@@ -318,11 +350,7 @@ def parse_vpo(text, reqid=None):
     vpo["bad_exitcodes"] = [line for line in block
                             if re.match(r"^\*\*\* (Error|Warning): .* returned exit code = \d+", line)]
 
-    # Errors and warnings, grouped after replacing numbers so that per-job messages collapse together
-    # (digits after a letter or "." are kept, so that e.g. s3:// and python3.11 survive, except in jidN/reqN).
-    messages = Counter(re.sub(r"(?<![A-Za-z.])\d+|(?<=jid)\d+|(?<=req)\d+", "N", line.strip())[:160]
-                       for line in block if line.startswith(("*** Error", "*** Warning")))
-    vpo["messages"] = messages
+    vpo["messages"] = Counter(normalize_message(line) for line in block if line.startswith(("*** Error", "*** Warning")))
 
     if any(line.startswith("n_chips_ok = ") for line in block):
         vpo["alerts"] = {key: int(last(rf"^{key} = (\d+)$", block, 0)) for key, _ in ALERT_LABELS}
@@ -422,13 +450,16 @@ def parse_job_logs(job_logs_dir):
     job_logs : dict
         For each of ``refimage`` and ``science``: per-step lists of seconds, per-jid total seconds,
         and the earliest start and latest end times.  ``n_incomplete`` counts files with no total time
-        (failed jobs, or files that are not reference-image or science job output).
+        (failed jobs, or files that are not reference-image or science job output).  ``rb`` maps each
+        catalog filename to a Counter of its sources, real-bogus-scored sources, and not-scored reasons.
     """
+    rb_re = re.compile(r"rb scored (\d+) of (\d+) sources .*?not scored: \{(.*?)\}")
     step_re = re.compile(rf"^(?:=====> )?Elapsed time in seconds (after|just to|to) (.+?) =\s*{SEC}\s*$")
     totals = {"refimage": "run one instance of reference-image pipeline",
               "science": "run one instance of science pipeline"}
     job_logs = {kind: {"steps": {}, "totals": {}, "started": [], "ended": []} for kind in totals}
     job_logs["n_incomplete"] = 0
+    job_logs["rb"] = {}
 
     for path in sorted(p for p in job_logs_dir.rglob("*") if p.is_file()):
         text = path.read_text(errors="replace")
@@ -438,12 +469,20 @@ def parse_job_logs(job_logs_dir):
             job_logs["n_incomplete"] += 1
             continue
         jid = int(jid.group(1))
-        per_step = {}
+        per_step, catalog = {}, None
         for line in text.splitlines():
             if m := step_re.match(line):
                 step = m.group(2)
                 label = "Total time to " + step if step == totals[kind] else step[0].upper() + step[1:]
                 per_step[label] = per_step.get(label, 0.0) + float(m.group(3))
+            elif m := re.search(r"catalog_filename = (\S+)", line):
+                catalog = m.group(1)
+            elif m := rb_re.search(line):
+                rb = job_logs["rb"].setdefault(catalog, Counter())
+                rb["scored"] += int(m.group(1))
+                rb["sources"] += int(m.group(2))
+                for reason, n in re.findall(r"'(\w+)': (\d+)", m.group(3)):
+                    rb[reason] += int(n)
         for label, seconds in per_step.items():
             job_logs[kind]["steps"].setdefault(label, []).append(seconds)
         total = per_step["Total time to " + totals[kind]]
@@ -453,6 +492,170 @@ def parse_job_logs(job_logs_dir):
             job_logs[kind]["started"].append(started)
             job_logs[kind]["ended"].append(started + timedelta(seconds=total))
     return job_logs
+
+
+def run_count_script(procdate, reqid, out_path):
+    """
+    Run count_astroobjects_merges_for_procdate.py for a processing date and request and save its STDOUT.
+
+    Parameters
+    ----------
+    procdate : str
+        Processing date (YYYYMMDD), passed as env. var. JOBPROCDATE.
+    reqid : int or None
+        Processing request, passed as env. var. PROCREQ when not None.
+    out_path : pathlib.Path
+        File to write the combined STDOUT and STDERR to.
+
+    Returns
+    -------
+    text : str
+        The script output.
+    """
+    env = dict(os.environ, JOBPROCDATE=procdate)
+    if reqid is not None:
+        env["PROCREQ"] = str(reqid)
+    print(f"Running {COUNT_SCRIPT.name} with JOBPROCDATE={procdate}, PROCREQ={reqid}...", file=sys.stderr)
+    result = subprocess.run([sys.executable, str(COUNT_SCRIPT)], env=env, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out_path.write_text(result.stdout)
+    if result.returncode != 0:
+        raise SystemExit(f"{COUNT_SCRIPT.name} exited with code {result.returncode}; see {out_path}")
+    print(f"Saved its output to {out_path}", file=sys.stderr)
+    return result.stdout
+
+
+def parse_counts(text):
+    """
+    Extract the per-table totals from count_astroobjects_merges_for_procdate.py STDOUT.
+
+    Parameters
+    ----------
+    text : str
+        Contents of the count script's STDOUT.
+
+    Returns
+    -------
+    counts : dict
+        For each table in ``COUNT_TABLES`` (e.g. ``Merges``, ``XAstroObjects``): a dict with the number of
+        fields whose table exists (``nfields``), the summed record count (``n``), and the minimum,
+        median and maximum per-field count (``per_field``, empty if no fields).
+    """
+    lines = text.splitlines()
+    counts = {}
+    for table in COUNT_TABLES:
+        m = re.search(rf"^Totals for {table}: nfields_\w+,n_\w+ = (\d+),(\d+)$", text, re.MULTILINE)
+        if m is None:
+            raise SystemExit(f"No totals for {table} in the count script output")
+        per_field = [int(m2.group(1)) for line in lines
+                     if (m2 := re.match(rf"^{table}: field,count = \d+,(\d+)$", line))]
+        counts[table] = {"nfields": int(m.group(1)), "n": int(m.group(2)), "per_field": per_field}
+    return counts
+
+
+def parse_alerts(work_dir, procdate):
+    """
+    Extract detection counts, forced-photometry timing, failures and warnings from the alert-production
+    thread logs, and the per-chip statistics from the alert-production summary JSON file.
+
+    Parameters
+    ----------
+    work_dir : pathlib.Path
+        VPO working directory with ``produceAlertsForProcDate_thread*.out`` and
+        ``produceAlertsForProcDate_<procdate>_summary.json``.
+    procdate : str
+        Processing date (YYYYMMDD).
+
+    Returns
+    -------
+    alerts : dict or None
+        Parsed values, or None if neither the thread logs nor the summary file exist.
+    """
+    thread_logs = sorted(work_dir.glob("produceAlertsForProcDate_thread*.out"))
+    summary_path = work_dir / f"produceAlertsForProcDate_{procdate}_summary.json"
+    if not thread_logs and not summary_path.exists():
+        return None
+
+    text = "\n".join(path.read_text(errors="replace") for path in thread_logs)
+    capped = re.findall(r"keeping the (\d+) highest-S/N of (\d+) alertable detections; (\d+) dropped", text)
+    forced = re.findall(r"forced photometry: \d+ objects, \d+ stored rows read; measured \d+ of \d+ images in "
+                        r"the window \((\d+) new rows\); (\d+) month files written; read ([\d.]+) s, "
+                        r"search ([\d.]+) s, stage\+fit ([\d.]+) s, write ([\d.]+) s, total ([\d.]+) s", text)
+    alerts = {
+        "n_thread_logs": len(thread_logs),
+        "n_flagged": sum(int(n) for n in re.findall(r"pid=\d+: (\d+) flagged detections", text)),
+        "max_sources": sorted({int(c[0]) for c in capped}),
+        "n_capped_chips": len(capped),
+        "n_capped_dropped": sum(int(c[2]) for c in capped),
+        "forced_steps": {step: [float(f[i + 2]) for f in forced] for i, step in enumerate(FORCED_PHOT_STEPS)},
+        "forced_new_rows": sum(int(f[0]) for f in forced),
+        "forced_files": sum(int(f[1]) for f in forced),
+        "forced_failures": re.findall(r"pid=(\d+): forced photometry failed after ([\d.]+) s", text),
+        "n_tracebacks": text.count("Traceback (most recent call last):"),
+        "messages": Counter(normalize_message(f"{m.group(1)} {m.group(2)}: {m.group(3)}") for m in
+                            re.finditer(r"^\S+ \S+ (WARNING|ERROR) (\S+): (.*)$", text, re.MULTILINE)),
+        "summary": None,
+    }
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        chips = [c for c in summary["chips"] if c.get("stats")]
+        stats = [c["stats"] for c in chips]
+        matches = {}
+        for s in stats:
+            for field, states in s["match_states"].items():
+                for state, n in states.items():
+                    matches.setdefault(field, Counter())[state] += n
+        cutouts = Counter()
+        for s in stats:
+            cutouts.update(s["cutouts_present"])
+        alerts["summary"] = {
+            "totals": {key: summary[key] for key, _ in ALERT_LABELS if key in summary},
+            "chip_seconds": [c["elapsed_seconds"] for c in chips],
+            "n_with_prv": sum(s["n_with_prv"] for s in stats),
+            "n_prv_total": sum(s["n_prv_total"] for s in stats),
+            "max_prv": max((s["max_prv"] for s in stats), default=0),
+            "n_with_forced": sum(s["n_with_forced"] for s in stats),
+            "matches": matches,
+            "cutouts": cutouts,
+        }
+    return alerts
+
+
+def fmt_seconds(seconds):
+    """
+    Format an elapsed time in seconds, adding the time in hours when it is at least one hour.
+
+    Parameters
+    ----------
+    seconds : float
+        Elapsed time.
+
+    Returns
+    -------
+    text : str
+        For example ``176.5`` or ``57,015.3 (15.84 hours)``.
+    """
+    text = f"{seconds:,.1f}"
+    return text + f" ({seconds / 3600:.2f} hours)" if seconds >= 3600 else text
+
+
+def fmt_duration(seconds):
+    """
+    Format an elapsed time for running text, adding the time in hours when it is at least one hour.
+
+    Parameters
+    ----------
+    seconds : float
+        Elapsed time.
+
+    Returns
+    -------
+    text : str
+        For example ``176 seconds`` or ``57,015 seconds (15.84 hours)``.
+    """
+    text = f"{seconds:,.0f} seconds"
+    return text + f" ({seconds / 3600:.2f} hours)" if seconds >= 3600 else text
 
 
 def fmt_int(n):
@@ -488,12 +691,119 @@ def step_table(title, steps):
     table : str
         The reStructuredText table.
     """
-    rows = [[step, f"{min(s):.1f}", f"{statistics.median(s):.1f}", f"{max(s):.1f}"]
+    rows = [[step, fmt_seconds(min(s)), fmt_seconds(statistics.median(s)), fmt_seconds(max(s))]
             for step, s in steps.items()]
     return rst_table([title, "Min (sec)", "Med (sec)", "Max (sec)"], rows)
 
 
-def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_bucket=None):
+def rb_table(rb):
+    """
+    Format the real-bogus scoring counts of the science-pipeline catalogs as a sentence and table.
+
+    Parameters
+    ----------
+    rb : dict
+        Catalog filename mapped to a Counter of ``sources``, ``scored`` and not-scored reasons
+        (``job_logs["rb"]`` from ``parse_job_logs``).
+
+    Returns
+    -------
+    text : str
+        The sentence and reStructuredText table.
+    """
+    reasons = sorted({key for c in rb.values() for key in c} - {"sources", "scored"})
+    total = sum(rb.values(), Counter())
+    rows = [[f"``{catalog}``", fmt_int(c["sources"]), fmt_int(c["scored"]),
+             f"{100 * c['scored'] / c['sources']:.1f}" if c["sources"] else "--"]
+            + [fmt_int(c[reason]) for reason in reasons]
+            for catalog, c in sorted(rb.items(), key=lambda item: str(item[0]))]
+    rows.append(["All catalogs", fmt_int(total["sources"]), fmt_int(total["scored"]),
+                 f"{100 * total['scored'] / total['sources']:.1f}" if total["sources"] else "--"]
+                + [fmt_int(total[reason]) for reason in reasons])
+    text = ("Real-bogus scoring of the catalog sources, summed over the science-pipeline instances "
+            "(the last columns count the sources not scored, by reason):\n\n")
+    return text + rst_table(["Catalog", "Sources", "Scored", "Scored (%)"] + [f"Not scored: {r}" for r in reasons], rows)
+
+
+def alert_section(vpo, alerts):
+    """
+    Format the alert-production section from the VPO STDOUT and, if available, the alert-production
+    thread logs and summary file.
+
+    Parameters
+    ----------
+    vpo : dict
+        Output of ``parse_vpo``.
+    alerts : dict or None
+        Output of ``parse_alerts``.
+
+    Returns
+    -------
+    section : str
+        The section text, ending with a newline.
+    """
+    out = [f"Alert production\n{'-' * 34}\n"]
+    add = out.append
+    summary = alerts["summary"] if alerts else None
+    totals = vpo["alerts"] or (summary["totals"] if summary else {})
+
+    if summary and summary["chip_seconds"]:
+        cs = summary["chip_seconds"]
+        add(f"Per chip, alert production took {min(cs):,.0f} to {fmt_duration(max(cs))} "
+            f"(median {statistics.median(cs):,.0f} seconds); summed over the {len(cs)} chips, "
+            f"{fmt_duration(sum(cs))}.\n")
+
+    rows = []
+    if alerts:
+        rows.append(["Flagged detections skipped (flags <> 0, not alertable)", fmt_int(alerts["n_flagged"])])
+        cap = "/".join(str(c) for c in alerts["max_sources"]) or "max_sources"
+        rows.append([f"Alertable detections dropped by the cap of {cap} per chip ({alerts['n_capped_chips']} chips)",
+                     fmt_int(alerts["n_capped_dropped"])])
+    rows += [[label, fmt_int(totals[key])] for key, label in ALERT_LABELS if key in totals]
+    if summary:
+        rows += [["Alerts with prior detections", fmt_int(summary["n_with_prv"])],
+                 ["Prior-detection records in the alerts", fmt_int(summary["n_prv_total"])],
+                 ["Most prior detections in one alert", fmt_int(summary["max_prv"])],
+                 ["Alerts with forced photometry", fmt_int(summary["n_with_forced"])]]
+    add(rst_table(["Item", "Number"], rows) + "\n")
+
+    if summary and summary["matches"]:
+        labels = {"ssMatches": "Solar-system objects", "refStarMatches": "Reference-catalog stars",
+                  "refGalaxyMatches": "Reference-catalog galaxies", "nedMatches": "NED",
+                  "lvsMatches": "NED-LVS", "gaiaMatches": "Gaia"}
+        add("Cross-matches in the alerts (null means the match was not attempted):\n")
+        rows = [[labels.get(field, field), fmt_int(c["matched"]), fmt_int(c["empty"]), fmt_int(c["null"])]
+                for field, c in summary["matches"].items()]
+        add(rst_table(["Cross-match", "Matched", "Empty", "Null"], rows) + "\n")
+        cutouts = ", ".join(f"{field}: {fmt_int(n)}" for field, n in summary["cutouts"].items())
+        add(f"Alerts with each cutout present: {cutouts}.\n")
+
+    if alerts and alerts["forced_steps"]["total"]:
+        steps = alerts["forced_steps"]
+        n = len(steps["total"])
+        text = (f"Forced photometry ran on {n} chips, writing {fmt_int(alerts['forced_new_rows'])} new rows "
+                f"to {fmt_int(alerts['forced_files'])} files.")
+        if summary and summary["chip_seconds"]:
+            text += (f" It took {100 * sum(steps['total']) / sum(summary['chip_seconds']):.0f}% of the summed "
+                     "per-chip alert-production time.")
+        add(text + "\n")
+        rows = [[step, fmt_seconds(sum(steps[step])), fmt_seconds(statistics.median(steps[step])),
+                 fmt_seconds(max(steps[step]))] for step in FORCED_PHOT_STEPS]
+        add(rst_table(["Forced-photometry step", "Summed (sec)", "Med per chip (sec)", "Max per chip (sec)"], rows) + "\n")
+    if alerts and alerts["forced_failures"]:
+        failed = ", ".join(f"pid = {pid} after {sec} s" for pid, sec in alerts["forced_failures"])
+        add(f"Forced photometry failed on {len(alerts['forced_failures'])} chip(s) ({failed}); "
+            "the alerts of those chips carry null ``prvDiaForcedSources``.\n")
+
+    if alerts and alerts["messages"]:
+        add(f"Warning and error messages in the {alerts['n_thread_logs']} alert-production thread logs "
+            f"(numbers replaced by ``N``; {alerts['n_tracebacks']} tracebacks), most frequent first:\n")
+        add(code_block([f"{n:6d}  {msg}" for msg, n in alerts["messages"].most_common(15)]) + "\n")
+    return "\n".join(out)
+
+
+def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_bucket=None, counts=None,
+               alerts=None):
     """
     Assemble the reStructuredText test entry from the parsed logs.
 
@@ -511,6 +821,10 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
         Output of ``parse_job_logs``.
     programs : list of int, optional
         Roman program IDs found in the logs.
+    counts : dict, optional
+        Output of ``parse_counts``.
+    alerts : dict, optional
+        Output of ``parse_alerts``.
 
     Returns
     -------
@@ -554,7 +868,7 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
                 ["L2 files ingested", fmt_int(ingest["n_ingested"])],
                 ["L2 files failed", fmt_int(ingest["n_failed"])],
                 ["L2 files not attempted", fmt_int(ingest["n_not_attempted"])],
-                ["Elapsed time to ingest L2 files (sec)", f"{ingest['elapsed']:.1f}"]]
+                ["Elapsed time to ingest L2 files (sec)", fmt_seconds(ingest["elapsed"])]]
         add(rst_table(["Item", "Number"], rows) + "\n")
         if ingest["filters"]:
             by_filter = ", ".join(f"{f}: {n}" for f, n in sorted(ingest["filters"].items()))
@@ -617,15 +931,19 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
         add(f"The VPO started at {vpo['started'].strftime(PT_FORMAT)} PT and finished at "
             f"{ended.strftime('%H:%M:%S')} PT, a total of {total:,.0f} seconds ({total / 3600:.2f} hours).")
     add("The breakdown by VPO stage is shown below.\n")
-    rows = [[label, f"{s:.1f}"] for label, s in vpo["stages"]]
+    rows = [[label, fmt_seconds(s)] for label, s in vpo["stages"]]
     if n_checks:
-        rows.append([f"Resubmitting failed AWS Batch jobs ({n_checks} checks)", f"{vpo['resubmit'][1]:.1f}"])
+        rows.append([f"Resubmitting failed AWS Batch jobs ({n_checks} checks)", fmt_seconds(vpo["resubmit"][1])])
+    stage_sum = sum(s for _, s in vpo["stages"]) + vpo["resubmit"][1]
     if total is not None:
-        rows.append(["Total time to run VPO", f"{total:.1f}"])
+        rows.append(["Total time to run VPO", fmt_seconds(total)])
     else:
-        rows.append(["Sum over VPO stages for this processing request",
-                     f"{sum(s for _, s in vpo['stages']) + vpo['resubmit'][1]:.1f}"])
+        rows.append(["Sum over VPO stages for this processing request", fmt_seconds(stage_sum)])
     add(rst_table(["VPO stage", "Elapsed time (sec)"], rows) + "\n")
+    if vpo["stages"]:
+        label, longest = max(vpo["stages"], key=lambda stage: stage[1])
+        add(f"The longest stage was {label[0].lower() + label[1:]}, at {fmt_duration(longest)}, "
+            f"{100 * longest / (total or stage_sum):.0f}% of the total.\n")
     n_science = vpo["jobs"].get("science", {}).get("total", 0)
     if total is not None and n_science:
         add(f"For the {n_science} science images, this is {total / n_science:,.1f} seconds per input science image overall.\n")
@@ -649,13 +967,31 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
             text.append(f"The summed run time over all {n} instance(s) is {sum(k['totals'].values()) / 3600:.1f} hours.\n")
             add("\n".join(text))
             add(step_table(f"{heading} step ({n} instance(s))", k["steps"]) + "\n")
+            if kind == "science" and job_logs["rb"]:
+                add(rb_table(job_logs["rb"]) + "\n")
         if job_logs["n_incomplete"]:
             add(f"{job_logs['n_incomplete']} job log(s) had no total run time (failed or unrecognized) and are not included above.\n")
 
-    if vpo["alerts"]:
-        add(f"Alert production\n{'-' * 34}\n")
-        rows = [[label, fmt_int(vpo["alerts"][key])] for key, label in ALERT_LABELS]
-        add(rst_table(["Item", "Number"], rows) + "\n")
+    if counts:
+        add(f"Lightcurve database\n{'-' * 34}\n")
+        add("Records in the per-field lightcurve database tables for the fields covered by this processing date, "
+            "from ``scripts/count_astroobjects_merges_for_procdate.py`` "
+            "(the counts include records from other processing dates of the same fields):\n")
+        rows = []
+        for table in COUNT_TABLES:
+            c = counts[table]
+            pf = c["per_field"]
+            rows.append([f"{table}_<field>", fmt_int(c["nfields"]), fmt_int(c["n"])]
+                        + ([fmt_int(min(pf)), fmt_int(round(statistics.median(pf))), fmt_int(max(pf))]
+                           if pf else ["--"] * 3))
+        add(rst_table(["Table", "Fields", "Records", "Min per field", "Med per field", "Max per field"], rows) + "\n")
+        for x in ("", "X"):
+            n_ao, n_meta = counts[f"{x}AstroObjects"]["n"], counts[f"{x}AstroObjectsMeta"]["n"]
+            if n_ao != n_meta:
+                add(f"{x}AstroObjects and {x}AstroObjectsMeta differ by {fmt_int(abs(n_ao - n_meta))} records.\n")
+
+    if vpo["alerts"] or alerts:
+        add(alert_section(vpo, alerts))
 
     add(".. TODO: Observations.\n")
     return "\n".join(out) + "\n"
@@ -675,6 +1011,16 @@ def main():
                         "renamed, e.g. jid<jid>.out)")
     p.add_argument("--ini", type=Path, default=DEFAULT_INI,
                    help=f"job-launcher configuration file with [JOB_PARAMS] job_logs_s3_bucket_base (default: {DEFAULT_INI})")
+    p.add_argument("--work-dir", type=Path, default=None,
+                   help="VPO working directory with produceAlertsForProcDate_thread*.out and "
+                        "produceAlertsForProcDate_<procdate>_summary.json")
+    count = p.add_mutually_exclusive_group()
+    count.add_argument("--count-db", action="store_true",
+                       help=f"run {COUNT_SCRIPT.name} for the VPO processing date (needs the DB* env. vars., RAPID_SW, "
+                            "RAPID_WORK and ROMANTESSELLATIONDBNAME, as in the VPO container) and save its STDOUT "
+                            "next to the VPO log")
+    count.add_argument("--count-log", type=Path, default=None,
+                       help=f"saved STDOUT of {COUNT_SCRIPT.name} to read instead of running it")
     p.add_argument("--reqid", type=int, default=None, help="processing request to report, if the VPO ran several")
     p.add_argument("--rst", type=Path, default=DEFAULT_RST, help=f"page to append to (default: {DEFAULT_RST})")
     p.add_argument("--stdout", action="store_true", help="print the entry instead of appending it")
@@ -684,13 +1030,26 @@ def main():
     ingest_texts = [path.read_text(errors="replace") for path in args.ingest_log]
     stream_texts = [path.read_text(errors="replace") for path in args.stream_log]
 
+    vpo = parse_vpo(vpo_text, args.reqid)
+    if args.count_db:
+        if not vpo["datearg"]:
+            raise SystemExit("No processing date (datearg) in the VPO log, so the count script cannot be run")
+        count_path = args.vpo_log.parent / f"count_astroobjects_merges_for_procdate_{vpo['datearg']}_req{vpo['reqid']}.out"
+        count_text = run_count_script(vpo["datearg"], vpo["reqid"], count_path)
+    elif args.count_log:
+        count_text = args.count_log.read_text(errors="replace")
+    else:
+        count_text = None
+
     entry = make_entry(
-        parse_vpo(vpo_text, args.reqid),
+        vpo,
         ingest=parse_ingest(ingest_texts) if ingest_texts else None,
         streams=[parse_stream(path) for path in args.stream_log],
         job_logs=parse_job_logs(args.job_logs_dir) if args.job_logs_dir else None,
         programs=program_ids([vpo_text] + ingest_texts + stream_texts),
         logs_bucket=job_logs_bucket(args.ini),
+        counts=parse_counts(count_text) if count_text is not None else None,
+        alerts=parse_alerts(args.work_dir, vpo["datearg"]) if args.work_dir else None,
     )
 
     if args.stdout:
