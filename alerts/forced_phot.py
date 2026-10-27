@@ -19,8 +19,8 @@ Layout (top to bottom, each section depends only on the ones above it)::
     search       q3c_search()              -- coarse: Q3C cone on diffimages
                  find_prev_images()        -- parent: cone + predicate
                  (science image and difference PSF are named by convention
-                  in the job directory; the science PSF from the psfs
-                  table: sci_psf_basename, diff_psf_basename)
+                  in the job directory: diff_psf_basename; the science
+                  PSF is the psfs-table file itself)
     photometry   open_image()              -- FITS -> data, header, WCS
                  error_array()             -- stopgap per-pixel uncertainty
                  project_positions()       -- sky -> pixel, on-chip mask
@@ -83,6 +83,7 @@ STAMP_MARGIN_PX : int
 
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -126,11 +127,12 @@ class PrevImage:
     of the raw SCA; not sky directions -- chips are rolled).
 
     ``diff_filename`` comes from the database; ``sci_filename``,
-    ``diff_psf``, ``sci_psf``, ``diff_uncert`` and ``sci_uncert`` are the
-    job-directory products named by convention (see the ``*_basename``
-    helpers); ``sci_psf`` is None when the psfs table has no good PSF for
-    the (fid, SCA); ``l2_filename`` is the raw L2 file the science image
-    was made from.
+    ``diff_psf``, ``diff_uncert`` and ``sci_uncert`` are the job-directory
+    products named by convention (see the ``*_basename`` helpers);
+    ``sci_psf`` is the psfs-table file for the (fid, SCA) (``psfs.filename``,
+    the current best version, not a job-directory copy), None when the
+    table has no good PSF for it; ``l2_filename`` is the raw L2 file the
+    science image was made from.
 
     ``position_index`` is filled by :func:`find_prev_images`: indices into
     the caller's position list of the positions this image contains.
@@ -277,14 +279,16 @@ DIFF_UNCERT_BASENAMES = {
 #: <l2 basename>_reformatted_unc.fits (e.g. r0034..._f146_cal_lite_reformatted_unc.fits).
 SCI_UNCERT_SUFFIX = "_reformatted_unc.fits"
 
-#: Science-image PSF in the job directory: the best psfs-table file for the
-#: (fid, SCA), as the science pipeline picks it (rapid_db.get_best_psf:
-#: vbest > 0, status > 0), downloaded into the job directory and written
-#: back with "_normalized" before ".fits"
-#: (awsBatchSubmitJobs_runSingleSciencePipeline.py), e.g.
-#: sciimage_psf_phavg_fid5_sca11_normalized.fits. An image with no such
-#: psfs row has no science-image forced photometry.
-SCI_PSF_SUFFIX = "_normalized.fits"
+# Science-image PSF: the current best psfs-table file for the (fid, SCA)
+# (vbest > 0, status > 0, the same selection as rapid_db.get_best_psf),
+# staged from the pipeline-files bucket and normalized by load_psf(). The
+# job directory's own "_normalized" copy is NOT used: it is a copy of
+# whichever psfs row was best when that job ran, which the database does
+# not record (the psfs table was replaced on 2026-08-21, so job directories
+# from before then hold the version-1 file under its old name). Every
+# epoch is therefore measured with one PSF model per (fid, SCA). An image
+# whose (fid, SCA) has no good psfs row has no science-image forced
+# photometry.
 
 # Also present in those job directories, not yet used here:
 #   sfftdiffimage_uncert_masked.fits, zogy_diffimage_uncert_masked.fits,
@@ -293,26 +297,6 @@ SCI_PSF_SUFFIX = "_normalized.fits"
 # Whether these are trustworthy decides if error_array() is needed at all.
 
 _CORNER_COLUMNS = "ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4"
-
-
-def sci_psf_basename(psf_filename):
-    """Job-directory basename of the normalized science-image PSF, from the
-    psfs-table filename the science pipeline downloaded.
-
-    Parameters
-    ----------
-    psf_filename : str
-        ``psfs.filename``, a full path or S3 URL ending in ``.fits``.
-
-    Returns
-    -------
-    str
-        The basename with ``.fits`` replaced by ``_normalized.fits``.
-    """
-    base = str(psf_filename).rsplit("/", 1)[-1]
-    if not base.endswith(".fits"):
-        raise ValueError(f"science PSF filename does not end in .fits: {psf_filename!r}")
-    return base[:-len(".fits")] + SCI_PSF_SUFFIX
 
 
 def diff_psf_basename(diff_basename):
@@ -429,7 +413,11 @@ def _row_to_prev_image(row, diff_basename=None):
         diff_filename=f"{job_dir}/{basename}",
         sci_filename=f"{job_dir}/{SCI_BASENAME}",
         diff_psf=f"{job_dir}/{diff_psf_basename(basename)}",
-        sci_psf=None if psf_filename is None else f"{job_dir}/{sci_psf_basename(psf_filename)}",
+        # The psfs-table file itself (one per fid/SCA, in the pipeline-files
+        # bucket), not the job directory's normalized copy: that copy is named
+        # after whichever psfs row was best when the job ran, which the
+        # database does not record, and the forced fit normalizes anyway.
+        sci_psf=None if psf_filename is None else str(psf_filename),
         diff_uncert=f"{job_dir}/{diff_uncert_basename(basename)}",
         sci_uncert=f"{job_dir}/{sci_uncert_basename(str(row['l2_filename']))}",
         l2_filename=str(row["l2_filename"]),
@@ -869,6 +857,23 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
     positions = list(positions)
     sci_psf_cache: dict[str, str] = {}
     n_failed = 0
+    # Stage every science PSF up front: one psfs-table file per (fid, SCA),
+    # so normally a single small download per chip. A PSF that cannot be
+    # staged is reported once here, and the epochs that need it skip the
+    # science product below without staging their full-frame images.
+    missing_sci_psf: set[str] = set()
+    if "science" in products:
+        wanted = sorted({image.sci_psf for image in images
+                         if image.sci_psf is not None and len(image.position_index)})
+        for psf_url in wanted:
+            try:
+                sci_psf_cache[psf_url.rsplit("/", 1)[-1]] = stage(psf_url)
+            except Exception as exc:
+                if strict:
+                    raise
+                missing_sci_psf.add(psf_url)
+                logger.error("run_prev_images: science PSF %s not staged (%s); no science-image "
+                             "forced photometry for the epochs that use it", psf_url, exc)
     for image in images:
         subset = [positions[i] for i in np.asarray(image.position_index, dtype=int)]
         if not subset:
@@ -881,9 +886,13 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
                                "(no good psfs row for fid=%s sca=%s); skipping",
                                image.rid, image.pid, product, image.fid, image.sca)
                 continue
+            if product == "science" and psf_url in missing_sci_psf:
+                n_failed += 1          # reported once above, not per epoch
+                continue
             staged = []
             try:
-                local = stage(url); staged.append((url, local))
+                # Cheapest file first: a missing PSF (tens of KB) must not
+                # cost the full-frame image download (~67 MB) to discover.
                 if product == "science":
                     key = psf_url.rsplit("/", 1)[-1]
                     if key not in sci_psf_cache or not os.path.exists(sci_psf_cache[key]):
@@ -891,6 +900,7 @@ def run_prev_images(images, positions, stage, products=("diff", "science"), unce
                     psf_local = sci_psf_cache[key]
                 else:
                     psf_local = stage(psf_url); staged.append((psf_url, psf_local))
+                local = stage(url); staged.append((url, local))
                 unc_local = None
                 unc = (uncert_url(image, product) if uncert_url is not None
                        else getattr(image, unc_attr))
@@ -993,10 +1003,39 @@ class StaleWriteError(RuntimeError):
     """A conditional write found the object changed since it was read."""
 
 
+#: Threads the store is read and written with (providers.FORCED_STORE_WORKERS
+#: is 16); the shared client's connection pool is sized to match.
+_S3_POOL_CONNECTIONS = 32
+
+_s3_clients: dict[int, object] = {}
+_s3_clients_lock = threading.Lock()
+
+
 def _s3_client():
-    import boto3
-    from botocore.config import Config
-    return boto3.client("s3", config=Config(retries={"mode": "standard"}))
+    """One S3 client per process, shared by every store read and write.
+
+    boto3 clients are safe to share between threads. Building one per
+    request (the previous behavior) opened a new connection pool and did
+    a new DNS lookup every time; with 16 store threads in each of 64
+    workers that exceeded the VPC resolver's packet rate, and 26 chips
+    of the 2026-10-23 run lost their forced photometry to
+    NameResolutionError. Keyed by process id so a forked worker never
+    reuses its parent's sockets.
+    """
+    pid = os.getpid()
+    client = _s3_clients.get(pid)
+    if client is None:
+        with _s3_clients_lock:
+            client = _s3_clients.get(pid)
+            if client is None:
+                import boto3
+                from botocore.config import Config
+                client = boto3.client("s3", config=Config(
+                    retries={"mode": "standard"},
+                    max_pool_connections=_S3_POOL_CONNECTIONS))
+                _s3_clients.clear()          # drop an inherited parent's client
+                _s3_clients[pid] = client
+    return client
 
 
 def write_table(table, path, if_match=None):
