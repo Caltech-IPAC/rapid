@@ -35,7 +35,7 @@ The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rap
 
 ### The Gaia catalog
 
-The team's file is every column of Gaia DR3 over the HLWAS r00342 footprint's box with a 0.2-degree margin, from the public ESA Gaia archive; the query is in the file's own metadata. This builds it in the image, in the current directory, in about 20 seconds (34,171 rows, 152 columns, 16 MB):
+The team's file is every column of Gaia DR3 over the HLWAS r00342 footprint's box with a 0.2-degree margin, from the public ESA Gaia archive; the query is in the file's own metadata. This builds it in the image, in the current directory, in about 20 seconds to a minute and a half (152 columns; 34,171 rows, 16 MB, on 2026-10-26, and 23,499 and 19,082 rows on two builds on 2026-10-27, the archive printing a "release 3.15" banner; the team's copy is the 34,171-row file):
 
 ```sh
 podman run --rm -i -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/python3 "$IMAGE" - <<'EOF'

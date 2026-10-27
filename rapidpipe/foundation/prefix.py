@@ -46,20 +46,30 @@ def _bucket_key(url: str) -> tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
+def cache_dir() -> Path:
+    """This process's download cache, made on first use."""
+    global _cache
+    if _cache is None:
+        _cache = Path(tempfile.mkdtemp(prefix="rapidpipe-get-"))
+        atexit.register(shutil.rmtree, _cache, ignore_errors=True)
+    return _cache
+
+
+def is_staged(path: Path) -> bool:
+    """Whether ``path`` is a download in this process's cache, not a ``file://`` URL's own file."""
+    return _cache is not None and path.is_relative_to(_cache)
+
+
 def get(url: str, *, client: Any = None, unsigned: bool = False) -> Path:
     """A local path holding the file ``url`` names; ``FileNotFoundError`` when an S3 object is absent.
 
     ``unsigned`` reads a public bucket anonymously (botocore's ``UNSIGNED``
     signature), as the intake stage reads its source root.
     """
-    global _cache
     if urlparse(url).scheme == "file":
         return local_path(url)
     bucket, key = _bucket_key(url)
-    if _cache is None:
-        _cache = Path(tempfile.mkdtemp(prefix="rapidpipe-get-"))
-        atexit.register(shutil.rmtree, _cache, ignore_errors=True)
-    path = _cache / bucket / key
+    path = cache_dir() / bucket / key
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
         try:

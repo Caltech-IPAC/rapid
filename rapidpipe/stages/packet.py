@@ -92,8 +92,9 @@ A difference image's neighbours (its PSF, uncertainty, science image and
 template) are read under the difference image's own suffix
 (:func:`neighbour`): ``.fits.gz`` from a difference job that gzips its
 files, ``.fits`` from one before it (run 12's). A gzipped file is
-decompressed once per job, to a plain file beside its staged copy, when
-it is first read (:func:`_plain`); forced photometry and the cutouts then
+decompressed once per job when it is first read (:func:`_plain`), to a
+plain file beside its staged copy, or in the download cache for a
+``file://`` product, which is never changed; forced photometry and the cutouts then
 read the plain file, so the trigger's difference and science images, read
 by both, and the science PSF, read on every window image, are not
 decompressed again.
@@ -129,7 +130,7 @@ from astropy.time import Time
 from psycopg2.extras import RealDictCursor
 
 from rapidpipe.foundation.local import JobContext
-from rapidpipe.foundation.prefix import get
+from rapidpipe.foundation.prefix import cache_dir, get, is_staged
 from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
@@ -449,14 +450,19 @@ def _beside(url: str, name: str) -> Path:
 
 
 def _plain(path: Path) -> Path:
-    """``path``, or for a ``.gz`` the plain file beside it, decompressed on the first read and the staged copy removed."""
+    """``path``, or for a ``.gz`` its plain file, decompressed on the first read: beside a staged
+    download, which is then removed, or for a ``file://`` URL's own file, a published product
+    left as it is, in the download cache."""
     if path.suffix != ".gz":
         return path
-    plain = path.with_suffix("")
+    staged = is_staged(path)
+    plain = (path if staged else cache_dir() / "plain" / path.relative_to(path.anchor)).with_suffix("")
     if not plain.exists():
+        plain.parent.mkdir(parents=True, exist_ok=True)
         with gzip.open(path, "rb") as src, plain.open("wb") as dst:
             shutil.copyfileobj(src, dst)
-        path.unlink()
+        if staged:
+            path.unlink()
     return plain
 
 

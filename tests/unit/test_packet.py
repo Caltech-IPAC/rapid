@@ -36,9 +36,11 @@ from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS, REFCAT_COLUMNS
 from rapidpipe.science.alerts.records import Source
+from rapidpipe.foundation import prefix
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
-    Read, WindowImage, _separation, covering, neighbour, reliability, window_reach, write_set)
+    Read, WindowImage, _plain, _separation, covering, neighbour, reliability, window_reach,
+    write_set)
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
@@ -232,6 +234,23 @@ def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):
             assert gzipped[sid][name] == record[name]
         assert [(f["psfFlux"], f["scienceFlux"]) for f in gzipped[sid]["prvDiaForcedSources"]] == [
             (f["psfFlux"], f["scienceFlux"]) for f in record["prvDiaForcedSources"]]
+
+
+def test_a_file_url_epoch_is_left_as_published(tmp_path, monkeypatch):
+    """A ``file://`` product is the published file itself: the set reads it and leaves it."""
+    monkeypatch.setattr(prefix, "_cache", tmp_path / "cache")
+    build(tmp_path, reuse_first_epoch=False, gzipped=True)
+    for epoch in ("e1", "e2"):
+        assert all(path.suffix == ".gz" for path in (tmp_path / epoch).iterdir())
+
+
+def test_a_staged_download_is_decompressed_beside_itself_and_removed(tmp_path, monkeypatch):
+    monkeypatch.setattr(prefix, "_cache", tmp_path / "cache")
+    staged = tmp_path / "cache" / "bucket" / "diffpsf.fits.gz"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(gzip.compress(b"plain"))
+    assert _plain(staged).read_bytes() == b"plain"
+    assert sorted(p.name for p in staged.parent.iterdir()) == ["diffpsf.fits"]
 
 
 def test_each_gzipped_file_is_decompressed_once_per_set(tmp_path, monkeypatch):
