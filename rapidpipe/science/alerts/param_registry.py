@@ -3,11 +3,11 @@
 
 Source: `origin/dev`'s ``alerts/param_registry.py`` (Emily Everetts, 07/2026),
 schema 00.07, byte-identical below this docstring apart from the module path
-in the usage line, the bright-footprint comment on ``psfFitFlags``, and the
+in the usage line and the bright-footprint comment on ``psfFitFlags``; the
 three reliability params (``reliability``, ``reliabilityThreshold``,
-``reliabilityVersion``), which are ``STUB`` here, so null on every packet,
-where `dev` fills them: the rebuild has no real/bogus scorer (rapid_docs
-``decisions.md``). The `.avsc` files it describes are copied verbatim from
+``reliabilityVersion``) are `dev`'s since rb-port, their sources the
+rebuild's (``[packet]`` for `dev`'s ``[ALERTS]``, ``[difference.rubrat]``
+for ``[RUBRAT]``). The `.avsc` files it describes are copied verbatim from
 ``alerts/schema/00/07/`` into this package's ``schema/00/07/``; `dev`'s
 ``gen_schema.py`` (which writes them from this registry) is not ported --
 :func:`rapidpipe.science.alerts.assemble.schema_problems` checks the two
@@ -283,14 +283,14 @@ DIA_SOURCE_PARAMS = (
                     STUB, "star/galaxy classification (not run)"),
     Param("reliability",   ["null", "float"],  "Real/bogus score from the RuBR-AT classifier, 0 (bogus) to "
                                                "1 (real); null when the detection was not scored",
-                    STUB, "null until a scorer is validated on the published differencer's catalogs "
-                    "(rapid_docs decisions.md); dev: sources.rb", attr="rb"),
+                    IMPLEMENTED, "sources.rb (scored in the science pipeline, [EXTRA_CATALOG_COLS] rb_score)",
+                    attr="rb"),
     Param("reliabilityThreshold", ["null", "float"], "Score at or above which the classifier calls a detection "
                                                "real",
-                    STUB, "null with reliability; dev: [ALERTS] rb_threshold", attr="rb_threshold"),
+                    IMPLEMENTED, "[ALERTS] rb_threshold (must match threshold.json of the [RUBRAT] model)",
+                    attr="rb_threshold"),
     Param("reliabilityVersion", ["null", "string"],  "Identifier of the real/bogus model that produced the score",
-                    STUB, "null with reliability; dev: [RUBRAT] s3_prefix, last path component",
-                    attr="rb_version"),
+                    IMPLEMENTED, "[RUBRAT] s3_prefix, last path component", attr="rb_version"),
 
     # --- Trailed-source fit (all stubs) --------------------------------------
     # Unsure if we will have these in v1

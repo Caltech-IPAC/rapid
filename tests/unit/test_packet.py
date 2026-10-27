@@ -38,7 +38,7 @@ from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS, REFCAT_COLUMNS
 from rapidpipe.science.alerts.records import Source
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
-    Read, WindowImage, _separation, covering, neighbour, window_reach, write_set)
+    Read, WindowImage, _separation, covering, neighbour, reliability, window_reach, write_set)
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
@@ -294,3 +294,13 @@ def test_an_unreadable_stamp_image_of_the_trigger_fails_the_set(tmp_path):
 def test_an_unreadable_reference_image_of_a_window_epoch_does_not(tmp_path):
     _, summary, _ = build(tmp_path, reuse_first_epoch=False, unreadable=f"e1/{REFERENCE_STAMP}")
     assert summary["packets"] == 2
+
+
+def test_reliability_is_the_threshold_and_the_models_version_or_the_set_one():
+    rubrat = {"model_prefix": "", "model_key": "rubrat/m-2026"}
+    run = {"packet": {"rb_threshold": 0.5134, "rb_version": ""}, "difference": {"rubrat": rubrat}}
+    assert reliability(run) == (0.5134, "m-2026")
+    rubrat["model_prefix"] = "s3://elsewhere/models/m-other/"
+    assert reliability(run) == (0.5134, "m-other")
+    run["packet"]["rb_version"] = "named"
+    assert reliability(run) == (0.5134, "named")

@@ -58,6 +58,7 @@ from tests.support.fakedifftools import (
     FakeReferencePsf,
     FakeToolRunner,
     cdf_dir,
+    fake_rb_model,
     fake_sip_to_pv,
     write_epoch,
 )
@@ -154,7 +155,8 @@ def refpsf():
 def fakes(monkeypatch, refpsf):
     runner, catalog = FakeToolRunner(), FakePsfCatalog()
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
-        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog, reference_psf=refpsf))
+        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog, reference_psf=refpsf,
+        rb_model=fake_rb_model))
     return runner, catalog
 
 
@@ -269,7 +271,7 @@ def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fak
 
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
         runner=runner, sip_to_pv=kit.sip_to_pv, psf_catalog=zogy_ids_apart,
-        reference_psf=kit.reference_psf))
+        reference_psf=kit.reference_psf, rb_model=kit.rb_model))
     prefix = run_difference(tmp_path, files)
     work = prefix / "diff"
     sfft_catalog = pq.read_table(work / "sfftdiffimage_masked_psfcat.parquet")
@@ -319,6 +321,39 @@ def test_zogy_selected_publishes_zogy(tmp_path, files, fakes):
     assert (work / "zogy_diffimage_masked.fits.gz").exists()
     assert not (work / "sfftdiffimage_masked.fits.gz").exists()
     assert (work / "sfftdiffimage_masked_psfcat.parquet").exists()   # SFFT still runs; its catalog is a diagnostic
+
+
+def test_under_sfft_every_candidate_is_scored_and_each_source_carries_its_score(tmp_path, files,
+                                                                             fakes):
+    prefix = run_difference(tmp_path, files)
+    work = prefix / "diff"
+    scored = pq.read_table(work / "sfftdiffimage_masked_psfcat.parquet")
+    assert scored.column_names[-2:] == ["rb_score", "rb_label"]
+    assert "rb_score" not in pq.read_table(work / "sfftdiffimage_masked_psfcat_negative.parquet").column_names
+    assert "rb_score" not in pq.read_table(work / "zogy_diffimage_masked_psfcat.parquet").column_names
+    rb = manifest(prefix)["difference"]["rb"]
+    assert rb["rows"] == rb["scored"] == scored.num_rows > 0
+    assert rb["version"] == "2026-10-06_canonical9_seed42"
+    by_id = dict(zip(scored.column("id").to_pylist(), zip(scored.column("rb_score").to_pylist(),
+                                                           scored.column("rb_label").to_pylist())))
+    sources = read(prefix, "sources")
+    assert sources and all((s["rb"], s["rblabel"]) == pytest.approx(by_id[s["sid"]]) for s in sources)
+
+
+def test_under_zogy_nothing_is_scored_and_no_model_is_fetched(tmp_path, files, fakes, monkeypatch):
+    kit = difference.toolkit()
+
+    def no_model(rubrat):
+        raise AssertionError("the model was fetched under zogy")
+
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=kit.runner, sip_to_pv=kit.sip_to_pv, psf_catalog=kit.psf_catalog,
+        reference_psf=kit.reference_psf, rb_model=no_model))
+    body = settings(); body["difference"]["diff_flavor"] = "zogy"
+    prefix = run_difference(tmp_path, files, body=body)
+    assert manifest(prefix)["difference"]["rb"] is None
+    sources = read(prefix, "sources")
+    assert sources and all(s["rb"] is None and s["rblabel"] is None for s in sources)
 
 
 def _unprefiltered(prefix: Path, catalog: str) -> list[int]:
@@ -378,6 +413,7 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
         "zogy",
         "sextractor", "sextractor",     # ZOGY positive, negative
         "sextractor", "sextractor",     # SFFT positive, negative
+        "rubrat",                       # the real/bogus sidecar on SFFT's positive PSF-fit catalog
         "sextractor", "sextractor",     # naive positive, negative
         "sfft",
     ]
@@ -494,7 +530,7 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
         if path.suffix == ".parquet":
             old, now = pq.read_table(path), pq.read_table(twin)
             gained = new if path.name.startswith("sfft") else []
-            assert now.column_names == old.column_names + gained, path.name
+            assert sorted(now.column_names) == sorted(old.column_names + gained), path.name
             assert now.select(old.column_names).equals(old), path.name
         else:
             np.testing.assert_array_equal(fits.getdata(twin), fits.getdata(path), err_msg=path.name)

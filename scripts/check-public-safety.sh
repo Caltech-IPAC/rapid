@@ -35,7 +35,10 @@ ECR_ALIAS="y9b1""s7h8"
 # ---------------------------------------------------------------------------
 # Allowlist: one entry per line, "path<TAB>allowed-match-prefix".
 # A hit is allowed only if its file matches exactly AND the matched string
-# starts with the listed prefix. Anything new blocks the check.
+# starts with the listed prefix. Anything new blocks the check. The
+# requirements-rubrat.lock entries are runs of digits inside sha256 wheel
+# hashes, not account ids, each listed by its first 11 digits so this file
+# holds no 12-digit run of its own.
 ALLOWLIST="$(cat <<'EOF'
 c/src/bkgest/readme.txt	/Users/laher
 scripts/check-public-safety.sh	/Users/laher
@@ -44,6 +47,8 @@ scripts/check-public-safety.sh	~/Claude
 .githooks/pre-push	/Users/laher
 .githooks/pre-push	~/Vault
 .githooks/pre-push	~/Claude
+containers/rapid-pipeline/requirements-rubrat.lock	40848399640
+containers/rapid-pipeline/requirements-rubrat.lock	10782188993
 EOF
 )"
 
