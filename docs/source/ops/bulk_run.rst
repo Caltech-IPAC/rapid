@@ -368,7 +368,12 @@ The pruning stages 18 and 19 then delete the not-best records themselves from th
 not-best ``Merges``/``XMerges`` records.  They select the same way, by the request's own
 superseded difference images unless ``PRUNEFULLSCAN=True``, delete through the ``pid`` index of
 each child table, vacuum only the tables they deleted records from, and drop the ones left empty
-(a later loading stage recreates a dropped child table when it is needed again).  They exit with
+(a later loading stage recreates a dropped child table when it is needed again).  A table that
+loses at least ``[DATABASE_PRUNING] recluster_deleted_fraction`` (0.2) of its records is reclustered
+on its sky-position index instead of only vacuumed: ``VACUUM`` leaves the deleted records' space in
+the table file, so after reprocessing, which deletes about half of each reprocessed table, the table
+would otherwise stay about twice its size.  ``CLUSTER`` rewrites the table in full and blocks reads of
+it while it runs.  They exit with
 code 7 if the request has no child tables.
 
 

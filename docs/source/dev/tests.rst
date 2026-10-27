@@ -142,6 +142,8 @@ Date              Software modification
                     the [X]tables are always loaded (PR #479).
 10/27/2026        * The VPO now deletes the not-best (``vbest = 0``) records of the Sources and XSources child tables (new stages 18 and 19, ``pruneNotBestSources.py`` and new ``pruneNotBestXSources.py``),
                     after pruning the Merges/XMerges records; alert production is now stage 20 (PR #504).
+                  * A Sources or XSources child table that loses at least ``[DATABASE_PRUNING] recluster_deleted_fraction = 0.2`` of its records to that pruning is reclustered,
+                    instead of only vacuumed, so that it does not keep the deleted records' space.
 ===============   ===============================================================================================================================================================================================================================
 
 
