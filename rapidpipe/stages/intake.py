@@ -50,7 +50,11 @@ into the survey's observing sequence (one exposure per pointing).
 converted ``lite`` files (:mod:`rapidpipe.science.intake_rimtimsim`): the
 stem is ``rimtimsim_WFI_<filter>_SCA<NN>_<exposure>_lite``, the file's own
 filter and SCA must agree with it, and the ``expid`` is the exposure
-number.
+number. ``socsims-lite`` reads `dev`'s socsims lite files, the SOC
+simulation as `dev`'s converter wrote it (fake sources and `dev`'s
+TAN-SIP WCS), ``<source_root><stem>_cal_lite.fits.gz`` with the SOC stem,
+by the same module: the key and ``expid`` are the SOC reader's, the
+observation identifiers the stem's.
 
 ``[intake] dq_mask_bits`` is commissioning #238's DQ mask (0, `dev`'s
 behaviour, masks nothing): the conversion sets ``SCI``, ``ERR`` and
@@ -254,6 +258,8 @@ READERS = {
                      "expid": lambda ids: ids["pointing"]},
     "rimtimsim": {"parse_stem": intake_rimtimsim.parse_stem, "source_key": intake_rimtimsim.source_key,
                   "convert": intake_rimtimsim.lite_to_fits, "expid": lambda ids: ids["exposure"]},
+    "socsims-lite": {"parse_stem": parse_stem, "source_key": intake_rimtimsim.source_key,
+                     "convert": intake_rimtimsim.lite_to_fits, "expid": expid},
 }
 
 

@@ -55,6 +55,9 @@ RimTimSim (``rimtimsim``): the listing pages the root once and keeps the
 selected filters' lite stems; a pointing is the exposure number, the
 intake's expid, in stems and rows alike; no other reader's stem is
 admitted, a selection with passes is refused.
+socsims lite (``socsims-lite``): the listing pages the SOC observations and
+keeps ``_cal_lite.fits.gz`` stems. ``--expids``: a stem or row is admitted
+only when its expid is in one of the inclusive ranges, with the other terms.
 """
 
 from __future__ import annotations
@@ -745,3 +748,22 @@ def test_a_rimtimsim_pointing_is_the_exposure_number_in_stems_and_rows():
     assert sel.admits_row(827, 2, 4, {4}) and not sel.admits_row(1243, 2, 4, {4})
     with pytest.raises(ValueError, match="no passes"):
         loop.Selection.parse("F213", "2", "all", "1", reader=RTS)
+
+
+def test_a_socsims_lite_listing_keeps_the_lite_stems_of_the_soc_observations():
+    keys = [stem(1, 1, 1) + "_cal_lite.fits.gz", stem(2, 1, 1) + "_cal_lite.fits.gz",
+            stem(2, 1, 1) + "_cal.asdf", "_manifest.json"]
+    sel = loop.Selection.parse("F146", "8", "all", reader="socsims-lite")
+    assert loop.list_stems(Pages(keys), "s3://bucket/l2/", sel) == [stem(1, 1, 1), stem(2, 1, 1)]
+
+
+def test_expids_admit_stems_and_rows_inside_any_range_with_the_other_terms():
+    sel = loop.Selection.parse("F146", "8", "all", "1,2", expids=f"1000000-1999999,{expid(2, 3, 1)}")
+    stems = [stem(1, 7, 1), stem(2, 3, 1), stem(2, 4, 1), stem(3, 3, 1)]
+    assert [s for s in stems if sel.admits_stem(s)] == [stem(1, 7, 1), stem(2, 3, 1)]
+    assert sel.admits_row(expid(2, 3, 1), 8, 8, {8}) and not sel.admits_row(expid(2, 4, 1), 8, 8, {8})
+    assert not sel.admits_row(expid(1, 7, 1), 9, 8, {8})
+    assert sel.summary()["expids"] == ["1000000-1999999", f"{expid(2, 3, 1)}-{expid(2, 3, 1)}"]
+    assert SEL.summary()["expids"] == "all"
+    with pytest.raises(ValueError, match="low end"):
+        loop.Selection.parse("F146", "8", "all", expids="5-4")

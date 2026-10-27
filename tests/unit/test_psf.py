@@ -219,3 +219,24 @@ def test_a_rimtimsim_stem_reduces_the_reference_psf_epsf_names_and_reads_no_file
     job.settings["psf"]["epsf"]["F213"] = ""
     with pytest.raises(ValueError, match="names no ePSF"):
         psf.run(job)
+
+
+def test_a_socsims_stem_reduces_the_reference_its_sca_names_in_a_per_sca_list(tmp_path, monkeypatch):
+    src = tmp_path / "source"
+    src.mkdir()
+    write_reference(src / EPSF, detector="WFI02", optical_element="F146")
+    monkeypatch.setattr(psf, "fetch", lambda url, target: shutil.copyfile(
+        src / url.rsplit("/", 1)[-1], target) and target)
+    settings = {"intake": {"source_root": (tmp_path / "absent").as_uri() + "/", "unsigned": False,
+                           "reader": "socsims-lite"},
+                "psf": {"crds_server": "https://crds.example/", "size": 15, "epsf_cache": "",
+                        "epsf": {"F146": ["other.asdf", EPSF]}}}
+    job = JobContext(job=1, run=1, stage="psf",
+                     scope={"dataset": "ss1", "file": "r0034001005001003061_0001_wfi02_f146"},
+                     survey="GBTDS", dataset="ss1", settings=settings, inputs=[], attempt=1,
+                     prefix=tmp_path.as_uri() + "/", connect=lambda: contextlib.nullcontext(None))
+    psf.run(job)
+    assert fits.getheader(tmp_path / "sciimage_psf_f146_sca02.fits")["EPSFREF"] == EPSF
+    job.settings["psf"]["epsf"]["F146"] = [EPSF]
+    with pytest.raises(ValueError, match="names no ePSF"):
+        psf.run(job)
