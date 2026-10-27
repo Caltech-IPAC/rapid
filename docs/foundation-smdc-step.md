@@ -285,6 +285,7 @@ regression). A row whose finding a later row superseded says so.
 | release-v0.13 | the tip `e7f042f9` tagged `rebuild-v0.13` (annotated, the v0.12 JSON shape; docs-only past `9f4c54f6`), its image built on base `base-39826742678-1` (digest `7ab782c1…`), `rapid-rebuild:88` and `rapid-rebuild-production:79` registered by the deploy hook with `RAPID_RELEASE_IDENTITY=rebuild-v0.13`, the pins snapshot written (2026-10-25 23:58 UTC); proved on Batch by release-proof: run 142 (dataset `r00342-v013`, the HLWAS null epoch 4040101 on `rapid-rebuild:88`, reference on m6a.2xlarge) CLEAN with 181 packets, core −0.0010316, ring +0.0017106, 828 / 500 candidates kept, 25 at S/N > 20, equal to run 141 | 142 | tag rebuild-v0.13, PR 475 |
 | window-gunzip | each gzipped window file is decompressed once per packet job, to a plain file beside its staged copy that forced and the cutouts both read (the trigger's difference and science images were read twice); on `rapid-rebuild:89` (m6a) the null epoch's packet job 18.18 → 15.27 s against run 142's, 181 packets, core and ring equal, packet content equal but for processing time and row ids | 143 | PR 476 |
 | port-schema-07 | the packets are alert schema 00.07 (`rapid.v00_07`, dev 883e3876), the eight Roman observation identifiers and `survey` filled from the official `exposures` row intake writes and `surveys`, `reliability`, `reliabilityThreshold` and `reliabilityVersion` null; `exposureTime`, null on every packet before (the join keyed `exposures` by the difference job), filled; schema statement `database/2026-10-26-exposure-identifiers.sql` (eight nullable columns, no backfill) applied 2026-10-26 21:17 UTC; on `rapid-rebuild:90` (m6a) the null epoch's 181 packets carry all eight identifiers, `survey` SOCSIMS, reliability null, core and ring equal to run 143 | 144 | PR 481; rapid_docs 136 |
+| sfft-default | the published differencer is SFFT with dev's prefilter, `[difference] diff_flavor` shipped `sfft` (PR 485 re-landed as 490 on Ben's acceptance of run 146, 2026-10-26 23:27 UTC); injected passes 4 to 6: 533 against ZOGY's 546 of 600, false positives per epoch 102.7 (119) against 213.3 (233); on `rapid-rebuild:93` (`0b7492fc`, `sha256:ed1dc64e…`, production `:84`) the null epoch's 86 packets, core +0.000445, ring −0.007365, against run 145's 86, +0.000463, −0.007423 (each run's reference built by its loop: rfid 90113 against 90110, both 3 frames, cov5percent 11.58) | 145, 146, 151 | PRs 485, 486, 490; rapid_docs 139 |
 
 ## Current procedure
 
@@ -359,8 +360,10 @@ and moves `rapid-rebuild-production`'s with it. One deploy at a time
 when two deploys meet one tag, the revision whose image digest the job
 definition shows. Never prove on `rapid-rebuild:85` or `:86`: both carry
 PR 465's `ring_count` regression. Nor on `rapid-rebuild:91`
-(`rapid-rebuild-production:82`): it publishes SFFT by default (PR 485),
-reverted by PR 486.
+(`rapid-rebuild-production:82`, PR 485 before its revert by PR 486) or
+`rapid-rebuild:92` (`rapid-rebuild-production:83`, ZOGY by default):
+`rapid-rebuild:93` (`rapid-rebuild-production:84`, `0b7492fc`, PR 490)
+publishes the SFFT default and supersedes both.
 
 **A run.** One dataset name and one live run per proof; a run's bindings
 are its dataset's alone; two loops never run under one run at once. The
@@ -421,9 +424,9 @@ scorecard's null columns per shared epoch and, on an injected dataset,
 detected per magnitude bin and false positives per epoch, by
 `inspect_run.py`'s and `completeness.py`'s functions.
 
-**Settings in force.** The published catalog is ZOGY's unless a run
-sets `difference.diff_flavor="sfft"`; SFFT's catalogs and columns are
-under every difference job's `diff/` either way. A flight overlay sets
+**Settings in force.** The published catalog is SFFT's, through dev's
+prefilter, unless a run sets `difference.diff_flavor="zogy"`; ZOGY's
+catalogs are under every difference job's `diff/` either way. A flight overlay sets
 `[intake] gaia_proper_motion = true`; the SOC simulations leave it off.
 The loop plans a field's reference from the rows before the bound whose
 `overlapfields` list it; the live runs' references built before PR 450
@@ -486,9 +489,10 @@ deleted on 2026-10-24: `validate_run.py` fails on them by design.
 Carried from part 13's results (through PR 471), with the earlier parts'
 items no later part closed; each names where its numbers are.
 
-- **Whether `sfft` comes back**: under the HLWAS OpenUniverse block it
-  trails ZOGY only at AB 26 and 26.5 at half the false positives
-  (sfft-rearm). Unmeasured: excluding the zeroed DQ cores from SFFT's fit
+- **SFFT, the default since sfft-default**: under the HLWAS OpenUniverse
+  block it trails ZOGY only at AB 26 and 26.5 at half the false positives
+  (runs 145, 146). Unmeasured: OpenUniverse, GBTDS, flight and RimTimSim
+  under the default; excluding the zeroed DQ cores from SFFT's fit
   in the stage (PR 435); GBTDS's and RimTimSim's blocks. Under the
   socsims block `n_sources_snr_gt20` saturates at the cap, so the gate's
   count check cannot see an SFFT epoch off-scale (PR 432).
