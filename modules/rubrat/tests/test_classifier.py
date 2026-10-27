@@ -75,6 +75,25 @@ def test_cutout_center_padding_and_nan_handling():
     assert stack.shape == (64, 64, 3) and stack[32, 32, 0] == pytest.approx(np.arcsinh(image[21, 50] / 0.01))
 
 
+def test_cutout_nan_zero_fill_and_fraction():
+    """Live scoring zero-fills NaN pixels (zero_nans=True) and reports the filled fraction;
+    the training rule (default) still drops the stack."""
+    from modules.rubrat.preprocessing.npz_builders import arcsinh_stack_cutout_with_nan_fraction
+    image = np.ones((100, 100), dtype=np.float32)
+    bad = image.copy(); bad[10:18, 40:56] = np.nan              # 8 x 16 = 128 NaN pixels inside the 64 x 64 window
+    stack, frac = arcsinh_stack_cutout_with_nan_fraction(image, bad, image, 50.0, 20.0, image_size=64, zero_nans=True)
+    assert stack is not None and frac == pytest.approx(128 / 4096)
+    # The window spans image rows -12..51 and columns 18..81, so the NaN block sits at cutout
+    # rows 22..29 and columns 22..37: zero-filled in the reference channel, untouched in the others.
+    assert np.isfinite(stack).all()
+    assert stack[22, 22, 1] == 0.0 and stack[22, 22, 0] == pytest.approx(np.arcsinh(100.0))
+    assert stack[22, 40, 1] == pytest.approx(np.arcsinh(100.0))
+    dropped, frac2 = arcsinh_stack_cutout_with_nan_fraction(image, bad, image, 50.0, 20.0, image_size=64)
+    assert dropped is None and frac2 == pytest.approx(128 / 4096)
+    off, frac3 = arcsinh_stack_cutout_with_nan_fraction(image, image, image, -200.0, 20.0, image_size=64, zero_nans=True)
+    assert off is None and np.isnan(frac3)
+
+
 def test_feature_scaler_keeps_clean_flag_and_masks_fit_features(tmp_path):
     scaler_path = tmp_path / "scaler.json"
     scaler_path.write_text(
@@ -153,6 +172,25 @@ def test_score_arrays_is_deterministic_and_filter_aliases_agree(classifier):
     b = classifier.score_arrays(sci, ref, diff, det, filter_name="F158")   # Roman name for the same filter
     assert np.allclose(a.rb_score.values, b.rb_score.values, atol=1e-6)
     assert a.rb_model_filter_id.iloc[0] == b.rb_model_filter_id.iloc[0]
+
+
+def test_score_arrays_scores_stamps_with_nan_pixels(classifier):
+    """A masked (NaN) region inside a stamp no longer makes the source unscorable; the filled
+    fraction is reported in rb_nan_fraction (0 for clean stamps, NaN for off-image ones)."""
+    sci, ref, diff, det = _synthetic_chip(n=6)
+    x, y = int(round(det.xcentroid.iat[0])), int(round(det.ycentroid.iat[0]))
+    diff[y - 2:y + 2, x - 2:x + 2] = np.nan                   # 4 x 4 NaN block at the first source
+    det.loc[1, "xcentroid"] = -500.0                          # off the image
+    out = classifier.score_arrays(sci, ref, diff, det, filter_name="H158")
+    assert out.rb_valid.iloc[0] and np.isfinite(out.rb_score.iloc[0])
+    assert out.rb_nan_fraction.iloc[0] == pytest.approx(16 / 4096)
+    assert not out.rb_valid.iloc[1] and np.isnan(out.rb_nan_fraction.iloc[1])
+    # Every other source is scored, and its fraction is the NaN share of its own 64 x 64 window
+    # (nonzero where that window also overlaps the block; edge padding counts as clean).
+    nan_mask = np.isnan(diff).astype(np.float32)
+    for i in range(2, len(det)):
+        expected = extract_cutout(nan_mask, det.xcentroid.iat[i], det.ycentroid.iat[i], size=64).mean()
+        assert out.rb_valid.iloc[i] and out.rb_nan_fraction.iloc[i] == pytest.approx(expected)
 
 
 def test_unknown_filter_is_rejected(classifier):
