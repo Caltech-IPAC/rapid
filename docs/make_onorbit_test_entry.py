@@ -60,8 +60,8 @@ JOB_TYPE_LABELS = {
 }
 
 ALERT_LABELS = [
-    ("n_chips_ok", "Number of chips processed successfully"),
-    ("n_chips_failed", "Number of chips failed"),
+    ("n_chips_ok", "Number of SCAs processed successfully"),
+    ("n_chips_failed", "Number of SCAs failed"),
     ("n_alerts", "Number of alerts archived"),
     # produceAlertsForProcDate.py sums the per-chip n_failed (sources whose alert could not be built) into this key.
     ("n_sources_dropped", "Sources whose alert could not be built"),
@@ -371,7 +371,7 @@ def parse_ingest(texts):
     Returns
     -------
     ingest : dict
-        Summed counts, earliest start time, per-step elapsed times, and filter/SCA counts.
+        Summed counts, earliest start time, per-step elapsed times, and filter/SCA/program counts.
     """
     count_patterns = {
         "n_input": r"^n_input_asdf_files = (\d+)$",
@@ -407,6 +407,7 @@ def parse_ingest(texts):
     matches = [ROMAN_FILENAME_RE.search(f) for f in ingest["files"]]
     ingest["filters"] = Counter(m.group(3).upper() for m in matches if m)
     ingest["scas"] = {int(m.group(2)) for m in matches if m}
+    ingest["programs"] = Counter(int(m.group(1)) for m in matches if m)
     return ingest
 
 
@@ -452,6 +453,7 @@ def parse_job_logs(job_logs_dir):
         and the earliest start and latest end times.  ``n_incomplete`` counts files with no total time
         (failed jobs, or files that are not reference-image or science job output).  ``rb`` maps each
         catalog filename to a Counter of its sources, real-bogus-scored sources, and not-scored reasons.
+        ``science_programs`` counts the science-pipeline instances by the Roman program ID of the science image.
     """
     rb_re = re.compile(r"rb scored (\d+) of (\d+) sources .*?not scored: \{(.*?)\}")
     step_re = re.compile(rf"^(?:=====> )?Elapsed time in seconds (after|just to|to) (.+?) =\s*{SEC}\s*$")
@@ -460,6 +462,7 @@ def parse_job_logs(job_logs_dir):
     job_logs = {kind: {"steps": {}, "totals": {}, "started": [], "ended": []} for kind in totals}
     job_logs["n_incomplete"] = 0
     job_logs["rb"] = {}
+    job_logs["science_programs"] = Counter()
 
     for path in sorted(p for p in job_logs_dir.rglob("*") if p.is_file()):
         text = path.read_text(errors="replace")
@@ -487,6 +490,8 @@ def parse_job_logs(job_logs_dir):
             job_logs[kind]["steps"].setdefault(label, []).append(seconds)
         total = per_step["Total time to " + totals[kind]]
         job_logs[kind]["totals"][jid] = total
+        if kind == "science" and (m := ROMAN_FILENAME_RE.search(text)):
+            job_logs["science_programs"][int(m.group(1))] += 1
         started = parse_pt(first(r"^proc_pt_datetime_started = (.*)$", text.splitlines()))
         if started:
             job_logs[kind]["started"].append(started)
@@ -749,15 +754,15 @@ def alert_section(vpo, alerts):
 
     if summary and summary["chip_seconds"]:
         cs = summary["chip_seconds"]
-        add(f"Per chip, alert production took {min(cs):,.0f} to {fmt_duration(max(cs))} "
-            f"(median {statistics.median(cs):,.0f} seconds); summed over the {len(cs)} chips, "
+        add(f"Per SCA, alert production took {min(cs):,.0f} to {fmt_duration(max(cs))} "
+            f"(median {statistics.median(cs):,.0f} seconds); summed over the {len(cs)} SCAs, "
             f"{fmt_duration(sum(cs))}.\n")
 
     rows = []
     if alerts:
         rows.append(["Flagged detections skipped (flags <> 0, not alertable)", fmt_int(alerts["n_flagged"])])
         cap = "/".join(str(c) for c in alerts["max_sources"]) or "max_sources"
-        rows.append([f"Alertable detections dropped by the cap of {cap} per chip ({alerts['n_capped_chips']} chips)",
+        rows.append([f"Alertable detections dropped by the cap of {cap} per SCA ({alerts['n_capped_chips']} SCAs)",
                      fmt_int(alerts["n_capped_dropped"])])
     rows += [[label, fmt_int(totals[key])] for key, label in ALERT_LABELS if key in totals]
     if summary:
@@ -781,19 +786,19 @@ def alert_section(vpo, alerts):
     if alerts and alerts["forced_steps"]["total"]:
         steps = alerts["forced_steps"]
         n = len(steps["total"])
-        text = (f"Forced photometry ran on {n} chips, writing {fmt_int(alerts['forced_new_rows'])} new rows "
+        text = (f"Forced photometry ran on {n} SCAs, writing {fmt_int(alerts['forced_new_rows'])} new rows "
                 f"to {fmt_int(alerts['forced_files'])} files.")
         if summary and summary["chip_seconds"]:
             text += (f" It took {100 * sum(steps['total']) / sum(summary['chip_seconds']):.0f}% of the summed "
-                     "per-chip alert-production time.")
+                     "per-SCA alert-production time.")
         add(text + "\n")
         rows = [[step, fmt_seconds(sum(steps[step])), fmt_seconds(statistics.median(steps[step])),
                  fmt_seconds(max(steps[step]))] for step in FORCED_PHOT_STEPS]
-        add(rst_table(["Forced-photometry step", "Summed (sec)", "Med per chip (sec)", "Max per chip (sec)"], rows) + "\n")
+        add(rst_table(["Forced-photometry step", "Summed (sec)", "Med per SCA (sec)", "Max per SCA (sec)"], rows) + "\n")
     if alerts and alerts["forced_failures"]:
         failed = ", ".join(f"pid = {pid} after {sec} s" for pid, sec in alerts["forced_failures"])
-        add(f"Forced photometry failed on {len(alerts['forced_failures'])} chip(s) ({failed}); "
-            "the alerts of those chips carry null ``prvDiaForcedSources``.\n")
+        add(f"Forced photometry failed on {len(alerts['forced_failures'])} SCA(s) ({failed}); "
+            "the alerts of those SCAs carry null ``prvDiaForcedSources``.\n")
 
     if alerts and alerts["messages"]:
         add(f"Warning and error messages in the {alerts['n_thread_logs']} alert-production thread logs "
@@ -872,7 +877,9 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
         add(rst_table(["Item", "Number"], rows) + "\n")
         if ingest["filters"]:
             by_filter = ", ".join(f"{f}: {n}" for f, n in sorted(ingest["filters"].items()))
-            add(f"The ingested files cover {len(ingest['scas'])} SCAs; by filter, {by_filter}.\n")
+            by_program = ", ".join(f"``{p}``: {fmt_int(n)}" for p, n in sorted(ingest["programs"].items()))
+            add(f"The ingested files cover {len(ingest['scas'])} SCAs; by filter, {by_filter}; "
+                f"by Roman program ID, {by_program}.\n")
         if ingest["steps"]:
             add(step_table("Ingest step (per L2 file)", ingest["steps"]) + "\n")
         bad = [c for c in ingest["exitcodes"] if c not in ("0", None)]
@@ -964,7 +971,11 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
             fast = min(k["totals"], key=k["totals"].get)
             text.append(f"The slowest instance (jid = {slow}) took {k['totals'][slow]:,.0f} seconds; "
                         f"the fastest (jid = {fast}) took {k['totals'][fast]:,.0f} seconds.")
-            text.append(f"The summed run time over all {n} instance(s) is {sum(k['totals'].values()) / 3600:.1f} hours.\n")
+            text.append(f"The summed run time over all {n} instance(s) is {sum(k['totals'].values()) / 3600:.1f} hours.")
+            if kind == "science" and job_logs["science_programs"]:
+                by_program = ", ".join(f"``{p}``: {fmt_int(c)}" for p, c in sorted(job_logs["science_programs"].items()))
+                text.append(f"Science images processed by Roman program ID: {by_program}.")
+            text[-1] += "\n"
             add("\n".join(text))
             add(step_table(f"{heading} step ({n} instance(s))", k["steps"]) + "\n")
             if kind == "science" and job_logs["rb"]:
