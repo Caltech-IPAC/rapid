@@ -94,7 +94,7 @@ podman exec -i rapid-local-db psql -U postgres -d rapid -X -q -v ON_ERROR_STOP=1
 
 ### One epoch
 
-A run is the recipe, and it is made live for its dataset so that each job's products become official as it publishes. Each `job local` runs one stage in the container and prints its result as JSON. `job_id` keeps the job's id, or fails if the job did not publish; the stage's log goes to stderr. Dataset `r00342-local` is yours alone, and F146 is fid 8 (`W146` in `filters`).
+Your shell is at the top of this checkout, at the image's commit (`git checkout "$REV"`): `ctr` mounts its `scripts/`, and the image carries neither `scripts/` nor `schema.sql`. A run is the recipe, and it is made live for its dataset so that each job's products become official as it publishes. Each `job local` runs one stage in the container and prints its result as JSON. `job_id` keeps the job's id, or fails if the job did not publish; the stage's log goes to stderr. Dataset `r00342-local` is yours alone, and F146 is fid 8 (`W146` in `filters`).
 
 ```sh
 SRC=s3://stpubdata/roman/nexus/soc_simulations/r00342/l2/
