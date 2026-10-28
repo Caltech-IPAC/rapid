@@ -32,7 +32,7 @@ given the header. :func:`locate_records` reads the closed container with
 ``fastavro.block_reader`` and returns, per record in container order, its
 block's byte offset and size (sync marker included) and its index within
 the block, with the decoded ``diaSourceId`` so the caller can check it. An
-alert with a 129x129 float32 cutout (about 67 kB) fills a block alone;
+alert with three 129x129 float32 cutouts (about 251 kB) fills a block alone;
 smaller alerts share one.
 
 Reproducible bytes. Given the same records in the same order, the same
