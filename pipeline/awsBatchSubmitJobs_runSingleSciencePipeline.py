@@ -1514,9 +1514,11 @@ if __name__ == '__main__':
         # the difference image.  See pipeline/zogyNoiseSubs.py for why the uncertainty maps are
         # the better source of these in a crowded field.
 
+
         zogy_sn,zogy_sr = zogynoise.zogy_background_sigmas(zogy_sn_sr_from_uncertainty_maps,
                                                            reformatted_science_uncert_image_filename,
-                                                                                                 std_sci_img,
+                                                           output_resampled_gainmatched_reference_uncert_image,
+                                                           std_sci_img,
                                                            std_ref_img,
                                                            scalefacref)
 
