@@ -1627,7 +1627,9 @@ if __name__ == '__main__':
         filename_diffimage_unc_masked = filename_diffimage_masked.replace("masked.fits","uncert_masked.fits")
 
         dfis.compute_diffimage_uncertainty(sca_gain * exptime_sciimage,
-                                                                                       output_resampled_reference_cov_map,
+                                           filename_bkg_subbed_science_image,
+                                           output_resampled_gainmatched_reference_image,
+                                           output_resampled_reference_cov_map,
                                            post_zogy_keep_diffimg_lower_cov_map_thresh,
                                            filename_diffimage_masked,
                                            filename_diffimage_unc_masked)
@@ -2008,9 +2010,6 @@ if __name__ == '__main__':
                      filename_diffimage_sextractor_catalog,
                      filename_diffpsf,
                      filename_scorrimage_masked,
-                     filename_bkg_subbed_science_image,
-                     output_resampled_gainmatched_reference_image,
-                     output_resampled_gainmatched_reference_uncert_image,
                      output_psfcat_filename,
                      output_psfcat_finder_filename,
                      output_psfcat_residual_filename,
@@ -2028,7 +2027,7 @@ if __name__ == '__main__':
                        s3_object_name_diffimage_catalog,
                        s3_object_name_diffpsf,
                        s3_object_name_scorrimage,
-                             s3_object_name_output_psfcat_filename,
+                       s3_object_name_output_psfcat_filename,
                        s3_object_name_output_psfcat_finder_filename,
                        s3_object_name_output_psfcat_residual_filename,
                        s3_object_name_diffimage_negative,
@@ -2037,7 +2036,7 @@ if __name__ == '__main__':
                        s3_object_name_output_psfcat_filename_negative,
                        s3_object_name_output_psfcat_finder_filename_negative,
                        s3_object_name_output_psfcat_residual_filename_negative,
-                           s3_object_name_output_psfcat_parquet_filename,
+                       s3_object_name_output_psfcat_parquet_filename,
                        s3_object_name_output_psfcat_parquet_filename_negative]
 
         if upload_to_s3_bucket:
