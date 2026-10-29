@@ -30,7 +30,7 @@ def generateReferenceImage(s3_client,
                            proc_subdir,
                            awaicgen_dict,
                            min_coverage_depth,
-                           coverage_target_fraction,
+                           min_coverage_fraction,
                            sca_gain,
                            sca_readout_noise,
                            product_s3_bucket,
@@ -449,10 +449,10 @@ def generateReferenceImage(s3_client,
         coverage_fraction_actual = coverage_fraction(hdul_cov[0].data,min_coverage_depth)
 
     print(f"coverage_fraction_actual = {coverage_fraction_actual} (min_coverage_depth = {min_coverage_depth}, " +\
-          f"coverage_target_fraction = {coverage_target_fraction})")
+          f"min_coverage_fraction = {min_coverage_fraction})")
 
-    if coverage_fraction_actual < coverage_target_fraction:
-        print("*** Warning: Actual coverage fraction is below target; reference image discarded; quitting...")
+    if coverage_fraction_actual < min_coverage_fraction:
+        print("*** Warning: Actual coverage fraction is below minimum; reference image discarded; quitting...")
         exit(33)
 
 
@@ -619,7 +619,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       infobit_cards = None,
                                       coverage_fraction = None,
                                       min_coverage_depth = None,
-                                      coverage_target_fraction = None):
+                                      min_coverage_fraction = None):
 
     hdu_index = 0
 
@@ -658,7 +658,7 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     if coverage_fraction is not None:
         hdr["COVFRAC"] = (coverage_fraction,"Fraction of pixels with coverage >= COVDEPTH")
         hdr["COVDEPTH"] = (min_coverage_depth,"Min. coverage depth for COVFRAC [frames]")
-        hdr["COVTARG"] = (coverage_target_fraction,"Required COVFRAC for input selection")
+        hdr["COVTARG"] = (min_coverage_fraction,"Required COVFRAC for input selection")
 
 
     # Add keywords for reference-image input filenames.
@@ -848,12 +848,14 @@ def coverage_fraction(cov_map,min_coverage_depth):
     return float(np.count_nonzero(cov_map >= min_coverage_depth)) / cov_map.size
 
 
-def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,min_coverage_depth,coverage_target_fraction):
+def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,
+                           min_coverage_depth,min_coverage_fraction,
+                           max_coverage_depth,max_coverage_fraction,max_n_images_to_coadd):
 
     '''
     Add candidate input images in the given order until the estimated fraction of the reference
-    image with coverage >= min_coverage_depth is at least coverage_target_fraction plus
-    COVERAGE_ESTIMATE_TOLERANCE.
+    image with coverage >= max_coverage_depth is at least max_coverage_fraction, or
+    max_n_images_to_coadd is reached; then judge the selection against the minimum coverage.
 
     Parameters
     ----------
@@ -864,41 +866,53 @@ def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,min_coverage_depth,
     candidate_corners : list of (ras, decs)
         For each candidate input image in order, R.A. and Dec. of its four corners [deg].
     min_coverage_depth : float
-        Minimum depth of coverage for a pixel to count as covered.
-    coverage_target_fraction : float
-        Required fraction of covered pixels.
+        Depth of coverage for a pixel to count toward the minimum [frames].
+    min_coverage_fraction : float
+        Required fraction of pixels with coverage >= min_coverage_depth.
+    max_coverage_depth : float
+        Depth of coverage for a pixel to count toward the stopping point [frames].
+    max_coverage_fraction : float
+        Fraction of pixels with coverage >= max_coverage_depth at which selection stops.
+    max_n_images_to_coadd : int
+        Maximum number of candidates selected.
 
     Returns
     -------
     n_selected : int
         Number of leading candidates selected.
     estimated_fraction : float
-        Estimated fraction of covered pixels for the selected candidates.
+        Estimated fraction of pixels with coverage >= min_coverage_depth.
+    estimated_fraction_max : float
+        Estimated fraction of pixels with coverage >= max_coverage_depth.
     decision : str
-        "build" if the estimate clears the target by the tolerance, "verify" if all candidates
-        are selected and the estimate is within the tolerance of the target (the actual coverage
-        map decides), or "reject" if the estimate is below the target by more than the tolerance.
+        "build" if the estimate clears the minimum by the tolerance, "verify" if it is within
+        the tolerance of the minimum (the actual coverage map decides), or "reject" if it is
+        below the minimum by more than the tolerance.
     '''
 
     x_grid,y_grid = coverage_sample_grid(naxis1,naxis2)
     depth = np.zeros(x_grid.shape,dtype=np.int32)
 
-    build_fraction = min(coverage_target_fraction + COVERAGE_ESTIMATE_TOLERANCE,1.0)
-
     n_selected = 0
-    estimated_fraction = 0.0
+    estimated_fraction_max = 0.0
 
-    for ras,decs in candidate_corners:
+    for ras,decs in candidate_corners[:max_n_images_to_coadd]:
         depth += compute_footprint_mask(w,x_grid,y_grid,ras,decs)
         n_selected += 1
-        estimated_fraction = coverage_fraction(depth,min_coverage_depth)
-        if estimated_fraction >= build_fraction:
-            return n_selected,estimated_fraction,"build"
+        estimated_fraction_max = coverage_fraction(depth,max_coverage_depth)
+        if estimated_fraction_max >= max_coverage_fraction:
+            break
 
-    if estimated_fraction >= coverage_target_fraction - COVERAGE_ESTIMATE_TOLERANCE:
-        return n_selected,estimated_fraction,"verify"
+    estimated_fraction = coverage_fraction(depth,min_coverage_depth)
 
-    return n_selected,estimated_fraction,"reject"
+    if estimated_fraction >= min_coverage_fraction + COVERAGE_ESTIMATE_TOLERANCE:
+        decision = "build"
+    elif estimated_fraction >= min_coverage_fraction - COVERAGE_ESTIMATE_TOLERANCE:
+        decision = "verify"
+    else:
+        decision = "reject"
+
+    return n_selected,estimated_fraction,estimated_fraction_max,decision
 
 
 #####################################################################################

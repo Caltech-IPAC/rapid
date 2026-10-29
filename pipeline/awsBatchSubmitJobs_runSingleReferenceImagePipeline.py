@@ -245,7 +245,7 @@ if __name__ == '__main__':
     # by the reference-image-pipeline launcher script.
     ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
     min_coverage_depth = float(config_input['REF_IMAGE']['min_coverage_depth'])
-    coverage_target_fraction = float(config_input['REF_IMAGE']['coverage_target_fraction'])
+    min_coverage_fraction = float(config_input['REF_IMAGE']['min_coverage_fraction'])
     naxis1_refimage = int(config_input['REF_IMAGE']['naxis1'])
     naxis2_refimage = int(config_input['REF_IMAGE']['naxis2'])
     cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1'])
@@ -263,7 +263,7 @@ if __name__ == '__main__':
     psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
 
     print("min_coverage_depth =", min_coverage_depth)
-    print("coverage_target_fraction =", coverage_target_fraction)
+    print("min_coverage_fraction =", min_coverage_fraction)
 
     inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
 
@@ -357,7 +357,7 @@ if __name__ == '__main__':
                                                                              proc_subdir,
                                                                              awaicgen_dict,
                                                                              min_coverage_depth,
-                                                                             coverage_target_fraction,
+                                                                             min_coverage_fraction,
                                                                              sca_gain,
                                                                              sca_readout_noise,
                                                                              product_s3_bucket,
@@ -625,7 +625,7 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['cov5percent'] = str(cov5percent)
         product_config['REF_IMAGE']['coverage_fraction'] = str(coverage_fraction_refimage)
         product_config['REF_IMAGE']['min_coverage_depth'] = str(min_coverage_depth)
-        product_config['REF_IMAGE']['coverage_target_fraction'] = str(coverage_target_fraction)
+        product_config['REF_IMAGE']['min_coverage_fraction'] = str(min_coverage_fraction)
         product_config['REF_IMAGE']['medncov'] = str(medncov)
         product_config['REF_IMAGE']['medpixunc'] = str(medpixunc)
         product_config['REF_IMAGE']['fwhmmedpix'] = str(fwhm_ref_medpix)
@@ -654,7 +654,7 @@ if __name__ == '__main__':
                                                infobit_cards = infobit_cards_refimage,
                                                coverage_fraction = coverage_fraction_refimage,
                                                min_coverage_depth = min_coverage_depth,
-                                               coverage_target_fraction = coverage_target_fraction)
+                                               min_coverage_fraction = min_coverage_fraction)
 
 
         # Also, add same informational FITS keywords to header of reference-image uncertainty image.
@@ -675,7 +675,7 @@ if __name__ == '__main__':
                                                infobit_cards = infobit_cards_refimage,
                                                coverage_fraction = coverage_fraction_refimage,
                                                min_coverage_depth = min_coverage_depth,
-                                               coverage_target_fraction = coverage_target_fraction)
+                                               min_coverage_fraction = min_coverage_fraction)
 
 
         # Upload reference-image file to S3 bucket.

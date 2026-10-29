@@ -199,7 +199,10 @@ ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
 min_coverage_depth = float(config_input['REF_IMAGE']['min_coverage_depth'])
-coverage_target_fraction = float(config_input['REF_IMAGE']['coverage_target_fraction'])
+min_coverage_fraction = float(config_input['REF_IMAGE']['min_coverage_fraction'])
+max_coverage_depth = float(config_input['REF_IMAGE']['max_coverage_depth'])
+max_coverage_fraction = float(config_input['REF_IMAGE']['max_coverage_fraction'])
+max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
 cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1_refimage'])
@@ -209,7 +212,10 @@ crota2_refimage = float(config_input['REF_IMAGE']['crota2_refimage'])
 refimage_psf_filename = config_input['REF_IMAGE']['refimage_psf_filename']
 
 print("min_coverage_depth =",min_coverage_depth)
-print("coverage_target_fraction =",coverage_target_fraction)
+print("min_coverage_fraction =",min_coverage_fraction)
+print("max_coverage_depth =",max_coverage_depth)
+print("max_coverage_fraction =",max_coverage_fraction)
+print("max_n_images_to_coadd =",max_n_images_to_coadd)
 
 
 # Set up AWS Batch.
@@ -644,23 +650,25 @@ if __name__ == '__main__':
                                   [dec1_refimage_input,dec2_refimage_input,dec3_refimage_input,dec4_refimage_input]))
 
 
-    # Select inputs in order until estimated coverage of the full reference image meets the target.
+    # Select inputs in order until estimated coverage of the full reference image meets the maximum or the cap.
 
     w_refimage = rfis.make_refimage_wcs(ra0_refimage,dec0_refimage,
                                         naxis1_refimage,naxis2_refimage,
                                         cdelt1_refimage,cdelt2_refimage,
                                         crota2_refimage)
 
-    n_images_to_coadd,coverage_fraction_estimated,coverage_decision = \
+    n_images_to_coadd,coverage_fraction_estimated,max_coverage_fraction_estimated,coverage_decision = \
         rfis.select_refimage_inputs(w_refimage,naxis1_refimage,naxis2_refimage,candidate_corners,
-                                    min_coverage_depth,coverage_target_fraction)
+                                    min_coverage_depth,min_coverage_fraction,
+                                    max_coverage_depth,max_coverage_fraction,max_n_images_to_coadd)
 
     print(f"n_candidates = {len(csv_records)}, n_images_to_coadd = {n_images_to_coadd}, " +\
-          f"coverage_fraction_estimated = {coverage_fraction_estimated}, coverage_decision = {coverage_decision}")
+          f"coverage_fraction_estimated = {coverage_fraction_estimated}, " +\
+          f"max_coverage_fraction_estimated = {max_coverage_fraction_estimated}, coverage_decision = {coverage_decision}")
 
     if coverage_decision == "reject":
         print(f"*** Warning: estimated coverage fraction ({coverage_fraction_estimated}) with depth >= " +\
-              f"{min_coverage_depth} is below target ({coverage_target_fraction}) " +\
+              f"{min_coverage_depth} is below minimum ({min_coverage_fraction}) " +\
               f"for rid,field,fid = {rid},{field},{fid}; quitting...")
         terminating_exitcode = 33
         dbh.close()             # Close database connection.
@@ -732,8 +740,12 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['filter'] = exposure_filter
     job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
     job_config['REF_IMAGE']['min_coverage_depth'] = str(min_coverage_depth)
-    job_config['REF_IMAGE']['coverage_target_fraction'] = str(coverage_target_fraction)
+    job_config['REF_IMAGE']['min_coverage_fraction'] = str(min_coverage_fraction)
+    job_config['REF_IMAGE']['max_coverage_depth'] = str(max_coverage_depth)
+    job_config['REF_IMAGE']['max_coverage_fraction'] = str(max_coverage_fraction)
+    job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
     job_config['REF_IMAGE']['coverage_fraction_estimated'] = str(coverage_fraction_estimated)
+    job_config['REF_IMAGE']['max_coverage_fraction_estimated'] = str(max_coverage_fraction_estimated)
     job_config['REF_IMAGE']['n_images_to_coadd'] = str(n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage

@@ -78,13 +78,31 @@ def test_frame_outside_reference_covers_nothing():
     assert not rfis.compute_footprint_mask(w, x_grid, y_grid, ras, decs).any()
 
 
-def test_selection_stops_once_target_plus_tolerance_reached():
+def test_selection_stops_once_maximum_reached():
     w = _ref_wcs(150.0, 2.0)
     full = _frame_corners(150.0, 2.0, 2 * NAXIS, 2 * NAXIS)
 
-    n, fraction, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 2, 0.5)
+    result = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 1, 0.5, 2, 1.0, 50)
 
-    assert (n, fraction, decision) == (2, 1.0, "build")
+    assert result == (2, 1.0, 1.0, "build")
+
+
+def test_selection_stops_at_frame_cap():
+    w = _ref_wcs(150.0, 2.0)
+    full = _frame_corners(150.0, 2.0, 2 * NAXIS, 2 * NAXIS)
+
+    result = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 1, 0.5, 4, 1.0, 3)
+
+    assert result == (3, 1.0, 0.0, "build")
+
+
+def test_frame_cap_before_minimum_is_rejected():
+    w = _ref_wcs(150.0, 2.0)
+    full = _frame_corners(150.0, 2.0, 2 * NAXIS, 2 * NAXIS)
+
+    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 3, 0.5, 4, 1.0, 2)
+
+    assert (n, fraction, decision) == (2, 0.0, "reject")
 
 
 def test_selection_keeps_candidate_order():
@@ -95,26 +113,26 @@ def test_selection_keeps_candidate_order():
     miss = _frame_corners(150.2, 2.0, NAXIS, NAXIS)
     full = _frame_corners(150.0, 2.0, 2 * NAXIS, 2 * NAXIS)
 
-    n, fraction, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [miss, full, full], 1, 0.5)
+    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [miss, full, full], 1, 0.5, 1, 1.0, 50)
 
     assert (n, decision) == (2, "build")
 
 
-def test_estimate_within_tolerance_of_target_is_verified():
+def test_estimate_within_tolerance_of_minimum_is_verified():
     w = _ref_wcs(150.0, 2.0)
     half = _left_half_corners(150.0, 2.0)
 
-    n, fraction, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 3, 0.5)
+    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 3, 0.5, 4, 1.0, 50)
 
     assert fraction == pytest.approx(0.5)
     assert (n, decision) == (3, "verify")
 
 
-def test_estimate_below_target_minus_tolerance_is_rejected():
+def test_estimate_below_minimum_minus_tolerance_is_rejected():
     w = _ref_wcs(150.0, 2.0)
     half = _left_half_corners(150.0, 2.0)
 
-    n, fraction, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 4, 0.5)
+    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 4, 0.5, 4, 1.0, 50)
 
     assert (n, fraction, decision) == (3, 0.0, "reject")
 
@@ -145,6 +163,9 @@ def test_master_ini_has_coverage_settings():
     ref_image = config["REF_IMAGE"]
 
     assert float(ref_image["min_coverage_depth"]) >= 1
-    assert 0.0 < float(ref_image["coverage_target_fraction"]) <= 1.0
+    assert 0.0 < float(ref_image["min_coverage_fraction"]) <= 1.0
+    assert float(ref_image["max_coverage_depth"]) >= float(ref_image["min_coverage_depth"])
+    assert 0.0 < float(ref_image["max_coverage_fraction"]) <= 1.0
+    assert int(ref_image["max_n_images_to_coadd"]) >= 1
+    assert "coverage_target_fraction" not in ref_image
     assert "min_n_images_to_coadd" not in ref_image
-    assert "max_n_images_to_coadd" not in ref_image

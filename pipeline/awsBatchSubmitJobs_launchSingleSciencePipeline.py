@@ -181,7 +181,7 @@ saturation_level_sciimage = config_input['SCI_IMAGE']['saturation_level']
 
 ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
 min_coverage_depth = float(config_input['REF_IMAGE']['min_coverage_depth'])
-coverage_target_fraction = float(config_input['REF_IMAGE']['coverage_target_fraction'])
+min_coverage_fraction = float(config_input['REF_IMAGE']['min_coverage_fraction'])
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
 cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1_refimage'])
@@ -189,7 +189,7 @@ cdelt2_refimage = float(config_input['REF_IMAGE']['cdelt2_refimage'])
 crota2_refimage = float(config_input['REF_IMAGE']['crota2_refimage'])
 
 print("min_coverage_depth =",min_coverage_depth)
-print("coverage_target_fraction =",coverage_target_fraction)
+print("min_coverage_fraction =",min_coverage_fraction)
 
 
 # Set up AWS Batch.
@@ -923,7 +923,7 @@ if __name__ == '__main__':
         job_config['REF_IMAGE']['ppid'] = str(ppid)
 
     job_config['REF_IMAGE']['min_coverage_depth'] = str(min_coverage_depth)
-    job_config['REF_IMAGE']['coverage_target_fraction'] = str(coverage_target_fraction)
+    job_config['REF_IMAGE']['min_coverage_fraction'] = str(min_coverage_fraction)
     job_config['REF_IMAGE']['n_images_to_coadd'] = str(n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage
