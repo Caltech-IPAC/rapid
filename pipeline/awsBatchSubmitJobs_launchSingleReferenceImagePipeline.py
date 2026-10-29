@@ -266,6 +266,8 @@ for awaicgen_key in config_input['AWAICGEN']:
     if awaicgen_key.startswith("zprefimg"):
         awaicgen_dict[awaicgen_key] = config_input['AWAICGEN'][awaicgen_key]
 
+awaicgen_dict["use_nominal_zptmag"] = config_input['AWAICGEN'].get('use_nominal_zptmag','False')
+
 
 # Update the awaicgen dictionary for quantities that do not vary with sky location.
 

@@ -502,14 +502,7 @@ filter_translation = {"F062": "R062",
 # F213    1.95 - 2.30           25.4
 # F146    0.93 - 2.00           27.5
 
-nominal_zptmag = {"F062": 26.4,
-                  "F087": 26.3,
-                  "F106": 26.4,
-                  "F129": 26.3,
-                  "F146": 27.5,
-                  "F158": 26.4,
-                  "F184": 25.9,
-                  "F213": 25.4}
+nominal_zptmag = util.nominal_zptmag
 
 
 # The ASDF node holding the science image, and the exponent of the EXPTIME factor that

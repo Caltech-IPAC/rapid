@@ -19,6 +19,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 
 from modules.utils.rapid_pipeline_subs import (galsim_roman_ab_zeropoints,
                                                get_reference_image_zeropoint,
+                                               nominal_zptmag,
+                                               rapid_to_roman_filter_names,
                                                socsim_ab_zeropoints)
 
 MASTER_INI = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "cdf",
@@ -151,3 +153,21 @@ def test_scale_factor_stays_near_unity_for_the_other_data_set():
 
         assert legacy_scale < 1.0e-3, \
             f"{filter_name}: the legacy scale was meant to be tiny, got {legacy_scale}"
+
+
+def test_every_rapid_filter_has_a_nominal_zptmag():
+
+    """FITS headers carry the RAPID spelling; the table is keyed by the Roman one."""
+
+    for filter_name in RAPID_FILTER_NAMES:
+        assert rapid_to_roman_filter_names[filter_name] in nominal_zptmag
+
+
+def test_master_ini_ships_with_nominal_zptmag_off():
+
+    """Per-frame ZPTMAG scaling stays the default."""
+
+    config = configparser.ConfigParser()
+    config.read(MASTER_INI)
+
+    assert config["AWAICGEN"].getboolean("use_nominal_zptmag") is False

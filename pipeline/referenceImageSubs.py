@@ -1,3 +1,4 @@
+import ast
 import csv
 import re
 from botocore.exceptions import ClientError
@@ -49,6 +50,10 @@ def generateReferenceImage(s3_client,
     # value and the MAGZP keyword even if no frame is ever read.
 
     zprefimg = float(awaicgen_dict["zprefimg"])
+
+    # Optional; a config file without the entry keeps the per-frame ZPTMAG scaling.
+    use_nominal_zptmag = ast.literal_eval(awaicgen_dict.get("use_nominal_zptmag","False"))
+    print("use_nominal_zptmag =",use_nominal_zptmag)
 
     print("Downloading s3://{}/{} into {}...".format(job_info_s3_bucket,input_images_csv_file_s3_bucket_object_name,input_images_csv_filename))
 
@@ -237,8 +242,13 @@ def generateReferenceImage(s3_client,
 
             zprefimg = util.get_reference_image_zeropoint(awaicgen_dict,hdr.get("FILTER"))
 
-            zptmag = hdr["ZPTMAG"]
-            input_zptmags.append(float(zptmag))
+            # zptmag_rms always records the header ZPTMAG, even when the nominal value is used for scaling.
+            input_zptmags.append(float(hdr["ZPTMAG"]))
+
+            if use_nominal_zptmag:
+                zptmag = util.nominal_zptmag[util.rapid_to_roman_filter_names[hdr["FILTER"]]]
+            else:
+                zptmag = hdr["ZPTMAG"]
             flux_scale_factor = 10 ** (0.4 * (zprefimg - zptmag))
             print(f"For zptmag = {zptmag}:")
             print(f"    flux_scale_factor = {flux_scale_factor}")
