@@ -84,7 +84,7 @@ def test_selection_stops_once_maximum_reached():
 
     result = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 1, 0.5, 2, 1.0, 50)
 
-    assert result == (2, 1.0, 1.0, "build")
+    assert result == ([0, 1], 1.0, 1.0, "build")
 
 
 def test_selection_stops_at_frame_cap():
@@ -93,48 +93,69 @@ def test_selection_stops_at_frame_cap():
 
     result = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 1, 0.5, 4, 1.0, 3)
 
-    assert result == (3, 1.0, 0.0, "build")
+    assert result == ([0, 1, 2], 1.0, 0.0, "build")
 
 
 def test_frame_cap_before_minimum_is_rejected():
     w = _ref_wcs(150.0, 2.0)
     full = _frame_corners(150.0, 2.0, 2 * NAXIS, 2 * NAXIS)
 
-    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 3, 0.5, 4, 1.0, 2)
+    selected, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full] * 5, 3, 0.5, 4, 1.0, 2)
 
-    assert (n, fraction, decision) == (2, 0.0, "reject")
+    assert (selected, fraction, decision) == ([0, 1], 0.0, "reject")
 
 
-def test_selection_keeps_candidate_order():
+def test_selection_skips_candidates_that_miss_reference():
 
-    # The first frame misses the reference but is still counted.
+    # Frames that miss the reference are skipped; the rest are selected in candidate order.
 
     w = _ref_wcs(150.0, 2.0)
     miss = _frame_corners(150.2, 2.0, NAXIS, NAXIS)
     full = _frame_corners(150.0, 2.0, 2 * NAXIS, 2 * NAXIS)
 
-    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [miss, full, full], 1, 0.5, 1, 1.0, 50)
+    selected, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [full, miss, full, full],
+                                                                             1, 0.5, 2, 1.0, 50)
 
-    assert (n, decision) == (2, "build")
+    assert (selected, decision) == ([0, 2], "build")
+
+
+def test_skipped_candidates_do_not_count_toward_frame_cap():
+    w = _ref_wcs(150.0, 2.0)
+    miss = _frame_corners(150.2, 2.0, NAXIS, NAXIS)
+    full = _frame_corners(150.0, 2.0, 2 * NAXIS, 2 * NAXIS)
+
+    selected, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [miss, miss, full, full, full],
+                                                                             1, 0.5, 4, 1.0, 2)
+
+    assert (selected, fraction, decision) == ([2, 3], 1.0, "build")
+
+
+def test_all_candidates_missing_reference_is_rejected():
+    w = _ref_wcs(150.0, 2.0)
+    miss = _frame_corners(150.2, 2.0, NAXIS, NAXIS)
+
+    selected, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [miss] * 3, 1, 0.5, 4, 1.0, 50)
+
+    assert (selected, fraction, decision) == ([], 0.0, "reject")
 
 
 def test_estimate_within_tolerance_of_minimum_is_verified():
     w = _ref_wcs(150.0, 2.0)
     half = _left_half_corners(150.0, 2.0)
 
-    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 3, 0.5, 4, 1.0, 50)
+    selected, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 3, 0.5, 4, 1.0, 50)
 
     assert fraction == pytest.approx(0.5)
-    assert (n, decision) == (3, "verify")
+    assert (selected, decision) == ([0, 1, 2], "verify")
 
 
 def test_estimate_below_minimum_minus_tolerance_is_rejected():
     w = _ref_wcs(150.0, 2.0)
     half = _left_half_corners(150.0, 2.0)
 
-    n, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 4, 0.5, 4, 1.0, 50)
+    selected, fraction, fraction_max, decision = rfis.select_refimage_inputs(w, NAXIS, NAXIS, [half] * 3, 4, 0.5, 4, 1.0, 50)
 
-    assert (n, fraction, decision) == (3, 0.0, "reject")
+    assert (selected, fraction, decision) == ([0, 1, 2], 0.0, "reject")
 
 
 @pytest.mark.parametrize("ra0", [0.01, 359.99, 180.0])

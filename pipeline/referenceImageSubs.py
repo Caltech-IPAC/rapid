@@ -853,9 +853,10 @@ def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,
                            max_coverage_depth,max_coverage_fraction,max_n_images_to_coadd):
 
     '''
-    Add candidate input images in the given order until the estimated fraction of the reference
-    image with coverage >= max_coverage_depth is at least max_coverage_fraction, or
-    max_n_images_to_coadd is reached; then judge the selection against the minimum coverage.
+    Add candidate input images in the given order, skipping any whose footprint misses the
+    reference image, until the estimated fraction of the reference image with coverage >=
+    max_coverage_depth is at least max_coverage_fraction, or max_n_images_to_coadd are selected;
+    then judge the selection against the minimum coverage.
 
     Parameters
     ----------
@@ -878,8 +879,8 @@ def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,
 
     Returns
     -------
-    n_selected : int
-        Number of leading candidates selected.
+    selected_indices : list of int
+        Indices into candidate_corners of the selected candidates, in candidate order.
     estimated_fraction : float
         Estimated fraction of pixels with coverage >= min_coverage_depth.
     estimated_fraction_max : float
@@ -893,12 +894,22 @@ def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,
     x_grid,y_grid = coverage_sample_grid(naxis1,naxis2)
     depth = np.zeros(x_grid.shape,dtype=np.int32)
 
-    n_selected = 0
+    selected_indices = []
     estimated_fraction_max = 0.0
 
-    for ras,decs in candidate_corners[:max_n_images_to_coadd]:
-        depth += compute_footprint_mask(w,x_grid,y_grid,ras,decs)
-        n_selected += 1
+    for i,(ras,decs) in enumerate(candidate_corners):
+        if len(selected_indices) >= max_n_images_to_coadd:
+            break
+
+        # Candidates are matched to the reference by sky tile, and edge tiles extend past the
+        # reference image, so some candidates miss it entirely; skip them rather than spend the cap.
+
+        mask = compute_footprint_mask(w,x_grid,y_grid,ras,decs)
+        if not mask.any():
+            continue
+
+        depth += mask
+        selected_indices.append(i)
         estimated_fraction_max = coverage_fraction(depth,max_coverage_depth)
         if estimated_fraction_max >= max_coverage_fraction:
             break
@@ -912,7 +923,7 @@ def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,
     else:
         decision = "reject"
 
-    return n_selected,estimated_fraction,estimated_fraction_max,decision
+    return selected_indices,estimated_fraction,estimated_fraction_max,decision
 
 
 #####################################################################################

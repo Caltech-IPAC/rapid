@@ -650,17 +650,20 @@ if __name__ == '__main__':
                                   [dec1_refimage_input,dec2_refimage_input,dec3_refimage_input,dec4_refimage_input]))
 
 
-    # Select inputs in order until estimated coverage of the full reference image meets the maximum or the cap.
+    # Select inputs in order, skipping any that miss the reference image, until estimated coverage
+    # of the full reference image meets the maximum or the cap.
 
     w_refimage = rfis.make_refimage_wcs(ra0_refimage,dec0_refimage,
                                         naxis1_refimage,naxis2_refimage,
                                         cdelt1_refimage,cdelt2_refimage,
                                         crota2_refimage)
 
-    n_images_to_coadd,coverage_fraction_estimated,max_coverage_fraction_estimated,coverage_decision = \
+    selected_indices,coverage_fraction_estimated,max_coverage_fraction_estimated,coverage_decision = \
         rfis.select_refimage_inputs(w_refimage,naxis1_refimage,naxis2_refimage,candidate_corners,
                                     min_coverage_depth,min_coverage_fraction,
                                     max_coverage_depth,max_coverage_fraction,max_n_images_to_coadd)
+
+    n_images_to_coadd = len(selected_indices)
 
     print(f"n_candidates = {len(csv_records)}, n_images_to_coadd = {n_images_to_coadd}, " +\
           f"coverage_fraction_estimated = {coverage_fraction_estimated}, " +\
@@ -674,7 +677,7 @@ if __name__ == '__main__':
         dbh.close()             # Close database connection.
         exit(terminating_exitcode)
 
-    csv_records = csv_records[:n_images_to_coadd]
+    csv_records = [csv_records[i] for i in selected_indices]
 
 
     # Insert or update record in Jobs database table and return job ID.
