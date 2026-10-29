@@ -1,5 +1,4 @@
 import os
-import configparser
 import ast
 from datetime import datetime, timezone
 from dateutil import tz
@@ -12,7 +11,6 @@ import modules.utils.rapid_pipeline_subs as util
 
 swname = "analyzeSciencePipelineProductsForDateTimeRangeWithRefImageWindow.py"
 swvers = "1.0"
-cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 
 print("swname =", swname)
 print("swvers =", swvers)
@@ -136,19 +134,6 @@ print("rapid_sw =",rapid_sw)
 print("cfg_path =",cfg_path)
 
 
-# Read input parameters from .ini file.
-
-config_input_filename = cfg_path + "/" + cfg_filename_only
-config_input = configparser.ConfigParser()
-config_input.read(config_input_filename)
-
-min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
-max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
-
-print("min_n_images_to_coadd =",min_n_images_to_coadd)
-print("max_n_images_to_coadd =",max_n_images_to_coadd)
-
-
 #################
 # Main program.
 #################
@@ -185,7 +170,7 @@ if __name__ == '__main__':
 
     for fid in range(1,n_filters + 1):
 
-        recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,end_refimage_mjdobs,min_n_images_to_coadd,fid)
+        recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,end_refimage_mjdobs,1,fid)
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))

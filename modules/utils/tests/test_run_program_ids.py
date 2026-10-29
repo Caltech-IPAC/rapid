@@ -96,7 +96,7 @@ def test_program_ids_clause():
     lambda dbh, p: dbh.get_field_fid_nframes_records_for_mjdobs_range(0.0, 99999.0, 5, 3, program_ids=p),
     lambda dbh, p: dbh.get_l2files_records_for_datetime_range_field_fid("2027-01-01", "2027-01-02", 7, 3,
                                                                        program_ids=p),
-    lambda dbh, p: dbh.get_overlapping_l2files("null", 3, 7, 10.0, 20.0, 99999.0, program_ids=p),
+    lambda dbh, p: dbh.get_overlapping_l2files("null", 3, [7, 8], 10.0, 20.0, 99999.0, program_ids=p),
 ])
 def test_queries_with_and_without_program_ids(call, monkeypatch):
     monkeypatch.delenv("STARTREFIMMJDOBS", raising=False)

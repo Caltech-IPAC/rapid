@@ -7,7 +7,7 @@ exit_code            Definition
      0               Normal termination
      7               Reference image already exists, so it will not be remade
     32               Warning
-    33               n_images_to_coadd < min_n_images_to_coadd: pipeline not launched
+    33               Estimated coverage below target: pipeline not launched
     64               Error
 =============       =========================================
 '''
@@ -27,6 +27,7 @@ to_zone = tz.gettz('America/Los_Angeles')
 import modules.utils.rapid_pipeline_subs as util
 import database.modules.utils.rapid_db as db
 import database.modules.utils.roman_tessellation_db as sqlite
+import pipeline.referenceImageSubs as rfis
 
 swname = "awsBatchSubmitJobs_launchSingleReferenceImagePipeline.py"
 swvers = "1.0"
@@ -197,7 +198,10 @@ sca_readout_noise = float(config_input['INSTRUMENT']['sca_readout_noise'])
 ppid = int(config_input['SCI_IMAGE']['ppid'])
 
 ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
-min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
+min_coverage_depth = float(config_input['REF_IMAGE']['min_coverage_depth'])
+min_coverage_fraction = float(config_input['REF_IMAGE']['min_coverage_fraction'])
+max_coverage_depth = float(config_input['REF_IMAGE']['max_coverage_depth'])
+max_coverage_fraction = float(config_input['REF_IMAGE']['max_coverage_fraction'])
 max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 naxis1_refimage = int(config_input['REF_IMAGE']['naxis1_refimage'])
 naxis2_refimage = int(config_input['REF_IMAGE']['naxis2_refimage'])
@@ -207,7 +211,10 @@ crota2_refimage = float(config_input['REF_IMAGE']['crota2_refimage'])
 # North-up reference-image PSF used for reference-image PhotUtils catalog.
 refimage_psf_filename = config_input['REF_IMAGE']['refimage_psf_filename']
 
-print("min_n_images_to_coadd =",min_n_images_to_coadd)
+print("min_coverage_depth =",min_coverage_depth)
+print("min_coverage_fraction =",min_coverage_fraction)
+print("max_coverage_depth =",max_coverage_depth)
+print("max_coverage_fraction =",max_coverage_fraction)
 print("max_n_images_to_coadd =",max_n_images_to_coadd)
 
 
@@ -550,7 +557,7 @@ if __name__ == '__main__':
     mjdobs = 999999.9
     overlapping_images = dbh.get_overlapping_l2files(rid,
                                                      fid,
-                                                     field,
+                                                     refimg_overlapping_rtids,
                                                      ra0_field,dec0_field,
                                                      mjdobs,
                                                      program_ids=run_program_ids)
@@ -563,13 +570,9 @@ if __name__ == '__main__':
 
     # For each overlapping image, query L2Files database table for
     # filename, sca, mjdobs, exptime, infobits, and status.
-    #
-    # NOTE: max_n_images_to_coadd is not enforced here, but instead
-    # when the RAPID pipeline instance is executed.  TODO?
-
-    n_images_to_coadd = 0
 
     csv_records = []
+    candidate_corners = []
 
     for image_meta in overlapping_images:
         rid_refimage_input = image_meta[0]
@@ -645,14 +648,38 @@ if __name__ == '__main__':
 
         csv_records.append(csv_record)
 
-        n_images_to_coadd += 1
+        candidate_corners.append(([ra1_refimage_input,ra2_refimage_input,ra3_refimage_input,ra4_refimage_input],
+                                  [dec1_refimage_input,dec2_refimage_input,dec3_refimage_input,dec4_refimage_input]))
 
-    if n_images_to_coadd < min_n_images_to_coadd:
-        print(f"*** Warning: n_images_to_coadd ({n_images_to_coadd}) < min_n_images_to_coadd " +\
-              f"({min_n_images_to_coadd}) for rid,field,fid = {rid},{field},{fid}; quitting...")
+
+    # Select inputs in order, skipping any that miss the reference image, until estimated coverage
+    # of the full reference image meets the maximum or the cap.
+
+    w_refimage = rfis.make_refimage_wcs(ra0_refimage,dec0_refimage,
+                                        naxis1_refimage,naxis2_refimage,
+                                        cdelt1_refimage,cdelt2_refimage,
+                                        crota2_refimage)
+
+    selected_indices,coverage_fraction_estimated,max_coverage_fraction_estimated,coverage_decision = \
+        rfis.select_refimage_inputs(w_refimage,naxis1_refimage,naxis2_refimage,candidate_corners,
+                                    min_coverage_depth,min_coverage_fraction,
+                                    max_coverage_depth,max_coverage_fraction,max_n_images_to_coadd)
+
+    n_images_to_coadd = len(selected_indices)
+
+    print(f"n_candidates = {len(csv_records)}, n_images_to_coadd = {n_images_to_coadd}, " +\
+          f"coverage_fraction_estimated = {coverage_fraction_estimated}, " +\
+          f"max_coverage_fraction_estimated = {max_coverage_fraction_estimated}, coverage_decision = {coverage_decision}")
+
+    if coverage_decision == "reject":
+        print(f"*** Warning: estimated coverage fraction ({coverage_fraction_estimated}) with depth >= " +\
+              f"{min_coverage_depth} is below minimum ({min_coverage_fraction}) " +\
+              f"for rid,field,fid = {rid},{field},{fid}; quitting...")
         terminating_exitcode = 33
         dbh.close()             # Close database connection.
         exit(terminating_exitcode)
+
+    csv_records = [csv_records[i] for i in selected_indices]
 
 
     # Insert or update record in Jobs database table and return job ID.
@@ -717,8 +744,13 @@ if __name__ == '__main__':
     job_config['REF_IMAGE']['fid'] = str(fid)
     job_config['REF_IMAGE']['filter'] = exposure_filter
     job_config['REF_IMAGE']['ppid'] = str(ppid_refimage)
-    job_config['REF_IMAGE']['min_n_images_to_coadd'] = str(min_n_images_to_coadd)
+    job_config['REF_IMAGE']['min_coverage_depth'] = str(min_coverage_depth)
+    job_config['REF_IMAGE']['min_coverage_fraction'] = str(min_coverage_fraction)
+    job_config['REF_IMAGE']['max_coverage_depth'] = str(max_coverage_depth)
+    job_config['REF_IMAGE']['max_coverage_fraction'] = str(max_coverage_fraction)
     job_config['REF_IMAGE']['max_n_images_to_coadd'] = str(max_n_images_to_coadd)
+    job_config['REF_IMAGE']['coverage_fraction_estimated'] = str(coverage_fraction_estimated)
+    job_config['REF_IMAGE']['max_coverage_fraction_estimated'] = str(max_coverage_fraction_estimated)
     job_config['REF_IMAGE']['n_images_to_coadd'] = str(n_images_to_coadd)
     job_config['REF_IMAGE']['rfid'] = str(rfid)
     job_config['REF_IMAGE']['filename'] = filename_refimage

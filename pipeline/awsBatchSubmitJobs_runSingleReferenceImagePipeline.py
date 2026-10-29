@@ -9,6 +9,7 @@ exit_code            Definition
 =============       =========================================
      0               Normal termination
     32               Warning
+    33               Actual coverage below target: reference image discarded
     64               Error (nonspecific)
 =============       =========================================
 
@@ -243,7 +244,8 @@ if __name__ == '__main__':
     # The following is passed through from the master config file (ppid=12)
     # by the reference-image-pipeline launcher script.
     ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
-    max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
+    min_coverage_depth = float(config_input['REF_IMAGE']['min_coverage_depth'])
+    min_coverage_fraction = float(config_input['REF_IMAGE']['min_coverage_fraction'])
     naxis1_refimage = int(config_input['REF_IMAGE']['naxis1'])
     naxis2_refimage = int(config_input['REF_IMAGE']['naxis2'])
     cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1'])
@@ -260,7 +262,8 @@ if __name__ == '__main__':
     fake_sources_dict = config_input['FAKE_SOURCES']
     psfcat_refimage_dict = config_input['PSFCAT_REFIMAGE']
 
-    print("max_n_images_to_coadd =", max_n_images_to_coadd)
+    print("min_coverage_depth =", min_coverage_depth)
+    print("min_coverage_fraction =", min_coverage_fraction)
 
     inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
 
@@ -353,7 +356,8 @@ if __name__ == '__main__':
                                                                              jid,
                                                                              proc_subdir,
                                                                              awaicgen_dict,
-                                                                             max_n_images_to_coadd,
+                                                                             min_coverage_depth,
+                                                                             min_coverage_fraction,
                                                                              sca_gain,
                                                                              sca_readout_noise,
                                                                              product_s3_bucket,
@@ -379,6 +383,7 @@ if __name__ == '__main__':
         total_refimage_exptime = generateReferenceImage_return_list[13]
         input_images_used_csv_file_s3_bucket_object_name = generateReferenceImage_return_list[14]
         input_zptmags_refimage = generateReferenceImage_return_list[15]
+        coverage_fraction_refimage = generateReferenceImage_return_list[16]
 
         shutil.move(f"{refimage_generation_subdir}/{awaicgen_output_mosaic_image_file}", awaicgen_output_mosaic_image_file)
         print(f"Moved {refimage_generation_subdir}/{awaicgen_output_mosaic_image_file} up to {awaicgen_output_mosaic_image_file}")
@@ -618,6 +623,9 @@ if __name__ == '__main__':
         product_config['REF_IMAGE']['gmin'] = str(gmin_refimage)
         product_config['REF_IMAGE']['gmax'] = str(gmax_refimage)
         product_config['REF_IMAGE']['cov5percent'] = str(cov5percent)
+        product_config['REF_IMAGE']['coverage_fraction'] = str(coverage_fraction_refimage)
+        product_config['REF_IMAGE']['min_coverage_depth'] = str(min_coverage_depth)
+        product_config['REF_IMAGE']['min_coverage_fraction'] = str(min_coverage_fraction)
         product_config['REF_IMAGE']['medncov'] = str(medncov)
         product_config['REF_IMAGE']['medpixunc'] = str(medpixunc)
         product_config['REF_IMAGE']['fwhmmedpix'] = str(fwhm_ref_medpix)
@@ -643,7 +651,10 @@ if __name__ == '__main__':
                                                total_refimage_exptime,
                                                infobits = infobits_refimage,
                                                status = status_refimage,
-                                               infobit_cards = infobit_cards_refimage)
+                                               infobit_cards = infobit_cards_refimage,
+                                               coverage_fraction = coverage_fraction_refimage,
+                                               min_coverage_depth = min_coverage_depth,
+                                               min_coverage_fraction = min_coverage_fraction)
 
 
         # Also, add same informational FITS keywords to header of reference-image uncertainty image.
@@ -661,7 +672,10 @@ if __name__ == '__main__':
                                                total_refimage_exptime,
                                                infobits = infobits_refimage,
                                                status = status_refimage,
-                                               infobit_cards = infobit_cards_refimage)
+                                               infobit_cards = infobit_cards_refimage,
+                                               coverage_fraction = coverage_fraction_refimage,
+                                               min_coverage_depth = min_coverage_depth,
+                                               min_coverage_fraction = min_coverage_fraction)
 
 
         # Upload reference-image file to S3 bucket.

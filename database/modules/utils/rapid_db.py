@@ -1349,7 +1349,7 @@ class RAPIDDB:
     def get_overlapping_l2files(self,
                                 rid,
                                 fid,
-                                field,
+                                fields,
                                 field_ra0,field_dec0,
                                 mjdobs,
                                 program_ids=None):
@@ -1376,7 +1376,7 @@ class RAPIDDB:
             "and b.fid = TEMPLATE_FID " +\
             "and b.status > 0 " +\
             "and b.vbest > 0 " +\
-            "and b.overlapfields @> ARRAY[cast(TEMPLATE_FIELD as integer)] " +\
+            "and b.overlapfields && cast(ARRAY[TEMPLATE_FIELDS] as integer[]) " +\
             "and b.mjdobs >= TEMPLATE_STARTMJDOBS " +\
             "and b.mjdobs < TEMPLATE_ENDMJDOBS " +\
             self.program_ids_clause(program_ids)
@@ -1440,7 +1440,7 @@ class RAPIDDB:
 
         print('----> rid = {}'.format(rid))
         print('----> fid = {}'.format(fid))
-        print('----> field = {}'.format(field))
+        print('----> fields = {}'.format(fields))
         print('----> mjdobs = {}'.format(mjdobs))
         print('----> field_ra0,field_dec0 = {},{}'.format(field_ra0,field_dec0))
 
@@ -1449,7 +1449,7 @@ class RAPIDDB:
         rep["TEMPLATE_FID"] = str(fid)
         rep["TEMPLATE_STARTMJDOBS"] = str(start_mjdobs)
         rep["TEMPLATE_ENDMJDOBS"] = str(end_mjdobs)
-        rep["TEMPLATE_FIELD"] = str(field)
+        rep["TEMPLATE_FIELDS"] = ",".join(str(int(f)) for f in fields)
         rep["TEMPLATE_RA0"] = str(field_ra0)
         rep["TEMPLATE_DEC0"] = str(field_dec0)
 

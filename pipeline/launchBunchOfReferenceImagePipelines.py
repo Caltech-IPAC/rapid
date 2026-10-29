@@ -129,11 +129,7 @@ config_input.read(config_input_filename)
 ppid_sciimage = int(config_input['SCI_IMAGE']['ppid'])
 
 ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
-min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
-max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
 
-print("min_n_images_to_coadd =",min_n_images_to_coadd)
-print("max_n_images_to_coadd =",max_n_images_to_coadd)
 
 
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
@@ -274,7 +270,7 @@ if __name__ == '__main__':
                 print(f"*** Message: Skipping fid={fid}; continuing...")
                 continue
 
-        recs = dbh.get_field_fid_nframes_records(min_n_images_to_coadd,fid,program_ids=run_program_ids)
+        recs = dbh.get_field_fid_nframes_records(1,fid,program_ids=run_program_ids)
 
         if dbh.exit_code >= 64:
             print("*** Error from query for field/filter/nframes combinations {}; quitting ".format(swname))

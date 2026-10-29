@@ -300,7 +300,8 @@ if __name__ == '__main__':
 
     # The launcher script determines where the following stores ppid=12 or ppid=15.
     ppid_refimage = int(config_input['REF_IMAGE']['ppid'])
-    max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
+    min_coverage_depth = float(config_input['REF_IMAGE']['min_coverage_depth'])
+    min_coverage_fraction = float(config_input['REF_IMAGE']['min_coverage_fraction'])
     naxis1_refimage = int(config_input['REF_IMAGE']['naxis1'])
     naxis2_refimage = int(config_input['REF_IMAGE']['naxis2'])
     cdelt1_refimage = float(config_input['REF_IMAGE']['cdelt1'])
@@ -419,7 +420,8 @@ if __name__ == '__main__':
 
     print("prefilter_sumrat_threshold,prefilter_snr_threshold =",prefilter_sumrat_threshold,prefilter_snr_threshold)
 
-    print("max_n_images_to_coadd =", max_n_images_to_coadd)
+    print("min_coverage_depth =", min_coverage_depth)
+    print("min_coverage_fraction =", min_coverage_fraction)
 
     inject_fake_sources_flag = ast.literal_eval(fake_sources_dict['inject_fake_sources_flag'])
 
@@ -546,7 +548,8 @@ if __name__ == '__main__':
                                                                              jid,
                                                                              proc_subdir,
                                                                              awaicgen_dict,
-                                                                             max_n_images_to_coadd,
+                                                                             min_coverage_depth,
+                                                                             min_coverage_fraction,
                                                                              sca_gain,
                                                                              sca_readout_noise,
                                                                              product_s3_bucket,
