@@ -6,6 +6,7 @@ from astropy.io import ascii
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
 from astropy.table import join
+from astropy.coordinates import SkyCoord
 import numpy as np
 import time
 
@@ -28,7 +29,8 @@ def generateReferenceImage(s3_client,
                            jid,
                            proc_subdir,
                            awaicgen_dict,
-                           max_n_images_to_coadd,
+                           min_coverage_depth,
+                           coverage_target_fraction,
                            sca_gain,
                            sca_readout_noise,
                            product_s3_bucket,
@@ -309,8 +311,6 @@ def generateReferenceImage(s3_client,
             # Increment refimage-input-file counter.
 
             n += 1
-            if n >= max_n_images_to_coadd:
-               break
 
 
     n_images_to_coadd = n
@@ -353,12 +353,8 @@ def generateReferenceImage(s3_client,
     awaicgen_input_images_list_file = awaicgen_dict["awaicgen_input_images_list_file"]
 
     f = open(awaicgen_input_images_list_file, "w")
-    n = 0
     for fname in refimage_input_filenames_reformatted:
         f.write(fname + "\n")
-        n += 1
-        if n >= max_n_images_to_coadd:
-            break
     f.close()
 
 
@@ -367,12 +363,8 @@ def generateReferenceImage(s3_client,
     awaicgen_input_uncert_list_file = awaicgen_dict["awaicgen_input_uncert_list_file"]
 
     f = open(awaicgen_input_uncert_list_file, "w")
-    n = 0
     for fname in refimage_input_filenames_reformatted_unc:
         f.write(fname + "\n")
-        n += 1
-        if n >= max_n_images_to_coadd:
-            break
     f.close()
 
 
@@ -451,6 +443,19 @@ def generateReferenceImage(s3_client,
     start_time_benchmark = end_time_benchmark
 
 
+    # Discard the reference image if its actual coverage is below the target.
+
+    with fits.open(awaicgen_output_mosaic_cov_map_file) as hdul_cov:
+        coverage_fraction_actual = coverage_fraction(hdul_cov[0].data,min_coverage_depth)
+
+    print(f"coverage_fraction_actual = {coverage_fraction_actual} (min_coverage_depth = {min_coverage_depth}, " +\
+          f"coverage_target_fraction = {coverage_target_fraction})")
+
+    if coverage_fraction_actual < coverage_target_fraction:
+        print("*** Warning: Actual coverage fraction is below target; reference image discarded; quitting...")
+        exit(33)
+
+
     # Upload ancillary reference-image products to S3 bucket.  Do not upload the reference image file and
     # reference-image uncertainty file until later, after informational keywords have been added to the FITS header.
 
@@ -504,6 +509,7 @@ def generateReferenceImage(s3_client,
     generateReferenceImage_return_list.append(total_exptime)
     generateReferenceImage_return_list.append(input_images_used_csv_file_s3_bucket_object_name)
     generateReferenceImage_return_list.append(input_zptmags)
+    generateReferenceImage_return_list.append(coverage_fraction_actual)
 
     return generateReferenceImage_return_list
 
@@ -610,7 +616,10 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
                                       total_refimage_exptime,
                                       infobits = None,
                                       status = None,
-                                      infobit_cards = None):
+                                      infobit_cards = None,
+                                      coverage_fraction = None,
+                                      min_coverage_depth = None,
+                                      coverage_target_fraction = None):
 
     hdu_index = 0
 
@@ -645,6 +654,11 @@ def addKeywordsToReferenceImageHeader(reference_image_filename,
     if infobit_cards is not None:
         for keyword,bit,comment in infobit_cards:
             hdr[keyword] = (bit,comment)
+
+    if coverage_fraction is not None:
+        hdr["COVFRAC"] = (coverage_fraction,"Fraction of pixels with coverage >= COVDEPTH")
+        hdr["COVDEPTH"] = (min_coverage_depth,"Min. coverage depth for COVFRAC [frames]")
+        hdr["COVTARG"] = (coverage_target_fraction,"Required COVFRAC for input selection")
 
 
     # Add keywords for reference-image input filenames.
@@ -710,6 +724,181 @@ def compute_cov5percent(reference_cov_map_filename):
     # and operations database.
 
     return cov5percent
+
+
+#####################################################################################
+# Select reference-image inputs by estimated coverage of the full reference-image area.
+#####################################################################################
+
+COVERAGE_GRID_STEP = 25
+COVERAGE_ESTIMATE_TOLERANCE = 0.05
+
+
+def make_refimage_wcs(ra0,dec0,naxis1,naxis2,cdelt1,cdelt2,crota2):
+
+    '''
+    Make the TAN WCS of a reference image centered on (ra0,dec0), with crpix at the
+    image center as in the reference-image launcher.
+
+    Parameters
+    ----------
+    ra0, dec0 : float
+        Sky position of the reference-image center [deg].
+    naxis1, naxis2 : int
+        Size of the reference image [pixels].
+    cdelt1, cdelt2 : float
+        Pixel scale [deg/pixel].
+    crota2 : float
+        Rotation of the reference image [deg].
+
+    Returns
+    -------
+    w : astropy.wcs.WCS
+        WCS of the reference image.
+    '''
+
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN","DEC--TAN"]
+    w.wcs.crval = [ra0,dec0]
+    w.wcs.crpix = [0.5 * naxis1 + 0.5,0.5 * naxis2 + 0.5]
+    w.wcs.cdelt = [cdelt1,cdelt2]
+    w.wcs.crota = [0.0,crota2]
+
+    return w
+
+
+def coverage_sample_grid(naxis1,naxis2):
+
+    '''
+    Zero-based pixel coordinates of the grid that samples a reference image every
+    COVERAGE_GRID_STEP pixels.
+
+    Parameters
+    ----------
+    naxis1, naxis2 : int
+        Size of the reference image [pixels].
+
+    Returns
+    -------
+    x_grid, y_grid : numpy.ndarray
+        2-D arrays of x and y pixel coordinates of the grid points.
+    '''
+
+    x = np.arange(COVERAGE_GRID_STEP // 2,naxis1,COVERAGE_GRID_STEP)
+    y = np.arange(COVERAGE_GRID_STEP // 2,naxis2,COVERAGE_GRID_STEP)
+    x_grid,y_grid = np.meshgrid(x,y)
+
+    return x_grid,y_grid
+
+
+def compute_footprint_mask(w,x_grid,y_grid,ras,decs):
+
+    '''
+    Flag the grid points inside the footprint of an input image, given its four corners
+    in order around the image.  The corners are projected onto the reference-image
+    tangent plane, so footprints that straddle R.A. = 0/360 deg are handled.
+
+    Parameters
+    ----------
+    w : astropy.wcs.WCS
+        WCS of the reference image.
+    x_grid, y_grid : numpy.ndarray
+        Zero-based pixel coordinates of the grid points.
+    ras, decs : sequence of float
+        R.A. and Dec. of the four corners of the input image [deg].
+
+    Returns
+    -------
+    mask : numpy.ndarray of bool
+        True for grid points inside the footprint.
+    '''
+
+    x,y = w.world_to_pixel(SkyCoord(ra=ras,dec=decs,unit='deg'))
+
+    inside_pos = np.ones(x_grid.shape,dtype=bool)
+    inside_neg = np.ones(x_grid.shape,dtype=bool)
+
+    for i in range(4):
+        j = (i + 1) % 4
+        cross = (x[j] - x[i]) * (y_grid - y[i]) - (y[j] - y[i]) * (x_grid - x[i])
+        inside_pos &= cross >= 0.0
+        inside_neg &= cross <= 0.0
+
+    return inside_pos | inside_neg
+
+
+def coverage_fraction(cov_map,min_coverage_depth):
+
+    '''
+    Fraction of pixels in a coverage map with depth of coverage at least min_coverage_depth.
+
+    Parameters
+    ----------
+    cov_map : numpy.ndarray
+        Coverage map (number of input images per pixel).
+    min_coverage_depth : float
+        Minimum depth of coverage for a pixel to count as covered.
+
+    Returns
+    -------
+    fraction : float
+        Fraction of covered pixels.
+    '''
+
+    return float(np.count_nonzero(cov_map >= min_coverage_depth)) / cov_map.size
+
+
+def select_refimage_inputs(w,naxis1,naxis2,candidate_corners,min_coverage_depth,coverage_target_fraction):
+
+    '''
+    Add candidate input images in the given order until the estimated fraction of the reference
+    image with coverage >= min_coverage_depth is at least coverage_target_fraction plus
+    COVERAGE_ESTIMATE_TOLERANCE.
+
+    Parameters
+    ----------
+    w : astropy.wcs.WCS
+        WCS of the reference image.
+    naxis1, naxis2 : int
+        Size of the reference image [pixels].
+    candidate_corners : list of (ras, decs)
+        For each candidate input image in order, R.A. and Dec. of its four corners [deg].
+    min_coverage_depth : float
+        Minimum depth of coverage for a pixel to count as covered.
+    coverage_target_fraction : float
+        Required fraction of covered pixels.
+
+    Returns
+    -------
+    n_selected : int
+        Number of leading candidates selected.
+    estimated_fraction : float
+        Estimated fraction of covered pixels for the selected candidates.
+    decision : str
+        "build" if the estimate clears the target by the tolerance, "verify" if all candidates
+        are selected and the estimate is within the tolerance of the target (the actual coverage
+        map decides), or "reject" if the estimate is below the target by more than the tolerance.
+    '''
+
+    x_grid,y_grid = coverage_sample_grid(naxis1,naxis2)
+    depth = np.zeros(x_grid.shape,dtype=np.int32)
+
+    build_fraction = min(coverage_target_fraction + COVERAGE_ESTIMATE_TOLERANCE,1.0)
+
+    n_selected = 0
+    estimated_fraction = 0.0
+
+    for ras,decs in candidate_corners:
+        depth += compute_footprint_mask(w,x_grid,y_grid,ras,decs)
+        n_selected += 1
+        estimated_fraction = coverage_fraction(depth,min_coverage_depth)
+        if estimated_fraction >= build_fraction:
+            return n_selected,estimated_fraction,"build"
+
+    if estimated_fraction >= coverage_target_fraction - COVERAGE_ESTIMATE_TOLERANCE:
+        return n_selected,estimated_fraction,"verify"
+
+    return n_selected,estimated_fraction,"reject"
 
 
 #####################################################################################

@@ -1,5 +1,4 @@
 import os
-import configparser
 import ast
 from datetime import datetime, timezone
 from dateutil import tz
@@ -13,7 +12,6 @@ import modules.utils.rapid_pipeline_subs as util
 
 swname = "launchSciencePipelinesForDateTimeRangeWithRefImageWindow.py"
 swvers = "1.0"
-cfg_filename_only = "awsBatchSubmitJobs_launchSingleSciencePipeline.ini"
 launch_single_pipeline_instance_code = 'awsBatchSubmitJobs_launchSingleSciencePipeline.py'
 
 print("swname =", swname)
@@ -157,19 +155,6 @@ print("rapid_sw =",rapid_sw)
 print("cfg_path =",cfg_path)
 
 
-# Read input parameters from .ini file.
-
-config_input_filename = cfg_path + "/" + cfg_filename_only
-config_input = configparser.ConfigParser()
-config_input.read(config_input_filename)
-
-min_n_images_to_coadd = int(config_input['REF_IMAGE']['min_n_images_to_coadd'])
-max_n_images_to_coadd = int(config_input['REF_IMAGE']['max_n_images_to_coadd'])
-
-print("min_n_images_to_coadd =",min_n_images_to_coadd)
-print("max_n_images_to_coadd =",max_n_images_to_coadd)
-
-
 # Custom methods for parallel processing, taking advantage of multiple cores on the job-launcher machine.
 
 def run_single_core_job(rids,num_cores,index_thread):
@@ -307,7 +292,7 @@ if __name__ == '__main__':
 
         recs = dbh.get_field_fid_nframes_records_for_mjdobs_range(start_refimage_mjdobs,
                                                                   end_refimage_mjdobs,
-                                                                  min_n_images_to_coadd,
+                                                                  1,
                                                                   fid,
                                                                   program_ids=run_program_ids)
 
