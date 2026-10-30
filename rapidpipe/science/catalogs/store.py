@@ -33,26 +33,26 @@ module's command line):
     # on a machine that can reach the collection URL (IPAC network) AND S3;
     # streams HTTP -> S3, nothing is written locally
     python -m rapidpipe.science.catalogs.store mirror --base-url <collection-url> \\
-                                    --dest s3://<the inputs bucket>/catalogs/ned
-    python -m rapidpipe.science.catalogs.store verify --dest s3://<the inputs bucket>/catalogs/ned
+                                    --dest s3://<the catalogs bucket>/ned
+    python -m rapidpipe.science.catalogs.store verify --dest s3://<the catalogs bucket>/ned
 
     # on EC2, next to the bucket; reads each leaf into memory (<= ~1 GB) and
     # deletes it from S3 once its order-6 files are written
-    python -m rapidpipe.science.catalogs.store repartition --dest s3://<the inputs bucket>/catalogs/ned \\
+    python -m rapidpipe.science.catalogs.store repartition --dest s3://<the catalogs bucket>/ned \\
                                          --jobs 4 --delete-leaves
-    python -m rapidpipe.science.catalogs.store manifest    --dest s3://<the inputs bucket>/catalogs/ned
+    python -m rapidpipe.science.catalogs.store manifest    --dest s3://<the catalogs bucket>/ned
 
     # NED-LVS (the Local Volume Sample, one FITS table; see that section):
     # mirrored the same way, then converted to parquet streaming from the
     # store -- no local disk, ~0.5 GB of memory, runs from any machine
-    python -m rapidpipe.science.catalogs.store ingest-lvs  --dest s3://<the inputs bucket>/catalogs/ned
-    python -m rapidpipe.science.catalogs.store manifest    --dest s3://<the inputs bucket>/catalogs/ned
+    python -m rapidpipe.science.catalogs.store ingest-lvs  --dest s3://<the catalogs bucket>/ned
+    python -m rapidpipe.science.catalogs.store manifest    --dest s3://<the catalogs bucket>/ned
 
     # Gaia DR3 (LINCC's HATS copy; see that section) goes to a prefix of its
     # own: each of its 2,016 partitions is read over HTTP one row group at a
     # time, cut down to GAIA_COLUMNS and written to the store -- no local
     # disk, runs from any machine, resumable
-    python -m rapidpipe.science.catalogs.store ingest-gaia --dest s3://<the inputs bucket>/catalogs/gaia/DR3 --jobs 8
+    python -m rapidpipe.science.catalogs.store ingest-gaia --dest s3://<the catalogs bucket>/gaia/DR3 --jobs 8
 
 ``--dest`` also accepts a local directory, which is how the tests and dry
 runs work (``repartition --leaves`` and ``ingest-gaia --leaves`` limit a run
@@ -929,11 +929,11 @@ def ingest_lvs(dest: str, url: str = LVS_URL, force: bool = False) -> dict[str, 
 #
 # Idempotent and resumable: a leaf with a done marker is skipped, an
 # interrupted leaf has no marker and is redone; --force redoes everything.
-# On a bucket that refuses overwrites (the inputs bucket), a leaf that is
+# On a bucket that refuses overwrites (the catalogs bucket), a leaf that is
 # present without its marker is recovered, never rewritten: a multipart
 # upload that did not complete leaves no object, so a present leaf is whole.
 #
-#     python -m rapidpipe.science.catalogs.store ingest-gaia --dest s3://<the inputs bucket>/catalogs/gaia/DR3 --jobs 8
+#     python -m rapidpipe.science.catalogs.store ingest-gaia --dest s3://<the catalogs bucket>/gaia/DR3 --jobs 8
 # ---------------------------------------------------------------------------
 
 GAIA_URL = "https://data.lsdb.io/hats/gaia_dr3/gaia/"
