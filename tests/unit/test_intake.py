@@ -52,6 +52,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.stages import intake
+from tests.support.catalogs import write_gaia_store
 
 REPO = Path(__file__).resolve().parents[2]
 STEM = "r0034201001001004001_0001_wfi08_f146"
@@ -439,9 +440,10 @@ def gaia_frame(tmp_path: Path, proper_motion: bool):
     ra, dec = w.all_pix2world(stars[:, 0], stars[:, 1], 0)
     pmra, pmdec = (np.full(len(stars), v) for v in PM_MAS_YR)
     ra16, dec16 = propagate_positions(ra, dec, -pmra, -pmdec, 10.0)
-    path = tmp_path / "gaia.parquet"
-    pq.write_table(pa.table({"ra": ra16, "dec": dec16, "pmra": pmra, "pmdec": pmdec,
-                             "ref_epoch": np.full(len(stars), 2016.0)}), path)
+    path = tmp_path / "gaia"
+    path.mkdir()
+    write_gaia_store(path, [{"ra": float(r), "dec": float(d), "pmra": float(PM_MAS_YR[0]),
+                             "pmdec": float(PM_MAS_YR[1])} for r, d in zip(ra16, dec16)])
 
     class Cursor:
         def __enter__(self):
@@ -454,7 +456,7 @@ def gaia_frame(tmp_path: Path, proper_motion: bool):
             assert "FROM catalogs" in statement
 
         def fetchone(self):
-            return (path.as_uri(),)
+            return (path.as_uri() + "/",)
 
     class Connection:
         def cursor(self):

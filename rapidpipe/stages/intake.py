@@ -110,7 +110,9 @@ from astropy.wcs import WCS
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.science import intake_openuniverse, intake_rimtimsim
-from rapidpipe.science.alerts.crossmatch import epoch_offset_years, propagate_positions
+from rapidpipe.science.alerts.crossmatch import (
+    GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, epoch_offset_years, propagate_positions)
+from rapidpipe.science.catalogs.readers import cone_of_corners, gaia_reader
 from rapidpipe.science.astrometry import gaia_offset
 from rapidpipe.science.intake import asdf_to_fits, exposure_identifiers, gzip_file
 from rapidpipe.science.limmag import limiting_magnitude
@@ -318,9 +320,15 @@ def _shift_crpix(path: Path, shift: list[float]) -> None:
 def _gaia_metrics(job: JobContext, image, wcs, header) -> dict | None:
     """The Gaia offset metrics, when the job names a ``catalogs`` input; else ``None``.
 
-    Under ``[intake] gaia_proper_motion`` each star is first carried from
-    the copy's ``ref_epoch`` to the frame's mid-exposure by its proper
-    motion (the packet stage's propagation).
+    The catalog is the dataset's Gaia mirror (rapid_docs
+    ``decision-gaia-mirror``); the frame's cone of it, the footprint's
+    centre and half-diagonal, is read through
+    :class:`rapidpipe.science.catalogs.readers.GaiaReader`. Under
+    ``[intake] gaia_proper_motion`` the cone is widened by the largest
+    proper motion over the epoch offset and each star is carried from the
+    mirror's ``ref_epoch`` to the frame's mid-exposure by its proper motion
+    (the packet stage's propagation). A cone the mirror cannot serve fails
+    the job.
     """
     named = [i for i in job.inputs if i["kind"] == "input" and i["product"] == "catalogs"]
     if not named:
@@ -333,14 +341,23 @@ def _gaia_metrics(job: JobContext, image, wcs, header) -> dict | None:
         row = cur.fetchone()
     if row is None:
         raise ValueError(f"no catalogs row for {key} in job {named[0]['source_job']}")
-    if not job.settings["intake"]["gaia_proper_motion"]:
-        gaia = pq.read_table(get(row[0]), columns=["ra", "dec"])
-        return gaia_offset(np.asarray(image, float), wcs, gaia["ra"].to_numpy(), gaia["dec"].to_numpy())
-    gaia = pq.read_table(get(row[0]), columns=["ra", "dec", "pmra", "pmdec", "ref_epoch"])
-    mjd = float(header["MJD-OBS"]) + float(header["EXPTIME"]) / 2 / 86400.0
-    dt = epoch_offset_years(mjd, gaia["ref_epoch"].to_numpy(zero_copy_only=False))
-    ra, dec = propagate_positions(*(gaia[c].to_numpy(zero_copy_only=False)
-                                    for c in ("ra", "dec", "pmra", "pmdec")), dt)
+    reader = gaia_reader(row[0])
+    ny, nx = np.asarray(image).shape
+    corners = wcs.all_pix2world([[0.5, 0.5], [nx + 0.5, 0.5], [nx + 0.5, ny + 0.5], [0.5, ny + 0.5]], 1)
+    ra0, dec0, radius = cone_of_corners(tuple(float(v) for v in np.asarray(corners).ravel()))
+    propagate = bool(job.settings["intake"]["gaia_proper_motion"])
+    dt = 0.0
+    if propagate:
+        mjd = float(header["MJD-OBS"]) + float(header["EXPTIME"]) / 2 / 86400.0
+        ref_epoch = reader.ref_epoch if reader.ref_epoch is not None else GAIA_DEFAULT_REF_EPOCH
+        dt = epoch_offset_years(mjd, ref_epoch)
+        radius += GAIA_PM_MAX_ARCSEC_PER_YEAR * abs(dt)
+    gaia = reader(ra0, dec0, radius)
+    if gaia is None:
+        raise ValueError(f"Gaia mirror {reader.root} cannot serve the frame's cone at {ra0:.5f} {dec0:.5f}")
+    ra, dec = gaia["ra"], gaia["dec"]
+    if propagate:
+        ra, dec = propagate_positions(ra, dec, gaia["pmra"], gaia["pmdec"], dt)
     return gaia_offset(np.asarray(image, float), wcs, ra, dec)
 
 
