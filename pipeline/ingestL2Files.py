@@ -491,16 +491,17 @@ filter_translation = {"F062": "R062",
 
 # Nominal WFI AB zeropoints [mag], used only when the ASDF file carries no photometric
 # calibration of its own.  See compute_zptmag for why the file's own calibration is preferred.
+# The values are defined, and their derivation documented, in modules/utils/rapid_pipeline_subs.py.
 #
 # Filter  Wavelength (micron)   AB zeropoint (mag)
-# F062    0.48 - 0.76           26.4
-# F087    0.76 - 0.98           26.3
-# F106    0.93 - 1.19           26.4
-# F129    1.13 - 1.45           26.3
-# F158    1.38 - 1.77           26.4
-# F184    1.68 - 2.00           25.9
-# F213    1.95 - 2.30           25.4
-# F146    0.93 - 2.00           27.5
+# F062    0.48 - 0.76           26.04
+# F087    0.76 - 0.98           25.73
+# F106    0.93 - 1.19           25.78
+# F129    1.13 - 1.45           25.77
+# F158    1.38 - 1.77           25.80
+# F184    1.68 - 2.00           25.34
+# F213    1.95 - 2.30           25.29
+# F146    0.93 - 2.00           27.01
 
 nominal_zptmag = util.nominal_zptmag
 
@@ -893,8 +894,8 @@ def compute_zptmag(dm,optical_element):
 
     It is derived from the data's OWN photometric calibration in meta.photometry, so that it
     is self-consistent with romancal's CRDS photom and with the source injection.  The nominal
-    per-filter table was found to be 0.5 to 0.6 mag off the true calibration of these
-    simulations (F146, in particular), so it is used only as a fallback.
+    per-filter table is a median over SCAs, and individual SCAs differ from it by up to about
+    0.25 mag, so it is used only as a fallback.
 
         SB[MJy/sr] = conversion_megajanskys * S[DN/s]
         F_pt[Jy]   = conversion_megajanskys * 1e6 * pixel_area[sr] * S[DN/s]

@@ -138,14 +138,36 @@ socsim_ab_zeropoints = {
 }
 
 
-nominal_zptmag = {"F062": 26.4,
-                  "F087": 26.3,
-                  "F106": 26.4,
-                  "F129": 26.3,
-                  "F146": 27.5,
-                  "F158": 26.4,
-                  "F184": 25.9,
-                  "F213": 25.4}
+#####################################################################################################
+# Nominal AB magnitude zeropoints, for flux in DN/s, one representative value per filter.
+#
+# Used by ingest when an ASDF file has no meta.photometry, and by the reference-image pipeline in
+# place of each frame's ZPTMAG when use_nominal_zptmag is set in the [AWAICGEN] block.
+#
+# The numbers below are the median over all 18 SCAs of
+#
+#     -2.5 * log10(conversion_megajanskys * 1e6 * pixel_area / 3631)
+#
+# measured on 2026-10-29 from meta.photometry of every file in s3://rapid-commissioning-ingest-files,
+# excluding r0104301* and r0104302* (7283 of 8453 files).  The excluded files were calibrated with
+# an older CRDS context (roman_0066.pmap, roman_wfi_photom_0037) and run up to 0.29 mag off the
+# rest (roman_0072.pmap, roman_wfi_photom_0077); with them removed each (filter, SCA) carries a
+# single calibration.  The spread across SCAs within a filter is 0.39 to 0.42 mag, WFI01 always
+# lowest and WFI17/WFI18 highest, which is what a single per-filter number averages over.
+#
+# These run 0.14 to 0.15 mag above the SOC-sim zeropoints above.  They replace an earlier table
+# (26.4, 26.3, 26.4, 26.3, 27.5, 26.4, 25.9, 25.4) of unknown provenance that ran 0.1 to 0.6 mag
+# above this calibration.
+#####################################################################################################
+
+nominal_zptmag = {"F062": 26.04,
+                  "F087": 25.73,
+                  "F106": 25.78,
+                  "F129": 25.77,
+                  "F146": 27.01,
+                  "F158": 25.80,
+                  "F184": 25.34,
+                  "F213": 25.29}
 
 
 #####################################################################################################
