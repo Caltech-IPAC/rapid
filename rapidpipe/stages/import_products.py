@@ -16,11 +16,21 @@ The job's scope names what to import, relative to ``source_dir``::
                  "l2": "<L2 FITS>", "difference": "<difference job directory>"}],
      "reference": {"rfid": 4, "dir": "<reference job directory>"},
      "psf": {"kind": "science", "path": "<science-image PSF>"},
-     "gaia": {"name": "gaia", "version": "DR3", "path": "<Gaia Parquet>"}}
+     "gaia": {"name": "gaia", "version": "DR3", "prefix": "<the Gaia mirror's prefix>"}}
 
-Every key is optional. ``epochs`` holds at most one exposure, because a
-source set's job binds one key of ``sources`` (``schema.sql``). The ids are
-the source system's and are kept as they are in the id columns.
+Every key is optional, ``source_dir`` too when only ``gaia`` is given.
+``epochs`` holds at most one exposure, because a source set's job binds
+one key of ``sources`` (``schema.sql``). The ids are the source system's
+and are kept as they are in the id columns.
+
+``gaia`` registers the team's Gaia mirror (rapid_docs
+``decision-gaia-mirror``, 2026-10-29: the layout ``python -m
+rapidpipe.science.catalogs.store`` writes, checked for
+``partition_info.csv`` and a complete ``gaia.json``) as the dataset's
+``catalogs`` row, its location the prefix's URL (``s3://``, or a
+directory as ``file://``), nothing copied; the manifest records the
+mirror's release, epoch, rows and columns (``gaia``). The box per dataset
+that preceded the mirror is no longer a form of this scope.
 
 An epoch writes ``exposures``, ``l2files``, ``diffimages`` and ``sources``
 and copies the L2 file and the difference job's images (difference image,
@@ -40,7 +50,8 @@ them, as the difference stage does. ``reference`` writes
 the reference-image PSF the difference stage also reads, ``kind``
 ``reference``; its ``psfid`` is drawn from the table's identity, never
 supplied: an explicit id ahead of the sequence makes a later drawn insert
-fail on the key, and the ``psf`` stage's rows are drawn); ``gaia`` writes ``catalogs`` under the job's dataset.
+fail on the key, and the ``psf`` stage's rows are drawn); ``gaia`` writes ``catalogs`` under the job's dataset,
+the mirror's prefix named.
 
 The kind is declared in the scope and is part of the PSF's key. `dev`'s
 PSF files carry it as ``PSFKIND`` (:data:`PSFKIND`): a file whose keyword
@@ -52,6 +63,7 @@ keyword as it was (``psf.PSFKIND``, null when absent).
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -64,6 +76,8 @@ from astropy.wcs import WCS
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.science.catalogs.readers import mirror_root
+from rapidpipe.science.catalogs.store import GAIA_INFO, Store
 from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.science.intake import exposure_identifiers
 from rapidpipe.science.limmag import image_hdu_index, limiting_magnitude
@@ -106,7 +120,9 @@ PSFKIND = {"science": "sciimage_psf", "reference": "refimage_psf"}
 def run(job: JobContext) -> None:
     settings = job.settings["import"]
     scope = job.scope
-    source = Path(scope["source_dir"])
+    source = Path(scope["source_dir"]) if "source_dir" in scope else None
+    if source is None and (scope.get("epochs") or "reference" in scope or "psf" in scope):
+        raise ValueError("the scope names files to copy but no source_dir")
     epochs = scope.get("epochs", [])
     if len(epochs) > 1:
         raise ValueError("an import job imports at most one epoch: a source set's job binds one key")
@@ -122,14 +138,36 @@ def run(job: JobContext) -> None:
         recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
     if "gaia" in scope:
         gaia = scope["gaia"]
+        location, recorded["gaia"] = _mirror(gaia["prefix"])
         tables["catalogs"] = [{"dataset": job.dataset, "name": gaia["name"], "version": gaia["version"],
-                               "location": _copy(job, source / gaia["path"])[0]}]
+                               "location": location}]
     outputs = []
     for table, rows in tables.items():
         data = rows if isinstance(rows, pa.Table) else pa.Table.from_pylist(rows)
         pq.write_table(data, job.path / f"{table}.parquet")
         outputs.append((table, f"{table}.parquet"))
     job.write_manifest(outputs, **recorded)
+
+
+def _mirror(prefix: str) -> tuple[str, dict]:
+    """The Gaia mirror at ``prefix``, named as a ``catalogs`` location, and its ingest record.
+
+    ``prefix`` is ``s3://bucket/prefix``, a ``file://`` URL or a directory;
+    the location recorded is the URL (a directory as ``file://``). The
+    mirror must hold ``partition_info.csv`` and its ingest record
+    ``gaia.json``, which must say complete; nothing is copied.
+    """
+    url = prefix if prefix.startswith(("s3://", "file://")) else Path(prefix).resolve().as_uri()
+    store = Store(mirror_root(url))
+    for name in ("partition_info.csv", GAIA_INFO):
+        if not store.exists(name):
+            raise ValueError(f"{prefix}: no {name}; not a Gaia mirror "
+                             "(python -m rapidpipe.science.catalogs.store)")
+    info = json.loads(store.read_text(GAIA_INFO))
+    if not info.get("complete"):
+        raise ValueError(f"{prefix}: the ingest record says the mirror is not complete")
+    return url.rstrip("/") + "/", {k: info.get(k) for k in
+                                   ("release", "ref_epoch", "rows", "leaves_total", "columns", "tool")}
 
 
 def _copy(job: JobContext, path: Path) -> tuple[str, str]:
