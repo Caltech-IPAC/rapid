@@ -371,6 +371,10 @@ def get_datetime_of_last_file_written_to_bucket(path):
 
     s = sorted([datetime.strptime(dt, "%Y-%m-%d %H:%M:%S") for dt in file_datetime])
 
+    if len(s) == 0:
+        print("No files written to S3 bucket path; returning None")
+        return None,None
+
     print("After sorting...")
 
     for line in s:

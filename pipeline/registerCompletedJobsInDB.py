@@ -407,7 +407,8 @@ if __name__ == '__main__':
             product_bucket_path = "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/"
             ended_dt,last_file_written_to_bucket = util.get_datetime_of_last_file_written_to_bucket(product_bucket_path)
 
-            ended_str = str(ended_dt)
+            # With no files in the bucket path (e.g., reference image discarded), use the job start time.
+            ended_str = str(ended_dt) if ended_dt is not None else started_str
 
             print("last_file_written_to_bucket =",last_file_written_to_bucket)
             print("From S3 bucket listing: ended_str =",ended_str)

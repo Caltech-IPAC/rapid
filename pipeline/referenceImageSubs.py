@@ -453,7 +453,9 @@ def generateReferenceImage(s3_client,
 
     if coverage_fraction_actual < min_coverage_fraction:
         print("*** Warning: Actual coverage fraction is below minimum; reference image discarded; quitting...")
-        exit(33)
+        # Exit 0 so that AWS Batch succeeds; registration reads exit code 33 from this line of the log.
+        print("terminating_exitcode =",33)
+        exit(0)
 
 
     # Upload ancillary reference-image products to S3 bucket.  Do not upload the reference image file and
