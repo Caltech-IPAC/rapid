@@ -52,3 +52,7 @@ roman_datamodels>=1.1
 romancal>=1.1
 gwcs>=1.0
 sympy>=1.12
+# rapidpipe.science.catalogs.store streams the NED collection, NED-LVS and
+# LINCC's Gaia leaves over HTTP with requests (imported at module scope;
+# the pipeline image's conda environment carries it through astroquery).
+requests>=2.31

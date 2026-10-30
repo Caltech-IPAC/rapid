@@ -48,6 +48,7 @@ OPTIONAL_BY_REQUIREMENT = {
     "sympy": "sympy",
     "photutils": "photutils.psf",
     "galsim": "galsim.roman",
+    "requests": "requests",
 }
 
 
