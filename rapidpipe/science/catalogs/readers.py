@@ -13,7 +13,7 @@ order-6 HEALPix parquet files that :mod:`rapidpipe.science.catalogs.store`
 builds under ``<prefix>/objectdir_hp6/hp6=<pixel>/part.parquet`` (S3 or a
 local dir).
 
-    reader = Hp6NedReader("s3://<the inputs bucket>/catalogs/ned")
+    reader = Hp6NedReader("s3://<the catalogs bucket>/ned")
 
 Contract (`dev`'s ``providers.NedSliceReader``): ``reader(ra_deg, dec_deg,
 radius_arcsec)`` returns column arrays keyed by NED_COLUMNS for every NED
@@ -33,13 +33,13 @@ Also here: LvsReader, the same contract over NED-LVS (``<prefix>/lvs/
 nedlvs.parquet``, built by ``ingest-lvs``), which at ~2.1 M rows is simply
 held whole in memory rather than cut into pixel files.
 
-    reader = LvsReader("s3://<the inputs bucket>/catalogs/ned")
+    reader = LvsReader("s3://<the catalogs bucket>/ned")
 
 And GaiaReader, the same contract over the local Gaia DR3 copy (its own
 prefix, built by ``ingest-gaia`` or ``gaia-from-table``): LINCC's partition
 layout kept as is, a cone read as the few parquet row groups it touches.
 
-    reader = GaiaReader("s3://<the inputs bucket>/catalogs/gaia/DR3")
+    reader = GaiaReader("s3://<the catalogs bucket>/gaia/DR3")
 """
 
 import json
