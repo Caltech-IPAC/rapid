@@ -142,6 +142,8 @@ J_PKT=$(rp job local --run $RUN --stage packet --scope '{"expid": 4040101, "sca"
 
 The packet job's JSON ends with `"kafka": {"error": "KafkaTimeoutError: Unable to bootstrap from ['127.0.0.1:9']"}`, which is the redirect working.
 
+The number `rp official change` printed is the change group's id, and every publish prints its own: `rp official undo <id> --who W --why Y` reverses that one group, and `sql "SELECT id, run, product, key FROM official WHERE opened_group = <id> OR closed_group = <id>"` shows what it did (a refused attempt consumes an id too, so they need not be consecutive).
+
 ### Check it
 
 ```sh
