@@ -21,8 +21,10 @@ dataset (the run's). Recorded inputs at launch, every one an ``input`` row:
   ported (plan, Part 2). A trigger in several objects takes the lowest
   ``aid`` (`dev`'s rule).
 - ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
-- ``catalogs``: exactly one, the Gaia product, by its whole key (``dataset``,
-  ``name``, ``version``; a key without ``dataset``, as runs before it named, reads too).
+- ``catalogs``: exactly one, the dataset's Gaia mirror, by its whole key (``dataset``,
+  ``name``, ``version``; a key without ``dataset``, as runs before it named, reads too);
+  its location is the mirror's prefix (rapid_docs ``decision-gaia-mirror``), opened
+  by :class:`rapidpipe.science.catalogs.readers.GaiaReader`.
 - ``refimages``: exactly one, the reference whose mosaic catalog
   (``refimcatalogs`` cattype 1) gives the star and galaxy matches.
 
@@ -75,9 +77,13 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   image measured is the window's published one (SFFT since the
   differencer switch, with ``sfftdiffpsf.fits``, as `dev`'s ``diff_flavor =
   sfft``; ZOGY's ``diffpsf.fits`` for a window image published before it).
-- ``gaiaMatches``: the Gaia product, propagated by proper motion from its
-  ``ref_epoch`` to the trigger, within ``gaia_radius_arcsec``, at most
-  ``gaia_max_matches``; ``refStarMatches``/``refGalaxyMatches`` from the
+- ``gaiaMatches``: the chip's cone of the Gaia mirror, the footprint's centre
+  and half-diagonal widened by the largest proper motion over the epoch
+  offset, read as the row groups whose ``_healpix_29`` statistics overlap it,
+  every row propagated by proper motion from the mirror's ``ref_epoch`` to
+  the trigger, within ``gaia_radius_arcsec``, at most ``gaia_max_matches``;
+  the manifest's ``packet.gaia`` records the release, the epoch, the cone and
+  the leaves and row groups read; ``refStarMatches``/``refGalaxyMatches`` from the
   reference mosaic catalog, likewise; ``ssMatches``, ``nedMatches`` and
   ``lvsMatches`` null (not run: deferred by the plan).
 - ``reliability`` from ``sources.rb`` (the difference job's real/bogus
@@ -136,7 +142,9 @@ from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
     VERSION, AlertContainer, assemble_alert, load_schema, sync_marker_for)
 from rapidpipe.science.alerts.crossmatch import (
-    GAIA_COLUMNS, build_gaiacat, epoch_offset_years, load_refcat, match_gaiacat, match_refcat)
+    GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, build_gaiacat, epoch_offset_years,
+    load_refcat, match_gaiacat, match_refcat)
+from rapidpipe.science.catalogs.readers import GaiaReader, cone_of_corners, gaia_reader
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES, extract_stamp, load_fits_image
 from rapidpipe.science.alerts.records import (
     ALERTABLE_FLAGS, Cutouts, ForcedPhot, ObjectRecord, Source)
@@ -266,7 +274,7 @@ class Read:
     trigger_image: WindowImage
     reuse: dict[int, dict]                       # forced_id -> predecessor row
     gaia_job: int
-    gaia_path: Path
+    gaia: GaiaReader                             # the dataset's Gaia mirror
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
 
@@ -390,7 +398,7 @@ def _read(job: JobContext) -> Read:
         where, values = _key_where(gaia_in["key"], "c")
         cur.execute("SELECT c.location FROM catalogs c WHERE c.job = %s AND " + where,
                     (gaia_in["source_job"], *values))
-        gaia_path = get(cur.fetchone()["location"])
+        gaia_location = cur.fetchone()["location"]
         cur.execute("SELECT c.filename FROM refimcatalogs c JOIN refimages r"
                     " ON r.job = c.job AND r.rfid = c.rfid"
                     " WHERE c.job = %s AND c.cattype = %s AND "
@@ -409,7 +417,7 @@ def _read(job: JobContext) -> Read:
                 flags_zero=len(alertable), triggers=triggers,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
-                gaia_job=gaia_in["source_job"], gaia_path=gaia_path,
+                gaia_job=gaia_in["source_job"], gaia=gaia_reader(gaia_location),
                 refcat_path=get(ref["filename"]), reads=reads)
 
 
@@ -550,18 +558,27 @@ def history(trigger: tuple[int, Source], members: list[tuple[int, Source]],
     return prv, count
 
 
-def _gaia_catalog(path: Path, mjd: float):
-    table = pq.read_table(path, columns=[*GAIA_COLUMNS, "ref_epoch"])
-    epochs = set(table.column("ref_epoch").to_pylist())
-    if len(epochs) > 1:
-        raise ValueError(f"{path}: {len(epochs)} reference epochs; one expected")
-    columns = {}
-    for name in GAIA_COLUMNS:
-        column = table.column(name)
-        columns[name] = (np.array(column.to_pylist(), dtype=object) if name == "phot_variable_flag"
-                         else column.to_numpy(zero_copy_only=False))
-    dt = epoch_offset_years(mjd, float(epochs.pop())) if epochs else 0.0
-    return build_gaiacat(columns, dt_years=dt)
+def _gaia_catalog(reader: GaiaReader, corners: tuple[float, ...], mjd: float):
+    """The chip's cone of the Gaia mirror, propagated to ``mjd`` and tree-built, and its record.
+
+    The cone is the footprint's centre and half-diagonal
+    (:func:`cone_of_corners`) widened by the largest proper motion over the
+    epoch offset (`dev`'s rule), so a star that drifts into the chip is
+    fetched. A cone the mirror cannot serve (a partition missing from a copy
+    not marked complete) fails the job: the catalog is a required input.
+    """
+    ra, dec, radius = cone_of_corners(corners)
+    ref_epoch = reader.ref_epoch if reader.ref_epoch is not None else GAIA_DEFAULT_REF_EPOCH
+    dt = epoch_offset_years(mjd, ref_epoch)
+    radius += GAIA_PM_MAX_ARCSEC_PER_YEAR * abs(dt)
+    before = len(reader.reads)
+    columns = reader(ra, dec, radius)
+    if columns is None:
+        raise ValueError(f"Gaia mirror {reader.root} cannot serve the cone at {ra:.5f} {dec:.5f}")
+    record = {"release": reader.release, "ref_epoch": ref_epoch, "rows": int(columns["ra"].size),
+              "cone": {"ra": ra, "dec": dec, "radius_arcsec": radius},
+              "reads": [list(r) for r in reader.reads[before:]]}
+    return build_gaiacat(columns, dt_years=dt), record
 
 
 def run(job: JobContext) -> None:
@@ -616,9 +633,13 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     t0 = time.perf_counter()
     ra = [s.ra for s in read.triggers]
     dec = [s.dec for s in read.triggers]
-    gaia = match_gaiacat(ra, dec, _gaia_catalog(read.gaia_path, trigger_mjd),
-                         radius_arcsec=float(settings["gaia_radius_arcsec"]),
-                         n_max=int(settings["gaia_max_matches"])) if read.triggers else []
+    gaia_record = None
+    if read.triggers:
+        catalog, gaia_record = _gaia_catalog(read.gaia, read.trigger_image.corners, trigger_mjd)
+        gaia = match_gaiacat(ra, dec, catalog, radius_arcsec=float(settings["gaia_radius_arcsec"]),
+                             n_max=int(settings["gaia_max_matches"]))
+    else:
+        gaia = []
     refcat = load_refcat(str(read.refcat_path)) if read.refcat_path else None
     refs = (match_refcat(ra, dec, refcat, radius_arcsec=float(settings["refcat_radius_arcsec"]),
                          n_max=int(settings["refcat_max_matches"]))
@@ -706,5 +727,5 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                                             if source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
             "window_images": len(window), "forced_rows": len(forced_rows),
             "forced_measured": measured, "forced_reused": len(forced_rows) - measured,
-            "gaia_matches": len(external),
+            "gaia_matches": len(external), "gaia": gaia_record,
             "timing_s": {k: round(v, 3) for k, v in timing.items()}}
