@@ -480,7 +480,8 @@ def _run_single_core_job(jids,log_fnames,index_thread):
         product_bucket_path = "s3://" + product_s3_bucket_base + "/" + proc_subdir + '/jid' + str(jid) + "/"
         ended_dt,last_file_written_to_bucket = util.get_datetime_of_last_file_written_to_bucket(product_bucket_path)
 
-        ended_str = str(ended_dt)
+        # With no files in the bucket path (e.g., reference image discarded), use the job start time.
+        ended_str = str(ended_dt) if ended_dt is not None else started_str
 
         fh.write(f"last_file_written_to_bucket = {last_file_written_to_bucket}\n")
         fh.write(f"From S3 bucket listing: ended_str = {ended_str}\n")
