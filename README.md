@@ -35,7 +35,7 @@ The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rap
 
 ### The Gaia catalog
 
-The pipeline reads Gaia DR3 from a mirror of LINCC's HATS catalog, one copy per release, read as a cone per chip ([the ruling](https://roman-rapid.readthedocs.io/en/latest/system/decisions.html#decision-gaia-mirror)); the team's is in the inputs bucket under `catalogs/gaia/DR3/` ([Datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html#hlwas-r00342)). A local one with only the leaf the HLWAS r00342 field is on, order-2 pixel 138 (a 212 MB download), is built in the image, in the current directory, from `https://data.lsdb.io/hats/gaia_dr3/gaia/`. Its record says it is not complete, and the import step below registers it as `"partial": true`, which the team's dataset must never be:
+The pipeline reads Gaia DR3 from a mirror of LINCC's HATS catalog, one copy per release, read as a cone per chip ([the ruling](https://roman-rapid.readthedocs.io/en/latest/system/decisions.html#decision-gaia-mirror)); the team's is in the catalogs bucket under `gaia/DR3/` ([Datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html#hlwas-r00342)). A local one with only the leaf the HLWAS r00342 field is on, order-2 pixel 138 (a 212 MB download), is built in the image, in the current directory, from `https://data.lsdb.io/hats/gaia_dr3/gaia/`. Its record says it is not complete, and the import step below registers it as `"partial": true`, which the team's dataset must never be:
 
 ```sh
 podman run --rm -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/python3 "$IMAGE" \
