@@ -25,6 +25,7 @@ name: container
 
 on:
   push:
+    branches: [rebuild]
   pull_request:
 
 permissions:

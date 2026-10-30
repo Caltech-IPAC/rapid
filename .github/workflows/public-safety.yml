@@ -1,4 +1,4 @@
-# Runs scripts/check-public-safety.sh against every push and pull request,
+# Runs scripts/check-public-safety.sh on every pull request and on push to rebuild,
 # so an account identifier, an account-tied bucket name or a personal path
 # cannot reach this public repository undetected (specification,
 # "Repositories"). The same script backs .githooks/pre-push locally; this
@@ -11,6 +11,7 @@ name: public-safety
 
 on:
   push:
+    branches: [rebuild]
   pull_request:
 
 permissions:

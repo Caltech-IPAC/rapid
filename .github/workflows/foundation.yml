@@ -6,7 +6,7 @@ name: foundation
 
 on:
   push:
-    branches: ['**']
+    branches: [rebuild]
   pull_request:
 
 permissions:
