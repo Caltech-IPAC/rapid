@@ -152,6 +152,14 @@ sql "SELECT count(*) FROM packets_official WHERE dataset = 'r00342-local'"
 
 The products are under `rapid-local/out/$RUN/<stage>/<job>/1/`. `rp job show <job>` prints a job's inputs, manifest and bindings. When you are done, `podman pod rm -f rapid-local` removes the database and both containers. `rapid-local/` stays until you delete it.
 
+### Running it again
+
+A second `run create` for the same dataset is refused at `official change` (`already has open binding 1`): the first run's live binding is still open, and so is every product binding it published, because each `"binding": null` above expects its key unbound. Nothing needs resetting; the table is designed to be superseded or added to.
+
+- **Supersede the first run.** Close the live binding in the same group that opens the new one, `[{"close": 1}, {"open": {"survey": "HLWAS", "dataset": "r00342-local", "run": $RUN}}]`, then in each `--expects` put the key's current binding id in place of `null`: `sql "SELECT id, product, key FROM official WHERE closed_at IS NULL AND key->>'dataset' = 'r00342-local'"` lists them. Each publish then closes the old binding and opens its own in one recorded group, the first run's rows stay closed with who, when and why, and `rp official undo <group-id>` reverses any group. The loop (`rp loop`) does this by itself from the open rows; `job local` leaves it to you.
+- **Run beside the first.** Give the new run its own dataset, `--dataset r00342-local2`, and use that name in every key: a dataset is its own namespace with its own live binding, and nothing of the first run is touched.
+- **Start empty.** `podman pod rm -f rapid-local`, `rm -rf rapid-local/out`, and the database section again: only when you want the quickstart verbatim, run ids and all.
+
 ## Repository rules
 
 This repository is public and portable. Account identifiers, bucket names and hostnames are injected at deploy time, never committed. Reference bulk data artifacts (product listings, large generated files) with the command to reproduce them instead of committing them.
