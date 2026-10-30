@@ -26,11 +26,13 @@ and are kept as they are in the id columns.
 ``gaia`` registers the team's Gaia mirror (rapid_docs
 ``decision-gaia-mirror``, 2026-10-29: the layout ``python -m
 rapidpipe.science.catalogs.store`` writes, checked for
-``partition_info.csv`` and a complete ``gaia.json``) as the dataset's
+``partition_info.csv`` and a ``gaia.json`` that says complete, or
+``"partial": true`` for a copy of some leaves) as the dataset's
 ``catalogs`` row, its location the prefix's URL (``s3://``, or a
 directory as ``file://``), nothing copied; the manifest records the
-mirror's release, epoch, rows and columns (``gaia``). The box per dataset
-that preceded the mirror is no longer a form of this scope.
+mirror's release, epoch, rows, leaves, completeness and columns
+(``gaia``). The box per dataset that preceded the mirror is no longer a
+form of this scope.
 
 An epoch writes ``exposures``, ``l2files``, ``diffimages`` and ``sources``
 and copies the L2 file and the difference job's images (difference image,
@@ -138,7 +140,7 @@ def run(job: JobContext) -> None:
         recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
     if "gaia" in scope:
         gaia = scope["gaia"]
-        location, recorded["gaia"] = _mirror(gaia["prefix"])
+        location, recorded["gaia"] = _mirror(gaia["prefix"], partial=bool(gaia.get("partial")))
         tables["catalogs"] = [{"dataset": job.dataset, "name": gaia["name"], "version": gaia["version"],
                                "location": location}]
     outputs = []
@@ -149,13 +151,15 @@ def run(job: JobContext) -> None:
     job.write_manifest(outputs, **recorded)
 
 
-def _mirror(prefix: str) -> tuple[str, dict]:
+def _mirror(prefix: str, partial: bool = False) -> tuple[str, dict]:
     """The Gaia mirror at ``prefix``, named as a ``catalogs`` location, and its ingest record.
 
     ``prefix`` is ``s3://bucket/prefix``, a ``file://`` URL or a directory;
     the location recorded is the URL (a directory as ``file://``). The
     mirror must hold ``partition_info.csv`` and its ingest record
-    ``gaia.json``, which must say complete; nothing is copied.
+    ``gaia.json``, which must say complete unless ``partial`` says a copy
+    of some leaves is meant (a developer's, built with ``--leaves``; a job
+    whose cone falls off it fails); nothing is copied.
     """
     url = prefix if prefix.startswith(("s3://", "file://")) else Path(prefix).resolve().as_uri()
     store = Store(mirror_root(url))
@@ -164,10 +168,12 @@ def _mirror(prefix: str) -> tuple[str, dict]:
             raise ValueError(f"{prefix}: no {name}; not a Gaia mirror "
                              "(python -m rapidpipe.science.catalogs.store)")
     info = json.loads(store.read_text(GAIA_INFO))
-    if not info.get("complete"):
-        raise ValueError(f"{prefix}: the ingest record says the mirror is not complete")
+    if not info.get("complete") and not partial:
+        raise ValueError(f"{prefix}: the ingest record says the mirror is not complete"
+                         " (a copy of some leaves is registered with \"partial\": true)")
     return url.rstrip("/") + "/", {k: info.get(k) for k in
-                                   ("release", "ref_epoch", "rows", "leaves_total", "columns", "tool")}
+                                   ("release", "ref_epoch", "rows", "leaves_done", "leaves_total",
+                                    "complete", "columns", "tool")}
 
 
 def _copy(job: JobContext, path: Path) -> tuple[str, str]:
