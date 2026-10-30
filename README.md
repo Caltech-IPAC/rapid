@@ -15,7 +15,7 @@ This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) 
 - Network access to the public bucket `s3://stpubdata` (read unsigned, no AWS account) and to `https://roman-crds.stsci.edu` (the PSF stage's reference).
 - The RuBR-AT model, which scores the SFFT difference's candidates: the difference job reads it as a Batch job does, the bucket from the SSM parameter `[difference.rubrat] model_bucket_parameter` names and the files under its `model_key`, so it runs on a RAPID host under the host's instance role (`rapid_systems`' `cloudformation/rapid-storage-buckets.yaml` carries the read).
 - The pipeline image: the team's `rapid-pipeline:rebuild-<sha>`, pulled as [The image](#the-image) says, or one you build ([`containers/README.md`](containers/README.md)).
-- A Gaia DR3 catalog covering the field, as one Parquet file: [The Gaia catalog](#the-gaia-catalog) builds the team's `gaia-dr3-hlwas-r00342-box.parquet`.
+- A Gaia DR3 mirror covering the field, in the layout the pipeline reads: [The Gaia catalog](#the-gaia-catalog) builds a local one from the one LINCC leaf the field is on.
 - PostgreSQL 18 as the public `docker.io/library/postgres:18` image, the one CI uses.
 
 ### The image
@@ -35,22 +35,14 @@ The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rap
 
 ### The Gaia catalog
 
-The team's file is every column of Gaia DR3 over the HLWAS r00342 footprint's box with a 0.2-degree margin, from the public ESA Gaia archive; the query is in the file's own metadata. This builds it in the image, in the current directory, in about 20 seconds to a minute and a half (152 columns; 34,171 rows, 16 MB, on 2026-10-26, and 23,499, 19,082 and 29,856 rows on three builds on 2026-10-27, the archive printing a "release 3.15" banner; the team's copy is the 34,171-row file):
+The pipeline reads Gaia DR3 from a mirror of LINCC's HATS catalog, one copy per release, read as a cone per chip ([the ruling](https://roman-rapid.readthedocs.io/en/latest/system/decisions.html#decision-gaia-mirror)); the team's is in the inputs bucket under `catalogs/gaia/DR3/` ([Datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html#hlwas-r00342)). A local one with only the leaf the HLWAS r00342 field is on, order-2 pixel 138 (a 212 MB download), is built in the image, in the current directory, from `https://data.lsdb.io/hats/gaia_dr3/gaia/`. Its record says it is not complete, and the import step below registers it as `"partial": true`, which the team's dataset must never be:
 
 ```sh
-podman run --rm -i -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/python3 "$IMAGE" - <<'EOF'
-import pyarrow as pa, pyarrow.parquet as pq
-from astroquery.gaia import Gaia
-query = "SELECT * FROM gaiadr3.gaia_source WHERE ra BETWEEN 6.9 AND 11.2 AND dec BETWEEN -45.7 AND -42.6"
-table = pa.Table.from_pandas(Gaia.launch_job_async(query).get_results().to_pandas(), preserve_index=False)
-assert table.num_rows < 50000, "the archive caps a job at 50,000 rows: split the box"
-pq.write_table(table.replace_schema_metadata({**table.schema.metadata, b"query": query.encode()}),
-               "/out/gaia-dr3-hlwas-r00342-box.parquet")
-print(table.num_rows, "rows")
-EOF
+podman run --rm -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/python3 "$IMAGE" \
+  -m rapidpipe.science.catalogs.store ingest-gaia --dest /out/gaia --leaves 2/138 --jobs 1
 ```
 
-The team's copy is in the inputs bucket ([Datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html#hlwas-r00342)); this query rebuilt it on 2026-10-26 with the same rows and identical values in every column.
+It prints the ingest record: `"leaves_done": 1`, `"complete": false` (one leaf of 2,016), and the rows. `python -m rapidpipe.science.catalogs.store --help` lists the other builders (NED, NED-LVS, the whole Gaia mirror, and `gaia-from-table` for a catalog of your own on Gaia's columns).
 
 ### The environment
 
@@ -58,7 +50,7 @@ The local values are set, and the team deployment's values are commented. The pa
 
 ```sh
 export IMAGE=<the pipeline image>                 # e.g. rapid-pipeline:rebuild-<sha>
-export GAIA=$PWD/gaia-dr3-hlwas-r00342-box.parquet  # The Gaia catalog, above
+export GAIA=$PWD/gaia                             # The Gaia catalog, above: the local mirror's directory
 export PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=rapid PGUSER=postgres PGPASSWORD=local
 export RAPIDPIPE_OUTPUTS_ROOT=file:///work/out    # ./rapid-local/out, as the container sees it
 export AWS_DEFAULT_REGION=us-east-1               # the buckets' and SSM's region (boto3 reads this name, not AWS_REGION)
@@ -83,7 +75,7 @@ sql() { podman exec rapid-local-db psql -U postgres -d rapid -X -tA -c "$1"; }
 ### The database
 
 ```sh
-mkdir -p "$L/out" && cp "$GAIA" "$L/gaia.parquet"
+mkdir -p "$L/out" && cp -r "$GAIA" "$L/gaia"
 podman pod create --name rapid-local
 podman run -d --pod rapid-local --name rapid-local-db -e POSTGRES_PASSWORD=local -e POSTGRES_DB=rapid docker.io/library/postgres:18
 until podman exec rapid-local-db pg_isready -h 127.0.0.1 -U postgres -d rapid; do sleep 1; done
@@ -106,7 +98,7 @@ echo '[{"open": {"survey": "HLWAS", "dataset": "r00342-local", "run": '$RUN'}}]'
 rp official change --group /work/live.json --who "$USER" --why "local run $RUN live"
 
 J_GAIA=$(rp job local --run $RUN --stage import \
-  --scope '{"source_dir": "/work", "gaia": {"name": "gaia", "version": "DR3", "path": "gaia.parquet"}}' \
+  --scope '{"gaia": {"name": "gaia", "version": "DR3", "prefix": "/work/gaia", "partial": true}}' \
   --expects '[{"product": "catalogs", "key": {"dataset": "r00342-local", "name": "gaia", "version": "DR3"}, "binding": null}]' | job_id)
 GAIA_IN='{"product": "catalogs", "key": {"dataset": "r00342-local", "name": "gaia", "version": "DR3"}, "source_job": '$J_GAIA'}'
 
