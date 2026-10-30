@@ -1,4 +1,4 @@
-"""The import stage on a synthetic source directory: two tiny exposures, a reference, a PSF, Gaia.
+"""The import stage on a synthetic source directory: two tiny exposures, a reference, a PSF, a Gaia mirror.
 
 Contracts: each output Parquet file has exactly its table's columns from
 ``database/schema.sql`` (without ``job``, and without the defaulted
@@ -28,6 +28,7 @@ from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.science.spatial import healpix_indexes, tessellation_field
 from rapidpipe.stages import import_products
+from tests.support.catalogs import write_gaia_store
 
 REPO = Path(__file__).resolve().parents[2]
 RA, DEC = 267.96138, -28.72761
@@ -97,9 +98,17 @@ def source(tmp_path: Path) -> Path:
     psf = np.zeros((9, 9), dtype=np.float32)
     psf[4, 4] = 1.0
     fits.PrimaryHDU(psf, fits.Header({"SCA": 8, "FILTER": "F146"})).writeto(src / "psf.fits")
-    pq.write_table(pa.table({"source_id": [1, 2], "ra": [RA, RA + 1e-3], "dec": [DEC, DEC]}),
-                   src / "gaia.parquet")
+    (src / "gaia").mkdir()
+    write_gaia_store(src / "gaia", [{"ra": RA, "dec": DEC, "source_id": 1},
+                                    {"ra": RA + 1e-3, "dec": DEC, "source_id": 2}])
     return src
+
+
+GAIA = {"name": "gaia", "version": "DR3", "prefix": "{source}/gaia"}
+
+
+def gaia_scope(source: Path) -> dict:
+    return {**GAIA, "prefix": GAIA["prefix"].format(source=source)}
 
 
 def fake_connect(psf_filename: str):
@@ -186,7 +195,7 @@ def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
     prefix = run_import(tmp_path, source, {
         "reference": {"rfid": 55, "dir": "ref"},
         "psf": {"kind": "science", "path": "psf.fits"},
-        "gaia": {"name": "gaia", "version": "DR3", "path": "gaia.parquet"}}, "shared")
+        "gaia": gaia_scope(source)}, "shared")
     for table in ("refimages", "refimcatalogs", "psfs", "catalogs"):
         assert set(pq.read_schema(prefix / f"{table}.parquet").names) == (
             schema_columns(table) - {"rfcatid", "psfid"})
@@ -200,8 +209,36 @@ def test_reference_psf_and_gaia_write_their_tables(tmp_path, source):
     assert manifest["psf"] == {"kind": "science", "PSFKIND": None}
     (gaia,) = read(prefix, "catalogs")
     assert (gaia["dataset"], gaia["name"], gaia["version"]) == ("D", "gaia", "DR3")
-    assert Path(gaia["location"][7:]).is_file()
+    assert gaia["location"] == (source / "gaia").resolve().as_uri() + "/"     # named, not copied
+    assert manifest["gaia"]["release"] == "gaia_test" and manifest["gaia"]["ref_epoch"] == 2016.0
     assert not (prefix / "refimimages.parquet").exists()
+
+
+def test_a_gaia_prefix_alone_needs_no_source_dir_and_a_non_mirror_is_refused(tmp_path, source):
+    prefix = tmp_path / "outputs" / "mirror-only"
+    prefix.mkdir(parents=True)
+    job = JobContext(job=1, run=1, stage="import", scope={"gaia": gaia_scope(source)},
+                     survey="S", dataset="D", settings=SETTINGS, inputs=[], attempt=1,
+                     prefix=prefix.as_uri() + "/", connect=fake_connect(""))
+    import_products.run(job)
+    assert sorted(p.name for p in prefix.iterdir()) == ["catalogs.parquet", "manifest.json"]
+    (gaia,) = read(prefix, "catalogs")
+    # a file:// URL names the same mirror
+    by_url = run_import(tmp_path, source, {"gaia": {**GAIA, "prefix": (source / "gaia").as_uri()}}, "by-url")
+    assert read(by_url, "catalogs")[0]["location"] == gaia["location"]
+    # a directory that is not a mirror, or an incomplete one, is refused before a manifest
+    with pytest.raises(ValueError, match="not a Gaia mirror"):
+        run_import(tmp_path, source, {"gaia": {**GAIA, "prefix": str(source)}}, "not-a-mirror")
+    assert not (tmp_path / "outputs" / "not-a-mirror" / "manifest.json").exists()
+    (source / "gaia" / "gaia.json").write_text(json.dumps({"release": "gaia_test", "complete": False}))
+    with pytest.raises(ValueError, match="not complete"):
+        run_import(tmp_path, source, {"gaia": gaia_scope(source)}, "incomplete")
+    # files to copy need a source_dir
+    with pytest.raises(ValueError, match="no source_dir"):
+        import_products.run(JobContext(job=1, run=1, stage="import",
+                                       scope={"psf": {"kind": "science", "path": "psf.fits"}},
+                                       survey="S", dataset="D", settings=SETTINGS, inputs=[], attempt=1,
+                                       prefix=prefix.as_uri() + "/", connect=fake_connect("")))
 
 
 def test_an_import_job_takes_at_most_one_epoch(tmp_path, source):
@@ -258,7 +295,7 @@ def test_an_import_supplies_no_identity_column_but_the_kept_source_ids(tmp_path,
     prefix = run_import(tmp_path, source, {
         "epochs": [EPOCHS[0]], "reference": {"rfid": 55, "dir": "ref"},
         "psf": {"kind": "science", "path": "psf.fits"},
-        "gaia": {"name": "gaia", "version": "DR3", "path": "gaia.parquet"}}, "all")
+        "gaia": gaia_scope(source)}, "all")
     tables = {o["table"] for o in json.loads((prefix / "manifest.json").read_text())["outputs"]}
     supplied = {(table, column) for table, column in identity_columns() if table in tables
                 and column in pq.read_schema(prefix / f"{table}.parquet").names}
