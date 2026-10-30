@@ -52,9 +52,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from rapidpipe.science.alerts.crossmatch import (
+from rapidpipe.science.alerts.crossmatch import (  # noqa: F401 (the contracts, re-exported)
     GAIA_BOOL_COLUMNS, GAIA_COLUMNS, GAIA_INT_COLUMNS, GAIA_NUMERIC_COLUMNS,
-    GAIA_STRING_COLUMNS)
+    GAIA_STRING_COLUMNS, LVS_BOOL_COLUMNS, LVS_COLUMNS, LVS_NUMERIC_COLUMNS,
+    LVS_REQUIRED_COLUMNS, LVS_STRING_COLUMNS, NED_COLUMNS, NED_REQUIRED_COLUMNS)
 from rapidpipe.science.catalogs.store import (
     GAIA_INFO, HP6_ORDER, LVS_HP6_COLUMN, LVS_INFO, LVS_PARQUET, MANIFEST_NAME, Store,
     gaia_leaf_rel, hp6_file, parse_partition_info, read_properties)
@@ -63,23 +64,8 @@ logger = logging.getLogger(__name__)
 
 NSIDE = 2 ** HP6_ORDER
 
-# ---------------------------------------------------------------------------
-# The NED and NED-LVS column contracts (`dev`'s providers.py): what a reader
-# delivers and what its matcher takes.
-# ---------------------------------------------------------------------------
-
-NED_COLUMNS = ("prefname", "ra", "dec", "ptype", "z", "zunc", "zflag")
-NED_REQUIRED_COLUMNS = ("prefname", "ra", "dec")
-
-LVS_STRING_COLUMNS = ("objname", "objtype", "z_tech", "DistMpc_method")
-LVS_BOOL_COLUMNS = ("z_qual", "Diam_qual")
-LVS_NUMERIC_COLUMNS = ("ra", "dec", "z", "z_unc",
-                       "DistMpc", "DistMpc_unc", "Diam", "Diam_ba", "Diam_pa",
-                       "ebv", "m_Ks", "m_Ks_unc", "m_W1", "m_W1_unc",
-                       "m_NUV", "m_NUV_unc", "SFR_hybrid", "SFR_hybrid_unc",
-                       "Mstar", "Mstar_unc")
-LVS_COLUMNS = LVS_STRING_COLUMNS + LVS_BOOL_COLUMNS + LVS_NUMERIC_COLUMNS
-LVS_REQUIRED_COLUMNS = ("objname", "ra", "dec")
+# The NED, NED-LVS and Gaia column contracts are crossmatch's (imported
+# above): what a reader delivers is what its matcher takes.
 
 
 def sep_arcsec(ra: np.ndarray, dec: np.ndarray,
@@ -490,6 +476,23 @@ def mirror_root(location: str) -> str:
 def gaia_reader(location: str, cache_row_groups: int = 32) -> GaiaReader:
     """The :class:`GaiaReader` over the mirror a ``catalogs`` row's location names."""
     return GaiaReader(mirror_root(location), cache_row_groups=cache_row_groups)
+
+
+#: The catalogs the packet stage reads, by the ``catalogs`` row's name: its
+#: reader and the columns it delivers.
+CATALOG_KINDS = ("gaia", "ned", "lvs")
+
+
+def catalog_reader(name: str, location: str) -> "GaiaReader | Hp6NedReader | LvsReader":
+    """The reader for a ``catalogs`` row: by its name (the kind) over its location."""
+    root = mirror_root(location)
+    if name == "gaia":
+        return GaiaReader(root)
+    if name == "ned":
+        return Hp6NedReader(root)
+    if name == "lvs":
+        return LvsReader(root)
+    raise ValueError(f"catalog {name!r}: not one of {CATALOG_KINDS}")
 
 
 def cone_of_corners(corners: tuple[float, ...]) -> tuple[float, float, float]:
