@@ -230,9 +230,14 @@ def test_a_gaia_prefix_alone_needs_no_source_dir_and_a_non_mirror_is_refused(tmp
     with pytest.raises(ValueError, match="not a Gaia mirror"):
         run_import(tmp_path, source, {"gaia": {**GAIA, "prefix": str(source)}}, "not-a-mirror")
     assert not (tmp_path / "outputs" / "not-a-mirror" / "manifest.json").exists()
-    (source / "gaia" / "gaia.json").write_text(json.dumps({"release": "gaia_test", "complete": False}))
+    (source / "gaia" / "gaia.json").write_text(json.dumps({"release": "gaia_test", "complete": False,
+                                                           "leaves_done": 1, "leaves_total": 2016}))
     with pytest.raises(ValueError, match="not complete"):
         run_import(tmp_path, source, {"gaia": gaia_scope(source)}, "incomplete")
+    # a developer's copy of some leaves is registered knowingly, and recorded as such
+    partial = run_import(tmp_path, source, {"gaia": {**gaia_scope(source), "partial": True}}, "partial")
+    recorded = json.loads((partial / "manifest.json").read_text())["gaia"]
+    assert recorded["complete"] is False and (recorded["leaves_done"], recorded["leaves_total"]) == (1, 2016)
     # files to copy need a source_dir
     with pytest.raises(ValueError, match="no source_dir"):
         import_products.run(JobContext(job=1, run=1, stage="import",
