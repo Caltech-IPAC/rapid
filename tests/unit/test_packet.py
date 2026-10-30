@@ -34,13 +34,15 @@ from astropy.wcs import WCS
 
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import load_schema
-from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS, REFCAT_COLUMNS
+from rapidpipe.science.alerts.crossmatch import REFCAT_COLUMNS
 from rapidpipe.science.alerts.records import Source
 from rapidpipe.foundation import prefix
+from rapidpipe.science.catalogs.readers import gaia_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
     Read, WindowImage, _plain, _separation, covering, neighbour, reliability, window_reach,
     write_set)
+from tests.support.catalogs import write_gaia_store
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
@@ -145,18 +147,16 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
                             "psf_fluxerr": 1.0, "science_flux": 54321.0, "science_fluxerr": 1.0,
                             "flags": 0, "time_proc": 61000.0}
     gaia_ra, gaia_dec = wcs().all_pix2world([50.0], [50.0], 1)
-    gaia = {name: [0] for name in GAIA_COLUMNS}
-    gaia.update(source_id=[42], ra=[float(gaia_ra[0])], dec=[float(gaia_dec[0])],
-                pmra=[0.0], pmdec=[0.0], phot_variable_flag=["NOT_AVAILABLE"],
-                ref_epoch=[2016.0])
-    for name in ("duplicated_source", "in_qso_candidates", "in_galaxy_candidates"):
-        gaia[name] = [False]
-    pq.write_table(pa.table(gaia), tmp_path / "gaia.parquet")
+    (tmp_path / "gaia").mkdir()
+    write_gaia_store(tmp_path / "gaia", [
+        {"source_id": 42, "ra": float(gaia_ra[0]), "dec": float(gaia_dec[0]), "pmra": 0.0, "pmdec": 0.0},
+        # a star 0.3 degrees away: in the mirror's one leaf, outside the chip's cone
+        {"source_id": 43, "ra": float(gaia_ra[0]) + 0.3, "dec": float(gaia_dec[0]) + 0.1}])
     read = Read(key={"dataset": "D", "expid": 2, "sca": 8, "fid": 8},
                 source_job=SOURCE_JOB[2], object_job={7: 5, 9: 5}, flags_zero=2,
                 triggers=[a2, b2], aid_of={1: 7, 2: 9}, objects=objects, members=members,
                 images=images, trigger_image=images[1], reuse=reuse,
-                gaia_job=3, gaia_path=tmp_path / "gaia.parquet", refcat_path=None)
+                gaia_job=3, gaia=gaia_reader((tmp_path / "gaia").as_uri()), refcat_path=None)
     out = tmp_path / "out"
     out.mkdir()
     summary = write_set(read, SETTINGS, out, out.as_uri() + "/", "D", sync_seed="test")
@@ -178,6 +178,13 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert a["refStarMatches"] is None and a["nedMatches"] is None and a["lvsMatches"] is None
     external = pq.read_table(out / "external.parquet").to_pylist()
     assert [(e["sid"], e["catid"], e["catalog_job"]) for e in external] == [(1, "42", 3)]
+    # the mirror read is recorded: the chip's cone, the rows it held, the row groups fetched
+    gaia = summary["gaia"]
+    assert gaia["release"] == "gaia_test" and gaia["ref_epoch"] == 2016.0
+    assert gaia["rows"] == 1 and gaia["reads"] and all(len(r) == 3 for r in gaia["reads"])
+    assert abs(gaia["cone"]["ra"] - RA0) < 1e-3 and abs(gaia["cone"]["dec"] - DEC0) < 1e-3
+    # the half-diagonal (7.8" for 100 px at 0.11") plus 11"/yr over the 11.8 years from 2016.0
+    assert 130.0 < gaia["cone"]["radius_arcsec"] < 145.0
 
 
 def test_index_rows_locate_their_records(tmp_path):

@@ -30,7 +30,7 @@ import pyarrow.parquet as pq
 from rapidpipe.foundation import change, create_job, create_run, publish, run_job
 from rapidpipe.foundation.local import local_path
 from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT
-from rapidpipe.science.alerts.crossmatch import GAIA_COLUMNS
+from rapidpipe.science.catalogs.store import gaia_from_table
 from rapidpipe.stages import packet
 from tests.db.foundation_helpers import write_attempt
 from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, write_refcat
@@ -93,10 +93,10 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
                        RUN_SETTINGS, SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": live}}], "tester", "live")
     write_epoch(tmp_path / "e1", [(50, 50, 400.0)])
-    gaia = tmp_path / "gaia.parquet"  # an empty Gaia product: no matches, not the contract here
-    pq.write_table(pa.table({**{name: pa.array([], pa.float64()) for name in GAIA_COLUMNS},
-                             "phot_variable_flag": pa.array([], pa.string()),
-                             "ref_epoch": pa.array([], pa.float64())}), gaia)
+    gaia = tmp_path / "gaia"  # an empty Gaia mirror: no matches, not the contract here
+    gaia_from_table(str(gaia), pa.table({"source_id": pa.array([], pa.int64()),
+                                         "ra": pa.array([], pa.float64()),
+                                         "dec": pa.array([], pa.float64())}), "gaia_test")
 
     imported = create_job(conn, live, "import", {}, expects=[
         {"product": p, "key": k, "binding": None} for p, k in (
@@ -109,7 +109,8 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
     tables["psfs"] = [{"psfid": 701, "dataset": DATASET, "fid": 8, "sca": 8, "kind": "science",
                        "checksum": "0" * 32,
                        "filename": (tmp_path / "e1" / "diffpsf.fits").as_uri()}]
-    tables["catalogs"] = [{"dataset": DATASET, "name": "gaia", "version": "DR3", "location": gaia.as_uri()}]
+    tables["catalogs"] = [{"dataset": DATASET, "name": "gaia", "version": "DR3",
+                           "location": gaia.as_uri() + "/"}]
     tables["refimages"] = [{"rfid": 801, "dataset": DATASET, "field": FIELD, "fid": 8,
                             "filename": (tmp_path / "e1" / "ref.fits").as_uri(), "checksum": "0" * 32}]
     if refcat_row:
