@@ -16,23 +16,24 @@ The job's scope names what to import, relative to ``source_dir``::
                  "l2": "<L2 FITS>", "difference": "<difference job directory>"}],
      "reference": {"rfid": 4, "dir": "<reference job directory>"},
      "psf": {"kind": "science", "path": "<science-image PSF>"},
-     "gaia": {"name": "gaia", "version": "DR3", "prefix": "<the Gaia mirror's prefix>"}}
+     "gaia": {"version": "DR3", "prefix": "<the Gaia mirror's prefix>"},
+     "ned": {"version": "36.1_20260527_v2", "prefix": "<the NED copy's prefix>"},
+     "lvs": {"version": "20260424", "prefix": "<the same prefix: lvs/ is under it>"}}
 
-Every key is optional, ``source_dir`` too when only ``gaia`` is given.
+Every key is optional, ``source_dir`` too when only catalogs are given.
 ``epochs`` holds at most one exposure, because a source set's job binds
 one key of ``sources`` (``schema.sql``). The ids are the source system's
 and are kept as they are in the id columns.
 
-``gaia`` registers the team's Gaia mirror (rapid_docs
-``decision-gaia-mirror``, 2026-10-29: the layout ``python -m
-rapidpipe.science.catalogs.store`` writes, checked for
-``partition_info.csv`` and a ``gaia.json`` that says complete, or
-``"partial": true`` for a copy of some leaves) as the dataset's
-``catalogs`` row, its location the prefix's URL (``s3://``, or a
-directory as ``file://``), nothing copied; the manifest records the
-mirror's release, epoch, rows, leaves, completeness and columns
-(``gaia``). The box per dataset that preceded the mirror is no longer a
-form of this scope.
+``gaia``, ``ned`` and ``lvs`` each register a catalog copy (rapid_docs
+``decision-gaia-mirror`` and ``decision-catalog-matches``: the layouts
+``python -m rapidpipe.science.catalogs.store`` writes, checked for the
+copy's record, which must say complete, or ``"partial": true`` for a copy
+of some leaves) as one of the dataset's ``catalogs`` rows, named by its
+kind, its location the prefix's URL (``s3://``, or a directory as
+``file://``), nothing copied; the manifest records each copy's release,
+rows and completeness under its name. The box per dataset that preceded
+the mirror is no longer a form of this scope.
 
 An epoch writes ``exposures``, ``l2files``, ``diffimages`` and ``sources``
 and copies the L2 file and the difference job's images (difference image,
@@ -52,8 +53,8 @@ them, as the difference stage does. ``reference`` writes
 the reference-image PSF the difference stage also reads, ``kind``
 ``reference``; its ``psfid`` is drawn from the table's identity, never
 supplied: an explicit id ahead of the sequence makes a later drawn insert
-fail on the key, and the ``psf`` stage's rows are drawn); ``gaia`` writes ``catalogs`` under the job's dataset,
-the mirror's prefix named.
+fail on the key, and the ``psf`` stage's rows are drawn); the catalogs write ``catalogs`` under the job's
+dataset, each copy's prefix named.
 
 The kind is declared in the scope and is part of the PSF's key. `dev`'s
 PSF files carry it as ``PSFKIND`` (:data:`PSFKIND`): a file whose keyword
@@ -78,8 +79,8 @@ from astropy.wcs import WCS
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
-from rapidpipe.science.catalogs.readers import mirror_root
-from rapidpipe.science.catalogs.store import GAIA_INFO, Store
+from rapidpipe.science.catalogs.readers import CATALOG_KINDS, mirror_root
+from rapidpipe.science.catalogs.store import GAIA_INFO, LVS_INFO, LVS_PARQUET, MANIFEST_NAME, Store
 from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.science.intake import exposure_identifiers
 from rapidpipe.science.limmag import image_hdu_index, limiting_magnitude
@@ -138,11 +139,17 @@ def run(job: JobContext) -> None:
         row, keyword = _psf(job, source, scope["psf"])
         tables["psfs"] = [row]
         recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
-    if "gaia" in scope:
-        gaia = scope["gaia"]
-        location, recorded["gaia"] = _mirror(gaia["prefix"], partial=bool(gaia.get("partial")))
-        tables["catalogs"] = [{"dataset": job.dataset, "name": gaia["name"], "version": gaia["version"],
-                               "location": location}]
+    catalogs = []
+    for kind in CATALOG_KINDS:
+        if kind in scope:
+            spec = scope[kind]
+            if spec.get("name", kind) != kind:
+                raise ValueError(f"a {kind} catalog is named {kind!r}, not {spec['name']!r}")
+            location, recorded[kind] = _mirror(kind, spec["prefix"], partial=bool(spec.get("partial")))
+            catalogs.append({"dataset": job.dataset, "name": kind, "version": spec["version"],
+                             "location": location})
+    if catalogs:
+        tables["catalogs"] = catalogs
     outputs = []
     for table, rows in tables.items():
         data = rows if isinstance(rows, pa.Table) else pa.Table.from_pylist(rows)
@@ -151,29 +158,42 @@ def run(job: JobContext) -> None:
     job.write_manifest(outputs, **recorded)
 
 
-def _mirror(prefix: str, partial: bool = False) -> tuple[str, dict]:
-    """The Gaia mirror at ``prefix``, named as a ``catalogs`` location, and its ingest record.
+def _mirror(kind: str, prefix: str, partial: bool = False) -> tuple[str, dict]:
+    """A catalog copy at ``prefix``, named as a ``catalogs`` location, and its record.
 
     ``prefix`` is ``s3://bucket/prefix``, a ``file://`` URL or a directory;
-    the location recorded is the URL (a directory as ``file://``). The
-    mirror must hold ``partition_info.csv`` and its ingest record
-    ``gaia.json``, which must say complete unless ``partial`` says a copy
-    of some leaves is meant (a developer's, built with ``--leaves``; a job
-    whose cone falls off it fails); nothing is copied.
+    the location recorded is the URL (a directory as ``file://``). Nothing
+    is copied. What the copy must hold, by kind: ``gaia``,
+    ``partition_info.csv`` and the ingest record ``gaia.json``; ``ned``, the
+    store's ``manifest.json`` (its ``hp6`` inventory says complete); ``lvs``,
+    ``lvs/nedlvs.parquet`` and ``lvs/nedlvs.json``. A record that does not
+    say complete is refused unless ``partial`` says a copy of some leaves
+    or pixels is meant (a developer's; a job whose cone falls off it does
+    not match).
     """
     url = prefix if prefix.startswith(("s3://", "file://")) else Path(prefix).resolve().as_uri()
     store = Store(mirror_root(url))
-    for name in ("partition_info.csv", GAIA_INFO):
+    required, record_file = {"gaia": (("partition_info.csv", GAIA_INFO), GAIA_INFO),
+                             "ned": ((MANIFEST_NAME,), MANIFEST_NAME),
+                             "lvs": ((LVS_PARQUET, LVS_INFO), LVS_INFO)}[kind]
+    for name in required:
         if not store.exists(name):
-            raise ValueError(f"{prefix}: no {name}; not a Gaia mirror "
+            raise ValueError(f"{prefix}: no {name}; not a {kind} copy "
                              "(python -m rapidpipe.science.catalogs.store)")
-    info = json.loads(store.read_text(GAIA_INFO))
-    if not info.get("complete") and not partial:
-        raise ValueError(f"{prefix}: the ingest record says the mirror is not complete"
+    info = json.loads(store.read_text(record_file))
+    complete = bool(info.get("hp6", {}).get("complete") if kind == "ned" else
+                    info.get("complete", kind == "lvs"))
+    if not complete and not partial:
+        raise ValueError(f"{prefix}: the record says the {kind} copy is not complete"
                          " (a copy of some leaves is registered with \"partial\": true)")
-    return url.rstrip("/") + "/", {k: info.get(k) for k in
-                                   ("release", "ref_epoch", "rows", "leaves_done", "leaves_total",
-                                    "complete", "columns", "tool")}
+    if kind == "ned":
+        hp6 = info.get("hp6", {})
+        return url.rstrip("/") + "/", {"release": info.get("release"), "complete": complete,
+                                       **{k: hp6.get(k) for k in ("leaves_done", "leaves_total", "rows")},
+                                       "tool": info.get("tool")}
+    keys = (("release", "ref_epoch", "rows", "leaves_done", "leaves_total", "complete", "columns", "tool")
+            if kind == "gaia" else ("release", "rows", "parquet", "tool"))
+    return url.rstrip("/") + "/", {**{k: info.get(k) for k in keys}, "complete": complete}
 
 
 def _copy(job: JobContext, path: Path) -> tuple[str, str]:

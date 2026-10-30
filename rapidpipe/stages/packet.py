@@ -21,10 +21,14 @@ dataset (the run's). Recorded inputs at launch, every one an ``input`` row:
   ported (plan, Part 2). A trigger in several objects takes the lowest
   ``aid`` (`dev`'s rule).
 - ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
-- ``catalogs``: exactly one, the dataset's Gaia mirror, by its whole key (``dataset``,
-  ``name``, ``version``; a key without ``dataset``, as runs before it named, reads too);
-  its location is the mirror's prefix (rapid_docs ``decision-gaia-mirror``), opened
-  by :class:`rapidpipe.science.catalogs.readers.GaiaReader`.
+- ``catalogs``: the dataset's catalog copies, at most one per name among
+  ``gaia``, ``ned`` and ``lvs``, each by its whole key (``dataset``, ``name``,
+  ``version``; a key without ``dataset``, as runs before it named, reads too),
+  its location the copy's prefix (rapid_docs ``decision-gaia-mirror``), opened
+  by :func:`rapidpipe.science.catalogs.readers.catalog_reader`. Every catalog
+  whose ``[packet] <name>_match`` is on must be named (the loop names them;
+  a job that does not is refused); a named catalog is matched best-effort
+  (rapid_docs ``decision-catalog-matches``).
 - ``refimages``: exactly one, the reference whose mosaic catalog
   (``refimcatalogs`` cattype 1) gives the star and galaxy matches.
 
@@ -77,15 +81,19 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   image measured is the window's published one (SFFT since the
   differencer switch, with ``sfftdiffpsf.fits``, as `dev`'s ``diff_flavor =
   sfft``; ZOGY's ``diffpsf.fits`` for a window image published before it).
-- ``gaiaMatches``: the chip's cone of the Gaia mirror, the footprint's centre
-  and half-diagonal widened by the largest proper motion over the epoch
-  offset, read as the row groups whose ``_healpix_29`` statistics overlap it,
-  every row propagated by proper motion from the mirror's ``ref_epoch`` to
-  the trigger, within ``gaia_radius_arcsec``, at most ``gaia_max_matches``;
-  the manifest's ``packet.gaia`` records the release, the epoch, the cone and
-  the leaves and row groups read; ``refStarMatches``/``refGalaxyMatches`` from the
-  reference mosaic catalog, likewise; ``ssMatches``, ``nedMatches`` and
-  ``lvsMatches`` null (not run: deferred by the plan).
+- ``gaiaMatches``, ``nedMatches`` and ``lvsMatches``: each from the chip's
+  cone of its copy, the footprint's centre and half-diagonal widened by the
+  match radius and `dev`'s slack, and for Gaia by the largest proper motion
+  over the epoch offset, with every Gaia row propagated from the mirror's
+  ``ref_epoch`` to the trigger; within ``<name>_radius_arcsec``, at most
+  ``<name>_max_matches``, NED's host selection under ``ned_host_selection``.
+  A match that cannot run (the copy cannot be opened or cannot serve the
+  cone, or the slice lacks a column) ships null for the set, the schema's
+  "did not run", with the reason in the manifest's ``packet.catalogs.<name>``
+  beside the release, the cone, the rows held and (Gaia) the leaves and row
+  groups read; the set still issues. ``refStarMatches``/``refGalaxyMatches``
+  from the reference mosaic catalog, likewise; ``ssMatches`` null (not run:
+  deferred by the plan).
 - ``reliability`` from ``sources.rb`` (the difference job's real/bogus
   score, SFFT only), and on a scored trigger ``reliabilityThreshold`` and
   ``reliabilityVersion`` from ``[packet] rb_threshold`` and ``rb_version``
@@ -110,7 +118,9 @@ object container, deflate level 1, one record per block), declared tables
 ``packets`` (``packets.parquet``, the index: each record's block offset and
 length from ``fastavro.block_reader``), ``forced`` (``forced.parquet``,
 every row the packets carry, measured or reused, so the set is
-self-contained) and ``external`` (``external.parquet``, the Gaia matches).
+self-contained) and ``external`` (``external.parquet``, the catalog matches,
+each row naming its catalog's job; ``catid`` is Gaia's ``source_id`` or NED's
+``prefname``).
 The manifest's ``metrics``: ``n_packets``, the set's packets, and
 ``n_packets_snr_gt20``, those whose source's fit flux over its error is
 above 20, and ``n_packets_bright_footprint``, those whose source carries
@@ -142,9 +152,10 @@ from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
     VERSION, AlertContainer, assemble_alert, load_schema, sync_marker_for)
 from rapidpipe.science.alerts.crossmatch import (
-    GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, build_gaiacat, epoch_offset_years,
-    load_refcat, match_gaiacat, match_refcat)
-from rapidpipe.science.catalogs.readers import GaiaReader, cone_of_corners, gaia_reader
+    GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, NED_CONE_SLACK_ARCSEC, build_gaiacat,
+    build_lvscat, build_nedcat, epoch_offset_years, load_refcat, match_gaiacat, match_lvscat,
+    match_nedcat, match_refcat)
+from rapidpipe.science.catalogs.readers import CATALOG_KINDS, catalog_reader, cone_of_corners
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES, extract_stamp, load_fits_image
 from rapidpipe.science.alerts.records import (
     ALERTABLE_FLAGS, Cutouts, ForcedPhot, ObjectRecord, Source)
@@ -259,6 +270,29 @@ class WindowImage:
 
 
 @dataclasses.dataclass
+class CatalogInput:
+    """A named ``catalogs`` input: the row's job and the cone reader over its location.
+
+    ``reader`` is None, with ``error`` saying why, when the copy could not
+    be opened: the match then does not run and its field ships null.
+    """
+    name: str
+    job: int
+    reader: Any = None
+    error: str | None = None
+
+
+def _open_catalog(name: str, job: int, location: str) -> CatalogInput:
+    """The reader over a catalog's location, or the reason it could not be opened."""
+    try:
+        return CatalogInput(name, job, catalog_reader(name, location))
+    except Exception as exc:  # noqa: BLE001 - any failure to open: the match does not run
+        logger.warning("%s catalog at %s could not be opened (%s: %s); %s matching not run",
+                       name, location, type(exc).__name__, exc, name)
+        return CatalogInput(name, job, None, f"{type(exc).__name__}: {exc}")
+
+
+@dataclasses.dataclass
 class Read:
     """Everything the job reads, as plain values."""
 
@@ -273,8 +307,7 @@ class Read:
     images: list[WindowImage]
     trigger_image: WindowImage
     reuse: dict[int, dict]                       # forced_id -> predecessor row
-    gaia_job: int
-    gaia: GaiaReader                             # the dataset's Gaia mirror
+    catalogs: dict[str, CatalogInput]            # by name, the ones the job names
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
 
@@ -301,7 +334,13 @@ def _read(job: JobContext) -> Read:
         raise ValueError(f"job {job.job}: the sources input {key} is not the scope's key {job.scope}")
     source_job = sources_in["source_job"]
     psf_in = _one(inputs, "psfs", job.job)
-    gaia_in = _one(inputs, "catalogs", job.job)
+    catalog_ins = [i for i in inputs if i["product"] == "catalogs"]
+    names = [i["key"].get("name") for i in catalog_ins]
+    if len(set(names)) != len(names) or not set(names) <= set(CATALOG_KINDS):
+        raise ValueError(f"job {job.job}: catalogs inputs named {names}; at most one of each of {CATALOG_KINDS}")
+    switched_on = [n for n in CATALOG_KINDS if job.settings["packet"][f"{n}_match"]]
+    if not set(switched_on) <= set(names):
+        raise ValueError(f"job {job.job}: [packet] switches on {switched_on} but the job names {names}")
     ref_in = _one(inputs, "refimages", job.job)
     window_days = float(job.settings["packet"]["forced_window_days"])
     reads: list[dict] = []
@@ -395,10 +434,15 @@ def _read(job: JobContext) -> Read:
         reads += [{"product": "packets", "key": k, "source_job": j}
                   for j, k in sorted(reused_sets.items())]
 
-        where, values = _key_where(gaia_in["key"], "c")
-        cur.execute("SELECT c.location FROM catalogs c WHERE c.job = %s AND " + where,
-                    (gaia_in["source_job"], *values))
-        gaia_location = cur.fetchone()["location"]
+        locations: dict[str, tuple[int, str]] = {}
+        for cat_in in catalog_ins:
+            where, values = _key_where(cat_in["key"], "c")
+            cur.execute("SELECT c.location FROM catalogs c WHERE c.job = %s AND " + where,
+                        (cat_in["source_job"], *values))
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"job {job.job}: no catalogs row {cat_in['key']} in job {cat_in['source_job']}")
+            locations[cat_in["key"]["name"]] = (cat_in["source_job"], row["location"])
         cur.execute("SELECT c.filename FROM refimcatalogs c JOIN refimages r"
                     " ON r.job = c.job AND r.rfid = c.rfid"
                     " WHERE c.job = %s AND c.cattype = %s AND "
@@ -417,7 +461,8 @@ def _read(job: JobContext) -> Read:
                 flags_zero=len(alertable), triggers=triggers,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
-                gaia_job=gaia_in["source_job"], gaia=gaia_reader(gaia_location),
+                catalogs={name: _open_catalog(name, catalog_job, location)
+                          for name, (catalog_job, location) in locations.items()},
                 refcat_path=get(ref["filename"]), reads=reads)
 
 
@@ -558,27 +603,75 @@ def history(trigger: tuple[int, Source], members: list[tuple[int, Source]],
     return prv, count
 
 
-def _gaia_catalog(reader: GaiaReader, corners: tuple[float, ...], mjd: float):
-    """The chip's cone of the Gaia mirror, propagated to ``mjd`` and tree-built, and its record.
+def _catalog_matches(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
+                     ra: list[float], dec: list[float], settings: dict) -> tuple[list, dict]:
+    """One catalog's matches for every trigger, from the chip's cone of its copy, and the read's record.
 
     The cone is the footprint's centre and half-diagonal
-    (:func:`cone_of_corners`) widened by the largest proper motion over the
-    epoch offset (`dev`'s rule), so a star that drifts into the chip is
-    fetched. A cone the mirror cannot serve (a partition missing from a copy
-    not marked complete) fails the job: the catalog is a required input.
+    (:func:`cone_of_corners`) widened by the match radius and `dev`'s
+    slack, and for Gaia by the largest proper motion over the epoch offset
+    (`dev`'s rule), so a star that drifts into the chip is fetched. Raises
+    when the copy cannot serve the cone (a partition or pixel missing from
+    a copy not marked complete), the reader fails, or the slice lacks a
+    column the match requires; :func:`_best_effort` turns that into "the
+    match did not run".
     """
-    ra, dec, radius = cone_of_corners(corners)
-    ref_epoch = reader.ref_epoch if reader.ref_epoch is not None else GAIA_DEFAULT_REF_EPOCH
-    dt = epoch_offset_years(mjd, ref_epoch)
-    radius += GAIA_PM_MAX_ARCSEC_PER_YEAR * abs(dt)
-    before = len(reader.reads)
-    columns = reader(ra, dec, radius)
+    name, reader = catalog.name, catalog.reader
+    ra0, dec0, radius = cone_of_corners(corners)
+    record: dict[str, Any] = {"release": getattr(reader, "release", None)}
+    dt = 0.0
+    if name == "gaia":
+        ref_epoch = reader.ref_epoch if reader.ref_epoch is not None else GAIA_DEFAULT_REF_EPOCH
+        dt = epoch_offset_years(mjd, ref_epoch)
+        radius += GAIA_PM_MAX_ARCSEC_PER_YEAR * abs(dt)
+        record["ref_epoch"] = ref_epoch
+    match_radius, n_max = float(settings[f"{name}_radius_arcsec"]), int(settings[f"{name}_max_matches"])
+    radius += match_radius + NED_CONE_SLACK_ARCSEC
+    reads_before = len(getattr(reader, "reads", ()))
+    n_reads_before = getattr(reader, "n_reads", 0)
+    columns = reader(ra0, dec0, radius)
     if columns is None:
-        raise ValueError(f"Gaia mirror {reader.root} cannot serve the cone at {ra:.5f} {dec:.5f}")
-    record = {"release": reader.release, "ref_epoch": ref_epoch, "rows": int(columns["ra"].size),
-              "cone": {"ra": ra, "dec": dec, "radius_arcsec": radius},
-              "reads": [list(r) for r in reader.reads[before:]]}
-    return build_gaiacat(columns, dt_years=dt), record
+        raise ValueError(f"the copy at {reader.root} cannot serve the cone at {ra0:.5f} {dec0:.5f}")
+    if name == "gaia":
+        tree = build_gaiacat(columns, dt_years=dt)
+        matcher = match_gaiacat
+    elif name == "ned":
+        tree = build_nedcat(columns, select_hosts=bool(settings["ned_host_selection"]))
+        matcher = match_nedcat
+    else:
+        tree = build_lvscat(columns)
+        matcher = match_lvscat
+    if tree is None:
+        raise ValueError(f"the slice from {reader.root} lacks a column the match requires")
+    matches = matcher(ra, dec, tree, radius_arcsec=match_radius, n_max=n_max)
+    record.update(rows=int(np.asarray(columns["ra"]).size),
+                  cone={"ra": ra0, "dec": dec0, "radius_arcsec": radius},
+                  n_reads=getattr(reader, "n_reads", 0) - n_reads_before)
+    if hasattr(reader, "reads"):
+        record["reads"] = [list(r) for r in reader.reads[reads_before:]]
+    return matches, record
+
+
+def _best_effort(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
+                 ra: list[float], dec: list[float], settings: dict) -> tuple[list, dict]:
+    """A catalog's matches, or ``None`` per trigger with the failure recorded, never a raise.
+
+    `dev`'s provider semantics (rapid_docs ``decision-catalog-matches``):
+    a catalog match that cannot run ships its field null, the schema's
+    "did not run", and the set still issues. The departure from `dev` is
+    that the reason is recorded in the manifest beside the catalog's
+    name, not only logged.
+    """
+    if catalog.reader is None:
+        return [None] * len(ra), {"error": catalog.error}
+    try:
+        return _catalog_matches(catalog, corners, mjd, ra, dec, settings)
+    except Exception as exc:  # noqa: BLE001 - the set ships without this match
+        logger.warning("%s matching not run for this set (%s: %s)", catalog.name,
+                       type(exc).__name__, exc)
+        logger.debug("%s matching failure", catalog.name, exc_info=True)
+        return [None] * len(ra), {"release": getattr(catalog.reader, "release", None),
+                                  "error": f"{type(exc).__name__}: {exc}"}
 
 
 def run(job: JobContext) -> None:
@@ -633,13 +726,14 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     t0 = time.perf_counter()
     ra = [s.ra for s in read.triggers]
     dec = [s.dec for s in read.triggers]
-    gaia_record = None
+    n_triggers = len(read.triggers)
+    matches: dict[str, list] = {kind: [None] * n_triggers for kind in CATALOG_KINDS}
+    records: dict[str, dict] = {}
     if read.triggers:
-        catalog, gaia_record = _gaia_catalog(read.gaia, read.trigger_image.corners, trigger_mjd)
-        gaia = match_gaiacat(ra, dec, catalog, radius_arcsec=float(settings["gaia_radius_arcsec"]),
-                             n_max=int(settings["gaia_max_matches"]))
-    else:
-        gaia = []
+        for kind, catalog in read.catalogs.items():
+            matches[kind], records[kind] = _best_effort(
+                catalog, read.trigger_image.corners, trigger_mjd, ra, dec, settings)
+    gaia, ned, lvs = (matches[kind] for kind in CATALOG_KINDS)
     refcat = load_refcat(str(read.refcat_path)) if read.refcat_path else None
     refs = (match_refcat(ra, dec, refcat, radius_arcsec=float(settings["refcat_radius_arcsec"]),
                          n_max=int(settings["refcat_max_matches"]))
@@ -673,7 +767,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     cutout_s = 0.0
     with avro.open("wb") as stream:
         container = AlertContainer(stream, schema, sync_marker=sync_marker_for(sync_seed))
-        for source, gaia_matches, ref_matches in zip(read.triggers, gaia, refs):
+        for source, gaia_matches, ned_matches, lvs_matches, ref_matches in zip(
+                read.triggers, gaia, ned, lvs, refs):
             aid = read.aid_of[source.sid]
             ra0, dec0, sums = read.objects[aid]
             prv, count = history((read.source_job, source), read.members.get(aid, []),
@@ -691,15 +786,18 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
             forced = [_forced_phot(r) for r in forced_by_aid.get(aid, [])
                       if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
             alert = assemble_alert(source, obj, prv, ss_matches=None, ref_matches=ref_matches,
-                                   ned_matches=None, lvs_matches=None, gaia_matches=gaia_matches,
+                                   ned_matches=ned_matches, lvs_matches=lvs_matches,
+                                   gaia_matches=gaia_matches,
                                    cutouts=cutouts, forced=forced, time_proc=time_proc,
                                    reliability=reliability)
             container.write(alert)
             container.flush()  # one record per block: the index's locator is exact
             order.append((source, aid))
-            external.extend({"catid": str(m.source_id), "ra": m.ra, "dec": m.dec, "sep": m.sep,
-                             "pa": m.pa, "source_job": read.source_job, "sid": source.sid,
-                             "catalog_job": read.gaia_job} for m in gaia_matches)
+            for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches)):
+                external.extend({"catid": str(m.source_id) if kind == "gaia" else m.prefname,
+                                 "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
+                                 "source_job": read.source_job, "sid": source.sid,
+                                 "catalog_job": read.catalogs[kind].job} for m in found or ())
     timing["cutouts_s"] += cutout_s
     timing["assembly_s"] = time.perf_counter() - t0 - cutout_s
 
@@ -727,5 +825,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                                             if source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
             "window_images": len(window), "forced_rows": len(forced_rows),
             "forced_measured": measured, "forced_reused": len(forced_rows) - measured,
-            "gaia_matches": len(external), "gaia": gaia_record,
+            **{f"{kind}_matches": sum(len(m) for m in matches[kind] if m) for kind in CATALOG_KINDS},
+            "catalogs": records,
+            "catalogs_failed": sorted(kind for kind, r in records.items() if "error" in r),
             "timing_s": {k: round(v, 3) for k, v in timing.items()}}
