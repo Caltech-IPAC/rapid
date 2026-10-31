@@ -3674,7 +3674,8 @@ def _compute_extra_catalog_cols(diff_image_filename,
                         threshold = rb_cols["rb_threshold"][0] if rb_cols["rb_threshold"] else None
 
                         print(f"_compute_extra_catalog_cols: rb scored {sum(rb_cols['rb_valid'])} of "
-                              f"{len(xy_positions)} sources (filter {filter_name}, threshold {threshold}); "
+                              f"{len(xy_positions)} sources, {rb_cols['rb_label'].count(1)} above threshold "
+                              f"(filter {filter_name}, threshold {threshold}); "
                               f"not scored: {status_counts}")
 
             if rb_cols is None:
