@@ -834,7 +834,7 @@ def rb_table(rb):
 def sca_filter_table(catalog_stats, catalog, value, fmt, reduce=statistics.median):
     """
     Format the median (or another reduction) over science images of a per-catalog value as a table
-    with one row per SCA and one column per filter.
+    with one row per SCA and one column per filter, plus an all-SCAs row and an all-filters column.
 
     Parameters
     ----------
@@ -853,6 +853,7 @@ def sca_filter_table(catalog_stats, catalog, value, fmt, reduce=statistics.media
     -------
     table : str or None
         The reStructuredText table, with ``--`` where an SCA/filter has no value; None if no entry has a value.
+        The all-SCAs row and all-filters column reduce over all the images of that filter or SCA.
     """
     values = {}
     for c in catalog_stats:
@@ -861,10 +862,16 @@ def sca_filter_table(catalog_stats, catalog, value, fmt, reduce=statistics.media
     if not values:
         return None
     filters = sorted({f for _, f in values}, key=lambda f: (f[1:], f))
-    rows = [[f"{sca:02d}"] + [format(reduce(values[sca, f]), fmt) if (sca, f) in values else "--"
-                              for f in filters]
-            for sca in sorted({sca for sca, _ in values})]
-    return rst_table(["SCA"] + filters, rows)
+    scas = sorted({sca for sca, _ in values})
+
+    def cell(keys):
+        pooled = [v for key in keys if key in values for v in values[key]]
+        return format(reduce(pooled), fmt) if pooled else "--"
+
+    rows = [[f"{sca:02d}"] + [cell([(sca, f)]) for f in filters] + [cell([(sca, f) for f in filters])]
+            for sca in scas]
+    rows.append(["All SCAs"] + [cell([(sca, f) for sca in scas]) for f in filters] + [cell(list(values))])
+    return rst_table(["SCA"] + filters + ["All filters"], rows)
 
 
 def sca_filter_section(catalog_stats):
@@ -883,7 +890,8 @@ def sca_filter_section(catalog_stats):
         The section heading, sentences and reStructuredText tables.
     """
     out = [f"Sources and real-bogus scoring by SCA and filter\n{'-' * 48}\n",
-           "Each value is the median over the science images of that SCA and filter; ``--`` means no image "
+           "Each value is the median over the science images of that SCA and filter (or, in the All SCAs row "
+           "and All filters column, over all the images of that filter or SCA); ``--`` means no image "
            "(or, for the above-threshold percent, no image with that count). The SExtractor catalogs are "
            "``sfftdiffimage_masked[_negative].txt``; the photutils catalogs are "
            "``sfftdiffimage_masked_psfcat[_negative].txt``.\n",
