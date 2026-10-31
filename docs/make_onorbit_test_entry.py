@@ -73,8 +73,33 @@ FORCED_PHOT_STEPS = ["read", "search", "stage+fit", "write", "total"]
 
 # Roman L2 filenames start with r<5-digit program ID><14 more digits>_<4 digits>_wfi<SCA>_<filter>
 ROMAN_FILENAME_RE = re.compile(r"\br(\d{5})\d{14}_\d{4}_wfi(\d{2})_(f\d{3})", re.IGNORECASE)
+# Roman filter names by the f<NNN> code of the L2 filename.
+FILTER_NAMES = {"f062": "R062", "f087": "Z087", "f106": "Y106", "f129": "J129", "f146": "W146",
+                "f158": "H158", "f184": "F184", "f213": "K213"}
+# SFFT difference-image catalogs that are real-bogus scored: (filename, source finder, sign).
+RB_CATALOGS = [("sfftdiffimage_masked.txt", "SExtractor", "positive"),
+               ("sfftdiffimage_masked_negative.txt", "SExtractor", "negative"),
+               ("sfftdiffimage_masked_psfcat.txt", "photutils", "positive"),
+               ("sfftdiffimage_masked_psfcat_negative.txt", "photutils", "negative")]
 PT_FORMAT = "%Y-%m-%dT%H:%M:%S"
 SEC = r"([0-9.eE+-]+)"
+
+
+def filter_name(code):
+    """
+    Return the Roman filter name of the f<NNN> code of an L2 filename.
+
+    Parameters
+    ----------
+    code : str
+        Filter code from the filename, e.g. ``f158``.
+
+    Returns
+    -------
+    name : str
+        Filter name, e.g. ``H158``; the upper-cased code if the code is not known.
+    """
+    return FILTER_NAMES.get(code.lower(), code.upper())
 
 
 def first(pattern, lines, default=None):
@@ -443,19 +468,21 @@ def parse_job_logs(job_logs_dir):
     Parameters
     ----------
     job_logs_dir : pathlib.Path
-        Directory searched recursively; every file is read (e.g. ``rapid_pipeline_job_*_jid*_log.txt``
-        or renamed ``*.out`` files), and the pipeline type is recognized from its contents.
+        Directory whose top-level ``rapid_pipeline_job_*_log.txt`` files are read (subdirectories and other
+        files are ignored); the pipeline type is recognized from each file's contents.
 
     Returns
     -------
     job_logs : dict
         For each of ``refimage`` and ``science``: per-step lists of seconds, per-jid total seconds,
-        and the earliest start and latest end times.  ``n_incomplete`` counts files with no total time
-        (failed jobs, or files that are not reference-image or science job output).  ``rb`` maps each
+        and the earliest start and latest end times.  ``n_incomplete`` counts job logs with no
+        reference-image or science total time (failed or unfinished jobs).  ``rb`` maps each
         catalog filename to a Counter of its sources, real-bogus-scored sources, and not-scored reasons.
         ``science_programs`` counts the science-pipeline instances by the Roman program ID of the science image.
+        ``catalog_stats`` lists, per science-pipeline catalog, a dict of ``jid``, ``sca``, ``filter``,
+        ``catalog``, ``sources``, ``scored`` and ``above`` (None when the log predates the above-threshold count).
     """
-    rb_re = re.compile(r"rb scored (\d+) of (\d+) sources .*?not scored: \{(.*?)\}")
+    rb_re = re.compile(r"rb scored (\d+) of (\d+) sources(?:, (\d+) above threshold)? .*?not scored: \{(.*?)\}")
     step_re = re.compile(rf"^(?:=====> )?Elapsed time in seconds (after|just to|to) (.+?) =\s*{SEC}\s*$")
     totals = {"refimage": "run one instance of reference-image pipeline",
               "science": "run one instance of science pipeline"}
@@ -463,8 +490,9 @@ def parse_job_logs(job_logs_dir):
     job_logs["n_incomplete"] = 0
     job_logs["rb"] = {}
     job_logs["science_programs"] = Counter()
+    job_logs["catalog_stats"] = []
 
-    for path in sorted(p for p in job_logs_dir.rglob("*") if p.is_file()):
+    for path in sorted(p for p in job_logs_dir.glob("rapid_pipeline_job_*_log.txt") if p.is_file()):
         text = path.read_text(errors="replace")
         kind = next((k for k, phrase in totals.items() if f"to {phrase} =" in text), None)
         jid = re.search(r"jid(\d+)", path.name) or re.search(r"^jid = (\d+)$", text, re.MULTILINE)
@@ -472,6 +500,7 @@ def parse_job_logs(job_logs_dir):
             job_logs["n_incomplete"] += 1
             continue
         jid = int(jid.group(1))
+        image = ROMAN_FILENAME_RE.search(text)
         per_step, catalog = {}, None
         for line in text.splitlines():
             if m := step_re.match(line):
@@ -484,19 +513,91 @@ def parse_job_logs(job_logs_dir):
                 rb = job_logs["rb"].setdefault(catalog, Counter())
                 rb["scored"] += int(m.group(1))
                 rb["sources"] += int(m.group(2))
-                for reason, n in re.findall(r"'(\w+)': (\d+)", m.group(3)):
+                for reason, n in re.findall(r"'(\w+)': (\d+)", m.group(4)):
                     rb[reason] += int(n)
+                if image:
+                    job_logs["catalog_stats"].append(
+                        {"jid": jid, "sca": int(image.group(2)), "filter": filter_name(image.group(3)),
+                         "catalog": catalog, "sources": int(m.group(2)), "scored": int(m.group(1)),
+                         "above": int(m.group(3)) if m.group(3) else None})
         for label, seconds in per_step.items():
             job_logs[kind]["steps"].setdefault(label, []).append(seconds)
         total = per_step["Total time to " + totals[kind]]
         job_logs[kind]["totals"][jid] = total
-        if kind == "science" and (m := ROMAN_FILENAME_RE.search(text)):
-            job_logs["science_programs"][int(m.group(1))] += 1
+        if kind == "science" and image:
+            job_logs["science_programs"][int(image.group(1))] += 1
         started = parse_pt(first(r"^proc_pt_datetime_started = (.*)$", text.splitlines()))
         if started:
             job_logs[kind]["started"].append(started)
             job_logs[kind]["ended"].append(started + timedelta(seconds=total))
     return job_logs
+
+
+def parse_catalogs(products_dirs):
+    """
+    Count the sources, real-bogus-scored sources and sources above the real-bogus threshold in the
+    SFFT difference-image catalogs of downloaded science-pipeline products.
+
+    Parameters
+    ----------
+    products_dirs : list of pathlib.Path
+        Directories with one ``jid<N>`` folder per science-pipeline instance (as in
+        ``s3://<product_s3_bucket_base>/<procdate>/req<reqid>/``); only the ``RB_CATALOGS`` files and
+        the science-image filename of each ``jid<N>`` folder are used.
+
+    Returns
+    -------
+    catalog_stats : list of dict
+        Per catalog, ``jid``, ``sca``, ``filter``, ``catalog``, ``sources``, ``scored`` and ``above``.
+    """
+    catalog_stats = []
+    for jid_dir in sorted(d for products_dir in products_dirs for d in products_dir.glob("jid*") if d.is_dir()):
+        image = next((m for f in jid_dir.glob("r*_wfi*_cal*") if (m := ROMAN_FILENAME_RE.search(f.name))), None)
+        if image is None:
+            continue
+        for catalog, _, _ in RB_CATALOGS:
+            path = jid_dir / catalog
+            if not path.is_file():
+                continue
+            lines = path.read_text(errors="replace").splitlines()
+            # SExtractor headers are "# <column number> <NAME>" (vector columns span numbers); photutils names are the first line.
+            columns = {line.split()[2].lower(): int(line.split()[1]) - 1 for line in lines if line.startswith("#")}
+            rows = [line.split() for line in lines if line.strip() and not line.startswith("#")]
+            if not columns and rows:
+                columns, rows = {name: i for i, name in enumerate(rows[0])}, rows[1:]
+            if "rb_label" not in columns:
+                continue
+            labels = Counter(int(float(row[columns["rb_label"]])) for row in rows)
+            catalog_stats.append({"jid": int(jid_dir.name[3:]), "sca": int(image.group(2)),
+                                  "filter": filter_name(image.group(3)), "catalog": catalog, "sources": len(rows),
+                                  "scored": len(rows) - labels[-1], "above": labels[1]})
+    return catalog_stats
+
+
+def merge_catalog_stats(from_logs, from_catalogs):
+    """
+    Combine the per-catalog counts from the job logs and from the catalogs, using the catalog counts
+    where the job log has no above-threshold count or no entry.
+
+    Parameters
+    ----------
+    from_logs : list of dict
+        ``job_logs["catalog_stats"]`` from ``parse_job_logs``.
+    from_catalogs : list of dict
+        Output of ``parse_catalogs``.
+
+    Returns
+    -------
+    catalog_stats : list of dict
+        One dict per (jid, catalog).
+    """
+    merged = {(c["jid"], c["catalog"]): c for c in from_catalogs}
+    for c in from_logs:
+        key = (c["jid"], c["catalog"])
+        if c["above"] is None and key in merged:
+            continue
+        merged[key] = c
+    return list(merged.values())
 
 
 def run_count_script(procdate, reqid, out_path):
@@ -730,6 +831,81 @@ def rb_table(rb):
     return text + rst_table(["Catalog", "Sources", "Scored", "Scored (%)"] + [f"Not scored: {r}" for r in reasons], rows)
 
 
+def sca_filter_table(catalog_stats, catalog, value, fmt, reduce=statistics.median):
+    """
+    Format the median (or another reduction) over science images of a per-catalog value as a table
+    with one row per SCA and one column per filter.
+
+    Parameters
+    ----------
+    catalog_stats : list of dict
+        Per-catalog counts (output of ``merge_catalog_stats``).
+    catalog : str
+        Catalog filename whose entries are used.
+    value : callable
+        Function of a catalog entry returning the value, or None when it cannot be computed.
+    fmt : str
+        Format specification of the reduced values, e.g. ``",.0f"``.
+    reduce : callable, optional
+        Function of the list of per-image values of an SCA/filter, e.g. ``len`` to count the images.
+
+    Returns
+    -------
+    table : str or None
+        The reStructuredText table, with ``--`` where an SCA/filter has no value; None if no entry has a value.
+    """
+    values = {}
+    for c in catalog_stats:
+        if c["catalog"] == catalog and (v := value(c)) is not None:
+            values.setdefault((c["sca"], c["filter"]), []).append(v)
+    if not values:
+        return None
+    filters = sorted({f for _, f in values}, key=lambda f: (f[1:], f))
+    rows = [[f"{sca:02d}"] + [format(reduce(values[sca, f]), fmt) if (sca, f) in values else "--"
+                              for f in filters]
+            for sca in sorted({sca for sca, _ in values})]
+    return rst_table(["SCA"] + filters, rows)
+
+
+def sca_filter_section(catalog_stats):
+    """
+    Format the per-SCA, per-filter medians of the number of catalog sources, the percent of them that
+    are real-bogus scored, and the percent of the scored sources above the real-bogus threshold.
+
+    Parameters
+    ----------
+    catalog_stats : list of dict
+        Per-catalog counts (output of ``merge_catalog_stats``).
+
+    Returns
+    -------
+    text : str
+        The section heading, sentences and reStructuredText tables.
+    """
+    out = [f"Sources and real-bogus scoring by SCA and filter\n{'-' * 48}\n",
+           "Each value is the median over the science images of that SCA and filter; ``--`` means no image "
+           "(or, for the above-threshold percent, no image with that count). The SExtractor catalogs are "
+           "``sfftdiffimage_masked[_negative].txt``; the photutils catalogs are "
+           "``sfftdiffimage_masked_psfcat[_negative].txt``.\n",
+           "Number of science images:\n",
+           sca_filter_table(catalog_stats, RB_CATALOGS[0][0], lambda c: 1, ",d", reduce=len) + "\n"]
+    metrics = [("Number of sources", lambda c: c["sources"], ",.0f"),
+               ("Percent of sources real-bogus scored",
+                lambda c: 100 * c["scored"] / c["sources"] if c["sources"] else None, ".1f"),
+               ("Percent of scored sources above the real-bogus threshold",
+                lambda c: 100 * c["above"] / c["scored"] if c["scored"] and c["above"] is not None else None, ".1f")]
+    for title, value, fmt in metrics:
+        tables = [(catalog, finder, sign, sca_filter_table(catalog_stats, catalog, value, fmt))
+                  for catalog, finder, sign in RB_CATALOGS]
+        if not any(table for *_, table in tables):
+            out.append(f"{title}: not available (the job logs predate this count and no catalogs were read).\n")
+        for catalog, finder, sign, table in tables:
+            if table:
+                out.append(f"{title}, {finder} catalog of the {sign} difference image (``{catalog}``):\n")
+                out.append(table + "\n")
+    return "\n".join(out)
+
+
 def alert_section(vpo, alerts):
     """
     Format the alert-production section from the VPO STDOUT and, if available, the alert-production
@@ -808,7 +984,7 @@ def alert_section(vpo, alerts):
 
 
 def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_bucket=None, counts=None,
-               alerts=None):
+               alerts=None, catalog_stats=None):
     """
     Assemble the reStructuredText test entry from the parsed logs.
 
@@ -830,6 +1006,8 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
         Output of ``parse_counts``.
     alerts : dict, optional
         Output of ``parse_alerts``.
+    catalog_stats : list of dict, optional
+        Per-catalog source and real-bogus counts (output of ``merge_catalog_stats``).
 
     Returns
     -------
@@ -981,7 +1159,10 @@ def make_entry(vpo, ingest=None, streams=None, job_logs=None, programs=(), logs_
             if kind == "science" and job_logs["rb"]:
                 add(rb_table(job_logs["rb"]) + "\n")
         if job_logs["n_incomplete"]:
-            add(f"{job_logs['n_incomplete']} job log(s) had no total run time (failed or unrecognized) and are not included above.\n")
+            add(f"{job_logs['n_incomplete']} job log(s) had no total run time (failed or unfinished jobs) and are not included above.\n")
+
+    if catalog_stats:
+        add(sca_filter_section(catalog_stats))
 
     if counts:
         add(f"Lightcurve database\n{'-' * 34}\n")
@@ -1018,10 +1199,14 @@ def main():
     p.add_argument("--stream-log", type=Path, nargs="+", default=[], help="STDOUT of stream_l2_files.py (one or more)")
     p.add_argument("--job-logs-dir", type=Path, default=None,
                    help="directory with the per-job STDOUT files (rapid_pipeline_job_<procdate>_jid<jid>_log.txt "
-                        "from s3://<job_logs_s3_bucket_base>/<procdate>/req<reqid>/, or the same files "
-                        "renamed, e.g. jid<jid>.out)")
+                        "from s3://<job_logs_s3_bucket_base>/<procdate>/req<reqid>/); only those files at "
+                        "the top level are read")
     p.add_argument("--ini", type=Path, default=DEFAULT_INI,
                    help=f"job-launcher configuration file with [JOB_PARAMS] job_logs_s3_bucket_base (default: {DEFAULT_INI})")
+    p.add_argument("--products-dir", type=Path, nargs="+", default=[],
+                   help="directories with one jid<jid> folder of downloaded science-pipeline products each (from "
+                        "s3://<product_s3_bucket_base>/<procdate>/req<reqid>/); their SFFT difference-image catalogs "
+                        "give the real-bogus counts where the job logs do not")
     p.add_argument("--work-dir", type=Path, default=None,
                    help="VPO working directory with produceAlertsForProcDate_thread*.out and "
                         "produceAlertsForProcDate_<procdate>_summary.json")
@@ -1052,15 +1237,19 @@ def main():
     else:
         count_text = None
 
+    job_logs = parse_job_logs(args.job_logs_dir) if args.job_logs_dir else None
+    catalog_stats = merge_catalog_stats(job_logs["catalog_stats"] if job_logs else [], parse_catalogs(args.products_dir))
+
     entry = make_entry(
         vpo,
         ingest=parse_ingest(ingest_texts) if ingest_texts else None,
         streams=[parse_stream(path) for path in args.stream_log],
-        job_logs=parse_job_logs(args.job_logs_dir) if args.job_logs_dir else None,
+        job_logs=job_logs,
         programs=program_ids([vpo_text] + ingest_texts + stream_texts),
         logs_bucket=job_logs_bucket(args.ini),
         counts=parse_counts(count_text) if count_text is not None else None,
         alerts=parse_alerts(args.work_dir, vpo["datearg"]) if args.work_dir else None,
+        catalog_stats=catalog_stats,
     )
 
     if args.stdout:
