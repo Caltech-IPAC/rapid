@@ -10,6 +10,7 @@ upload_to_s3_bucket is False throughout, so products stay in tmp_path.
 """
 
 import configparser
+import io
 import json
 import multiprocessing
 
@@ -78,6 +79,11 @@ def test_settings_are_read_from_the_alerts_section():
     assert s["ned_source"] == DEFAULT_NED_SOURCE
     assert _settings(ned_source="s3://other/ned")["ned_source"] == "s3://other/ned"
     assert _settings(ned_source="")["ned_source"] is None
+
+
+def test_skip_existing_setting():
+    assert _settings()["skip_existing"] is False             # absent -> off
+    assert _settings(skip_existing="True")["skip_existing"] is True
 
 
 def test_build_ned_reader_opens_a_copy_or_degrades(tmp_path, caplog):
@@ -208,14 +214,25 @@ def test_lookup_restricts_to_program_ids():
 
 class StubS3:
 
-    def __init__(self, keys):
+    def __init__(self, keys, bodies=None, page_size=1000):
         self.keys = keys
+        self.bodies = bodies or {}
+        self.page_size = page_size
         self.calls = []
 
-    def list_objects_v2(self, Bucket, Prefix, MaxKeys):
+    def list_objects_v2(self, Bucket, Prefix, MaxKeys=1000, ContinuationToken=None):
         self.calls.append((Bucket, Prefix, MaxKeys))
-        found = [k for k in self.keys if k.startswith(Prefix)][:MaxKeys]
-        return {'KeyCount': len(found)}
+        start = int(ContinuationToken or 0)
+        matching = [k for k in self.keys if k.startswith(Prefix)]
+        page = matching[start:start + min(MaxKeys, self.page_size)]
+        response = {'KeyCount': len(page), 'Contents': [{'Key': k} for k in page],
+                    'IsTruncated': start + len(page) < len(matching)}
+        if response['IsTruncated']:
+            response['NextContinuationToken'] = str(start + len(page))
+        return response
+
+    def get_object(self, Bucket, Key):
+        return {'Body': io.BytesIO(self.bodies[Key])}
 
 
 def test_proc_subdir_exists():
@@ -227,6 +244,37 @@ def test_proc_subdir_exists():
     # the trailing slash keeps req7 from matching req70
     assert not stage.proc_subdir_exists(StubS3(["2026-09-16/req70/jid1/sci.fits"]),
                                         "bucket", "2026-09-16/req7")
+
+
+def test_list_s3_keys_follows_pages():
+    keys = [f"p/jid{i}/x" for i in range(5)]
+    assert stage.list_s3_keys(StubS3(keys, page_size=2), "bucket", "p/") == set(keys)
+
+
+def _summary_key(settings, jid):
+    names = stage.chip_product_names(_chip(jid), settings)
+    return names['s3_prefix'] + names['summary_filename']
+
+
+def test_find_done_chips_in_s3():
+    settings = _settings()
+    ok = json.dumps({'status': "ok"}).encode()
+    bodies = {_summary_key(settings, 1): ok,                                # done
+              _summary_key(settings, 2): json.dumps({'status': "failed"}).encode(),
+              _summary_key(settings, 3): b"not json"}                       # unreadable
+    keys = list(bodies) + [f"{settings['proc_subdir']}/jid4/sci.fits"]     # jid 4: no summary
+    s3 = StubS3(keys, bodies, page_size=2)
+    chips = [_chip(jid) for jid in (1, 2, 3, 4)]
+    assert stage.find_done_chips(chips, settings, "unused", s3) == {1}
+
+
+def test_find_done_chips_in_work_dir(tmp_path):
+    settings = _settings()
+    for jid, status in ((1, "ok"), (2, "failed")):
+        names = stage.chip_product_names(_chip(jid), settings)
+        (tmp_path / names['summary_filename']).write_text(json.dumps({'status': status}))
+    chips = [_chip(jid) for jid in (1, 2, 3)]
+    assert stage.find_done_chips(chips, settings, str(tmp_path)) == {1}
 
 
 def test_limit_chips_keeps_the_lowest_jids():

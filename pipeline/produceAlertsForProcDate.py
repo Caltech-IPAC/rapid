@@ -35,6 +35,10 @@ archives and summaries in RAPID_WORK instead of uploading them.
 When uploading, the stage first checks that s3://<product_s3_bucket_base>/<proc_date>/req<reqid>/
 exists, so a JOBPROCDATE that does not belong to PROCREQ is a fatal error.
 
+Set skip_existing = True in [ALERTS] to skip chips whose <archive_filename_base><N>_summary.json
+already exists (in S3, or in RAPID_WORK when not uploading) with status "ok".  Skipped chips get
+no forced photometry either.  If every chip is skipped, the stage exits 0.
+
 Set environment variable ALERTSMAXCHIPS to a positive integer to process only that many
 chips (the lowest jids) of the processing date, for test runs.  Unset means all chips.
 
@@ -137,6 +141,7 @@ def read_alert_settings(config_input):
         'archive_filename_base': alerts.get('archive_filename_base', fallback='alerts_jid'),
         'archive_codec': alerts.get('archive_codec', fallback='deflate'),
         'log_level': alerts.get('log_level', fallback='INFO').upper(),
+        'skip_existing': alerts.getboolean('skip_existing', fallback=False),
         'upload_to_s3_bucket': job_params.getboolean('upload_to_s3_bucket', fallback=True),
         'product_s3_bucket_base': job_params['product_s3_bucket_base'],
         # Forced photometry (alerts.forced_phot), run per chip at alert time while no
@@ -319,6 +324,99 @@ def proc_subdir_exists(s3_client, bucket, proc_subdir):
     response = s3_client.list_objects_v2(Bucket=bucket, Prefix=proc_subdir + "/", MaxKeys=1)
 
     return response.get('KeyCount', 0) > 0
+
+
+def list_s3_keys(s3_client, bucket, prefix):
+
+    '''
+    Return every S3 object key under a prefix, following the listing's continuation tokens.
+
+    Parameters
+    ----------
+    s3_client : boto3 S3 client
+        Client used for the listing.
+    bucket : str
+        S3 bucket.
+    prefix : str
+        Key prefix to list.
+
+    Returns
+    -------
+    keys : set of str
+        Object keys under the prefix.
+    '''
+
+    keys = set()
+    kwargs = {'Bucket': bucket, 'Prefix': prefix}
+
+    while True:
+        response = s3_client.list_objects_v2(**kwargs)
+        keys.update(obj['Key'] for obj in response.get('Contents', []))
+        if not response.get('IsTruncated'):
+            return keys
+        kwargs['ContinuationToken'] = response['NextContinuationToken']
+
+
+def find_done_chips(chips, settings, work_dir, s3_client=None):
+
+    '''
+    Return the jids of the chips whose summary JSON already exists with status "ok", for
+    skip_existing.  A summary that cannot be read or parsed counts as not done, with a warning.
+
+    Parameters
+    ----------
+    chips : list of dict
+        Chips from lookup_chips_for_processing_date.
+    settings : dict
+        Stage settings (archive_filename_base, proc_subdir, product_s3_bucket_base).
+    work_dir : str
+        Directory holding the summaries when uploads are off.
+    s3_client : boto3 S3 client, optional
+        If given, summaries are looked for in S3; if None, in work_dir.
+
+    Returns
+    -------
+    done : set of int
+        jids of the chips to skip.
+    '''
+
+    bucket = settings['product_s3_bucket_base']
+
+    expected = {}
+
+    for chip in chips:
+        names = chip_product_names(chip, settings)
+        if s3_client is not None:
+            expected[names['s3_prefix'] + names['summary_filename']] = chip['jid']
+        else:
+            expected[os.path.join(work_dir, names['summary_filename'])] = chip['jid']
+
+    if s3_client is not None:
+        present = list_s3_keys(s3_client, bucket, settings['proc_subdir'] + "/")
+    else:
+        present = {path for path in expected if os.path.exists(path)}
+
+    done = set()
+
+    for location, jid in expected.items():
+
+        if location not in present:
+            continue
+
+        try:
+            if s3_client is not None:
+                summary = json.loads(s3_client.get_object(Bucket=bucket, Key=location)['Body'].read())
+            else:
+                with open(location, encoding="utf-8") as fh:
+                    summary = json.load(fh)
+        except Exception as e:
+            print(f"*** Warning: Could not read summary {location} ({e}); will regenerate jid={jid}...")
+            continue
+
+        if summary.get('status') == "ok":
+            done.add(jid)
+
+    return done
 
 
 def configure_thread_logging(path, level_name):
@@ -677,6 +775,30 @@ def main():
     print("n_chips =", len(chips))
 
 
+    # Optionally skip chips whose alerts were already produced (before the ALERTSMAXCHIPS limit).
+
+    skipped_jids = []
+
+    if settings['skip_existing']:
+
+        s3_client = boto3.client('s3') if settings['upload_to_s3_bucket'] else None
+
+        try:
+            done = find_done_chips(chips, settings, rapid_work, s3_client)
+        except Exception as e:
+            print(f"*** Error: Could not look up existing chip summaries ({e}); quitting...")
+            return EXIT_FATAL
+
+        skipped_jids = sorted(chip['jid'] for chip in chips if chip['jid'] in done)
+        chips = [chip for chip in chips if chip['jid'] not in done]
+
+        print(f"skip_existing = True; skipping {len(skipped_jids)} chips already done: jids={skipped_jids}")
+
+        if len(chips) == 0 and len(skipped_jids) > 0:
+            print("All chips already have alerts; nothing to do...")
+            return EXIT_NORMAL
+
+
     # Optionally restrict a test run to the first few chips.
 
     max_chips = os.getenv('ALERTSMAXCHIPS')
@@ -734,6 +856,9 @@ def main():
     # Summarize the run and write the run summary file.
 
     terminating_exitcode, aggregate = summarize_run(chip_summaries)
+
+    aggregate['n_chips_skipped'] = len(skipped_jids)
+    aggregate['skipped_jids'] = skipped_jids
 
     for key, value in aggregate.items():
         if key != 'failed_chips':
