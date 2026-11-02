@@ -2919,7 +2919,8 @@ class RAPIDDB:
 
 ########################################################################################################
 
-    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self,proc_date,reqid=None):
+    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self,proc_date,reqid=None,
+                                                                     program_ids=None):
 
         '''
         Query database for science-pipeline Jobs records that ran normally, either of the given
@@ -2933,6 +2934,9 @@ class RAPIDDB:
             If given, the Jobs records of this processing request (Jobs.reqid) are returned,
             whatever day they ended (a request can run past midnight).  None (the default)
             returns those of all processing requests that ended on proc_date.
+        program_ids : list of int, optional
+            If given, only Jobs records of exposures in these programs (Exposures.program_id)
+            are returned.  None (the default) means all programs.
 
         Returns
         -------
@@ -2948,7 +2952,8 @@ class RAPIDDB:
         query = "select jid from Jobs " +\
                 "where ppid = 15 " +\
                 "and status > 0 " +\
-                "and exitcode <= 32 "
+                "and exitcode <= 32 " +\
+                self.program_ids_clause(program_ids)
 
         if reqid is not None:
             query += "and reqid = " + str(int(reqid)) + ";"

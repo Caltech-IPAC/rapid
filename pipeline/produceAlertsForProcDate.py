@@ -32,8 +32,14 @@ the stage refuses to start if publish_to_kafka is True in the config file.
 Set environment variable DONOTUPLOADPRODUCTS (as for the science pipeline) to keep the
 archives and summaries in RAPID_WORK instead of uploading them.
 
+When uploading, the stage first checks that s3://<product_s3_bucket_base>/<proc_date>/req<reqid>/
+exists, so a JOBPROCDATE that does not belong to PROCREQ is a fatal error.
+
 Set environment variable ALERTSMAXCHIPS to a positive integer to process only that many
 chips (the lowest jids) of the processing date, for test runs.  Unset means all chips.
+
+Set environment variable RUNPROGRAMIDS to a comma-separated list of program IDs to process
+only chips of exposures in those programs (as for the other stages).  Unset means all programs.
 
 Exit codes:
     0   Normal termination.
@@ -161,16 +167,18 @@ def read_alert_settings(config_input):
 # Database lookup of the chips to alert on.
 #-------------------------------------------------------------------------------------------------------------
 
-def lookup_chips_for_processing_date(dbh, proc_date, ppid, reqid=None):
+def lookup_chips_for_processing_date(dbh, proc_date, ppid, reqid=None, program_ids=None):
 
     '''
     Return one dictionary per chip to alert on (jid, rid, pid, expid, sca, field, fid),
     for the normal science-pipeline jobs that ended on the processing date (and, if reqid is
-    given, that belong to that processing request).  Jobs without
+    given, that belong to that processing request; if program_ids is given, only exposures in
+    those programs).  Jobs without
     a best difference image are skipped with a warning.  Raises RuntimeError on a database error.
     '''
 
-    jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date, reqid)
+    jids = dbh.get_jids_of_normal_science_pipeline_jobs_for_processing_date(proc_date, reqid,
+                                                                            program_ids=program_ids)
 
     if dbh.exit_code >= 64:
         raise RuntimeError(f"*** Error getting Jobs records for proc_date={proc_date} "
@@ -285,6 +293,32 @@ def upload_chip_product(s3_client, bucket, s3_prefix, local_path):
     s3_client.upload_file(local_path, bucket, object_name)
 
     return f"s3://{bucket}/{object_name}"
+
+
+def proc_subdir_exists(s3_client, bucket, proc_subdir):
+
+    '''
+    Return whether any S3 object exists under the processing request's subdirectory, which
+    checks that JOBPROCDATE and PROCREQ belong to the same processing request.
+
+    Parameters
+    ----------
+    s3_client : boto3 S3 client
+        Client used for the listing.
+    bucket : str
+        Product S3 bucket.
+    proc_subdir : str
+        "<proc_date>/req<reqid>", from util.get_proc_subdir.
+
+    Returns
+    -------
+    exists : bool
+        True if at least one object has the prefix "<proc_subdir>/".
+    '''
+
+    response = s3_client.list_objects_v2(Bucket=bucket, Prefix=proc_subdir + "/", MaxKeys=1)
+
+    return response.get('KeyCount', 0) > 0
 
 
 def configure_thread_logging(path, level_name):
@@ -577,6 +611,24 @@ def main():
         print(f"{key} = {value}")
 
 
+    # Check that JOBPROCDATE and PROCREQ match: the request's subdirectory must exist in S3.
+
+    if settings['upload_to_s3_bucket']:
+
+        bucket = settings['product_s3_bucket_base']
+
+        try:
+            subdir_exists = proc_subdir_exists(boto3.client('s3'), bucket, settings['proc_subdir'])
+        except Exception as e:
+            print(f"*** Error: Could not list s3://{bucket}/{settings['proc_subdir']}/ ({e}); quitting...")
+            return EXIT_FATAL
+
+        if not subdir_exists:
+            print(f"*** Error: No products found under s3://{bucket}/{settings['proc_subdir']}/; " +
+                  f"JOBPROCDATE={proc_date} may not be the processing date of PROCREQ={proc_req}; quitting...")
+            return EXIT_FATAL
+
+
     # Number of worker processes, taking advantage of multiple cores on the job-launcher machine.
 
     num_cores = os.getenv('NUM_CORES')
@@ -587,6 +639,11 @@ def main():
         num_cores = int(num_cores)
 
     print("num_cores =", num_cores)
+
+
+    # Programs to restrict processing to (env. var. RUNPROGRAMIDS); exits 64 if unparsable.
+
+    run_program_ids = util.get_run_program_ids()
 
 
     # Open database connection.
@@ -601,7 +658,8 @@ def main():
     # Look up the chips (best difference images of normal science-pipeline jobs) for the processing date.
 
     try:
-        chips = lookup_chips_for_processing_date(dbh, proc_date, settings['ppid'], settings['proc_req'])
+        chips = lookup_chips_for_processing_date(dbh, proc_date, settings['ppid'], settings['proc_req'],
+                                                 program_ids=run_program_ids)
     except RuntimeError as e:
         print(e)
         dbh.close()

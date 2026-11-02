@@ -170,12 +170,16 @@ class StubRAPIDDB:
         # rid 13 has no best difference image
         self.diffimages = {(11, 15): {"pid": 501}, (12, 15): {"pid": 502},
                            (13, 15): {}}
+        # Exposures.program_id of each expid
+        self.programs = {42: 994, 43: 1094}
 
-    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self, d, reqid=None):
+    def get_jids_of_normal_science_pipeline_jobs_for_processing_date(self, d, reqid=None,
+                                                                     program_ids=None):
         if self.fail_on == "jids":
             self.exit_code = 67
             return None
-        return list(self.jobs)
+        return [jid for jid, job in self.jobs.items()
+                if program_ids is None or self.programs[job["expid"]] in program_ids]
 
     def get_info_for_job(self, jid):
         return self.jobs[jid]
@@ -192,6 +196,37 @@ def test_lookup_maps_normal_jobs_to_best_pids(capsys):
         == [(1, 11, 501, 7), (2, 12, 502, 8)]
     # the job without a best difference image is skipped, visibly
     assert "jid=3" in capsys.readouterr().out
+
+
+def test_lookup_restricts_to_program_ids():
+    chips = stage.lookup_chips_for_processing_date(StubRAPIDDB(), PROC_DATE, 15,
+                                                   program_ids=[994])
+    assert [c["jid"] for c in chips] == [1, 2]
+    assert stage.lookup_chips_for_processing_date(StubRAPIDDB(), PROC_DATE, 15,
+                                                  program_ids=[1094]) == []
+
+
+class StubS3:
+
+    def __init__(self, keys):
+        self.keys = keys
+        self.calls = []
+
+    def list_objects_v2(self, Bucket, Prefix, MaxKeys):
+        self.calls.append((Bucket, Prefix, MaxKeys))
+        found = [k for k in self.keys if k.startswith(Prefix)][:MaxKeys]
+        return {'KeyCount': len(found)}
+
+
+def test_proc_subdir_exists():
+    s3 = StubS3(["2026-09-16/req7/jid1/sci.fits"])
+    assert stage.proc_subdir_exists(s3, "bucket", "2026-09-16/req7")
+    assert s3.calls == [("bucket", "2026-09-16/req7/", 1)]
+    # wrong date for the reqid
+    assert not stage.proc_subdir_exists(s3, "bucket", "2026-09-17/req7")
+    # the trailing slash keeps req7 from matching req70
+    assert not stage.proc_subdir_exists(StubS3(["2026-09-16/req70/jid1/sci.fits"]),
+                                        "bucket", "2026-09-16/req7")
 
 
 def test_limit_chips_keeps_the_lowest_jids():
