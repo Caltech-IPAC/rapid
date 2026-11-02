@@ -53,13 +53,13 @@ summary and README.md has the detail.
 | Path | Holds |
 |---|---|
 | `rapidpipe/` | The pipeline package (map below). |
-| `database/` | `schema.sql` (the whole schema, applied with one `psql -f`), `queries.sql` (the read queries the official views answer, each named, run by `tests/db/test_queries.py`), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
+| `database/` | `schema.sql` (the whole schema, applied with one `psql -f`), `schema.svg` and `schema.dot` (its entity diagram, drawn by `scripts/schema_diagram.py`), `queries.sql` (the read queries the official views answer, each named, run by `tests/db/test_queries.py`), and `modules/utils/roman_tessellation{,_db}.py` (closed-form sky tessellation, imported by `rapidpipe.science`). |
 | `modules/` | Helpers the stages use from `dev`: `sip_tpv/` (imported by `science/difference/resample.py`), `zogy/` and `sfft/` (scripts the difference stage runs from `/code/modules/...`). |
 | `cdf/` | SExtractor/SWarp configuration files the stages read at `/code/cdf`. |
 | `c/` | Vendored C tool source; the image takes the tools from the base image's RPMs instead. |
 | `containers/` | The pipeline image recipe (`rapid-pipeline/build.sh`, `Containerfile`). |
 | `tests/` | `unit/`, `db/` (with `db/proof/`, the procedure proof's synthetic steps in CI; the by-hand `thin_proof.py` retired with the associate stage, 2026-10-24), `cli/` and `fixtures/<stage>/`. |
-| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list, `read_packets.py` (the packet reader: a packet set's validation report, outside the pipeline), `consume_packets.py` (a run's packet sets read back at their recorded offsets, counted, and one set per field compared byte for byte with the outbox), `copy_epsf.py` (CRDS ePSF references copied by name under the prefix a run's `[psf] epsf_cache` names, once), `check_run.sh` (a run's three checks, `validate_run.py`, `read_packets.py` over its bound sets and `consume_packets.py`, and one verdict line). |
+| `scripts/` | `check-public-safety.sh`, `science-drift.sh` and its watch list, `read_packets.py` (the packet reader: a packet set's validation report, outside the pipeline), `consume_packets.py` (a run's packet sets read back at their recorded offsets, counted, and one set per field compared byte for byte with the outbox), `copy_epsf.py` (CRDS ePSF references copied by name under the prefix a run's `[psf] epsf_cache` names, once), `schema_diagram.py` (`database/schema.sql` drawn as `database/schema.dot` and, with Graphviz, `schema.svg`; rerun on a schema change), `check_run.sh` (a run's three checks, `validate_run.py`, `read_packets.py` over its bound sets and `consume_packets.py`, and one verdict line). |
 | `docs/` | `foundation-smdc-step.md`, the SMDC runbook. The readthedocs site is built from `rapid_docs`; `dev`'s Sphinx source stays on `dev`. |
 
 `dev`'s `pipeline/`, `alerts/`, `aws/`, `soc/`, `sims/`, `docker/`,

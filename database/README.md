@@ -15,6 +15,12 @@ the pipeline imports.
 
   It creates the Q3C extension and its indexes when Q3C is installed and
   says so in a NOTICE when it is not, as on a developer's container.
+- [`schema.svg`](schema.svg): the schema's entity diagram, every table and
+  column with its declared foreign keys (solid) and the references the code
+  follows by convention (dashed). `scripts/schema_diagram.py` draws it from
+  `schema.sql` through `schema.dot` with Graphviz; a change to `schema.sql`
+  reruns it (`tests/unit/test_schema_diagram.py` fails on a stale
+  `schema.dot`).
 - The dated files (`database/<date>-<name>.sql`), the rule for incremental
   change, as each file's header says: `schema.sql` builds a fresh database
   whole. A dated file is the one granted statement that brought SMDC's
