@@ -1,8 +1,9 @@
-"""The catalog store: mirroring the NED HATS collection into a store without
-local staging, verifying it, re-cutting leaves into order-6 files, describing
-the result, and projecting a LINCC-shaped Gaia catalog (`dev`'s
+"""The catalog store: re-cutting the NED HATS collection into order-6 files
+straight from its URL without storing a leaf, describing the result, and
+projecting a LINCC-shaped Gaia catalog (`dev`'s
 ``alerts/test/test_catalog_store.py``, ported 2026-10-29, plus the rebuild's
-``gaia-from-table`` and the write-once recovery).
+``gaia-from-table``, the write-once recovery and ``ingest-ned``, which
+replaced `dev`'s mirror and repartition on 2026-11-03).
 
 Everything runs against a local-directory Store and a throwaway HTTP
 server over a synthetic two-leaf collection; no S3, no network. The one
@@ -157,46 +158,13 @@ def test_normalise_ptype_and_split_by_hp6():
 
 
 # ---------------------------------------------------------------------------
-# mirror + verify over HTTP into a local store
+# the store itself
 # ---------------------------------------------------------------------------
-
-def test_mirror_streams_and_verifies(served, collection, tmp_path):
-    dest = tmp_path / "store"
-    counts = nc.mirror(served, str(dest), jobs=2)
-    assert counts == {"skipped": 0, "mirrored": 2, "failed": 0}
-    hats = dest / nc.HATS_SUBDIR
-    for rel in ("hats.properties", "partition_info.csv", "schema.txt", "md5sums.txt"):
-        assert (hats / rel).read_bytes() == (collection / rel).read_bytes()
-    for order, npix in LEAVES:
-        rel = nc.leaf_path(order, npix)
-        assert (hats / rel).read_bytes() == (collection / rel).read_bytes()
-        assert (hats / (rel + ".md5")).read_text().strip() == \
-            hashlib.md5((collection / rel).read_bytes()).hexdigest()
-    assert nc.verify(str(dest)) == []
-    # a rerun moves nothing
-    assert nc.mirror(served, str(dest), jobs=2) == {"skipped": 2, "mirrored": 0, "failed": 0}
-
-
-def test_mirror_rejects_md5_mismatch_and_verify_reports_it(served, collection,
-                                                          tmp_path, monkeypatch):
-    # corrupt the manifest's md5 for one leaf: the stream is rejected,
-    # the object is not kept, the run reports the failure
-    rel = nc.leaf_path(*LEAVES[0])
-    md5s = (collection / "md5sums.txt").read_text().replace(
-        hashlib.md5((collection / rel).read_bytes()).hexdigest(), "0" * 32)
-    (collection / "md5sums.txt").write_text(md5s)
-    monkeypatch.setattr(nc.time, "sleep", lambda s: None)      # no backoff
-    dest = tmp_path / "store"
-    counts = nc.mirror(served, str(dest), jobs=1)
-    assert counts == {"skipped": 0, "mirrored": 1, "failed": 1}
-    assert not (dest / nc.HATS_SUBDIR / rel).exists()
-    assert nc.verify(str(dest)) == [rel]
-
 
 def test_s3_store_requires_the_buckets_region(monkeypatch):
     # no default and no silent lookup: an unset or wrong region refuses,
     # naming the bucket's real region (Emily, 2026-09-22: a mis-set region
-    # is how a 70 GB repartition would run cross-region)
+    # is how a 70 GB ingest would run cross-region)
     monkeypatch.setattr(nc.Store, "_bucket_region", lambda self: "us-west-2")
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     with pytest.raises(RuntimeError, match="not set.*us-west-2"):
@@ -230,14 +198,20 @@ def test_iter_reader_reassembles_the_stream():
 
 
 # ---------------------------------------------------------------------------
-# repartition + manifest on the mirrored store
+# ingest-ned: the re-cut straight from the collection, plus the manifest
 # ---------------------------------------------------------------------------
 
-def test_repartition_is_correct_and_idempotent(served, tmp_path):
+def test_ingest_ned_streams_recuts_and_is_idempotent(served, collection, tmp_path):
+    # the catalogs bucket refuses deletes: no leaf is ever stored, only its order-6 files
     dest = tmp_path / "store"
-    nc.mirror(served, str(dest), jobs=1)
-    counts = nc.repartition(str(dest), jobs=1)
-    assert counts == {"done": 2, "skipped": 0, "failed": 0, "rows": 600}
+    info = nc.ingest_ned(served, str(dest), jobs=1)
+    assert info["counts"] == {"done": 2, "skipped": 0, "failed": 0}
+    assert info["release"] == "NED_TEST_1.0"
+    assert info["hp6"]["complete"] is True and info["hp6"]["rows"] == 600
+    hats = dest / nc.HATS_SUBDIR
+    for name in nc.COLLECTION_FILES:                            # metadata copied verbatim
+        assert (hats / name).read_bytes() == (collection / name).read_bytes()
+    assert not any((hats / nc.leaf_path(o, p)).exists() for o, p in LEAVES)
     files = sorted((dest / nc.HP6_SUBDIR).glob("hp6=*/part.parquet"))
     assert files
     total = 0
@@ -248,19 +222,18 @@ def test_repartition_is_correct_and_idempotent(served, tmp_path):
         assert "" not in t["ptype"].to_pylist()
         total += t.num_rows
     assert total == 600
-    # one done marker per leaf; a rerun skips everything
-    markers = list((dest / nc.HP6_SUBDIR / nc.DONE_SUBDIR).glob("*.json"))
-    assert len(markers) == 2
-    assert nc.repartition(str(dest), jobs=1) == {"done": 0, "skipped": 2,
-                                                 "failed": 0, "rows": 600}
+    # one done marker per leaf, carrying the collection's md5 of the leaf it came from
+    md5s = nc.parse_md5sums((collection / "md5sums.txt").read_text())
+    markers = [json.loads(p.read_text())
+               for p in (dest / nc.HP6_SUBDIR / nc.DONE_SUBDIR).glob("*.json")]
+    assert {m["leaf"]: m["source_md5"] for m in markers} == md5s
+    assert sum(m["rows"] for m in markers) == 600
 
-    manifest = nc.write_manifest(str(dest))
-    assert manifest["release"] == "NED_TEST_1.0"
-    assert manifest["hp6"]["complete"] is True
-    assert manifest["hp6"]["rows"] == 600
+    # the manifest written at the end: summary values, not a 49k-entry pixel list
+    manifest = json.loads((dest / nc.MANIFEST_NAME).read_text())
+    assert manifest["hp6"] == {k: v for k, v in info["hp6"].items()}
     assert manifest["hp6"]["n_files"] == len(files)
-    assert set(manifest["hats"]["md5sums"]) == {nc.leaf_path(o, p) for o, p in LEAVES}
-    # summary values, not a 49k-entry pixel list
+    assert set(manifest["hats"]["md5sums"]) == set(md5s)
     assert "pixels" not in manifest["hp6"]
     pixels = sorted(int(f.parent.name.split("=")[1]) for f in files)
     assert (manifest["hp6"]["pixel_min"], manifest["hp6"]["pixel_max"]) == (pixels[0], pixels[-1])
@@ -268,66 +241,47 @@ def test_repartition_is_correct_and_idempotent(served, tmp_path):
     per_file = sorted(pq.read_metadata(f).num_rows for f in files)
     assert manifest["hp6"]["rows_per_file_max"] == per_file[-1]
     assert manifest["hp6"]["rows_per_file_median"] == per_file[len(per_file) // 2]
-    on_disk = json.loads((dest / nc.MANIFEST_NAME).read_text())
-    assert on_disk["hp6"] == manifest["hp6"]
+    assert nc.write_manifest(str(dest))["hp6"] == manifest["hp6"]
+
+    # a rerun skips every leaf; --force redoes them
+    assert nc.ingest_ned(served, str(dest), jobs=1)["counts"] == {"done": 0, "skipped": 2,
+                                                                  "failed": 0}
+    assert nc.ingest_ned(served, str(dest), jobs=1, force=True)["counts"]["done"] == 2
+    # the reader opens it
+    from rapidpipe.science.catalogs.readers import Hp6NedReader
+    reader = Hp6NedReader(str(dest))
+    assert reader.complete and reader.release == "NED_TEST_1.0"
 
 
-def test_delete_leaves_keeps_one_copy(served, tmp_path):
+def test_ingest_ned_rejects_a_leaf_whose_md5_disagrees(served, collection, tmp_path,
+                                                       monkeypatch):
+    # corrupt the collection's md5 for one leaf: that leaf is not re-cut, has no
+    # marker, the run reports the failure and the manifest is not complete
+    rel = nc.leaf_path(*LEAVES[0])
+    md5s = (collection / "md5sums.txt").read_text().replace(
+        hashlib.md5((collection / rel).read_bytes()).hexdigest(), "0" * 32)
+    (collection / "md5sums.txt").write_text(md5s)
+    monkeypatch.setattr(nc.time, "sleep", lambda s: None)      # no backoff
     dest = tmp_path / "store"
-    nc.mirror(served, str(dest), jobs=1)
-    hats = dest / nc.HATS_SUBDIR
-    leaf_files = [hats / nc.leaf_path(o, p) for o, p in LEAVES]
-    assert all(f.exists() for f in leaf_files)
-
-    counts = nc.repartition(str(dest), jobs=1, delete_leaves=True)
-    assert counts["done"] == 2 and counts["rows"] == 600
-    assert not any(f.exists() for f in leaf_files)              # leaves gone
-    for name in nc.COLLECTION_FILES:                            # metadata kept
-        assert (hats / name).exists()
-    total = sum(pq.read_metadata(f).num_rows
-                for f in (dest / nc.HP6_SUBDIR).glob("hp6=*/part.parquet"))
-    assert total == 600                                         # rows all present once
-
-    # verify does not complain about the consumed leaves; manifest counts them
-    assert nc.verify(str(dest)) == []
-    manifest = nc.build_manifest(str(dest))
-    assert manifest["hp6"]["source_leaves_deleted"] == 2
-    assert manifest["hp6"]["complete"] is True
-    # a rerun is still a no-op and does not need the leaves
-    assert nc.repartition(str(dest), jobs=1, delete_leaves=True) == {
-        "done": 0, "skipped": 2, "failed": 0, "rows": 600}
+    info = nc.ingest_ned(served, str(dest), jobs=1)
+    assert info["counts"] == {"done": 1, "skipped": 0, "failed": 1}
+    assert not (dest / nc.done_marker(rel)).exists()
+    assert (info["hp6"]["leaves_done"], info["hp6"]["complete"]) == (1, False)
 
 
-def test_delete_leaves_finishes_an_interrupted_delete(served, tmp_path):
-    # marker written, delete not yet done: the next run removes the leaf
+def test_ingest_ned_subset_and_cli(served, tmp_path, capsys):
     dest = tmp_path / "store"
-    nc.mirror(served, str(dest), jobs=1)
-    nc.repartition(str(dest), jobs=1)                          # keeps leaves
-    leaf = dest / nc.HATS_SUBDIR / nc.leaf_path(*LEAVES[0])
-    assert leaf.exists()
-    assert nc.repartition(str(dest), jobs=1, delete_leaves=True)["skipped"] == 2
-    assert not leaf.exists()
-    assert nc.verify(str(dest)) == []
-
-
-def test_repartition_subset_and_partial_manifest(served, tmp_path):
-    dest = tmp_path / "store"
-    nc.mirror(served, str(dest), jobs=1)
     only = [nc.leaf_path(*LEAVES[1])]
-    assert nc.repartition(str(dest), jobs=1, leaves=only)["done"] == 1
-    manifest = nc.build_manifest(str(dest))
-    assert (manifest["hp6"]["leaves_done"], manifest["hp6"]["leaves_total"]) == (1, 2)
-    assert manifest["hp6"]["complete"] is False
-
-
-def test_cli_verify_and_manifest(served, tmp_path, capsys):
-    dest = tmp_path / "store"
-    assert nc.main(["mirror", "--base-url", served, "--dest", str(dest), "--jobs", "1"]) == 0
-    assert nc.main(["verify", "--dest", str(dest)]) == 0
-    assert nc.main(["repartition", "--dest", str(dest), "--jobs", "1"]) == 0
+    info = nc.ingest_ned(served, str(dest), jobs=1, leaves=only)
+    assert info["counts"]["done"] == 1
+    assert (info["hp6"]["leaves_done"], info["hp6"]["leaves_total"]) == (1, 2)
+    assert info["hp6"]["complete"] is False
+    with pytest.raises(ValueError, match="not in partition_info.csv"):
+        nc.ingest_ned(served, str(dest), jobs=1, leaves=["dataset/Norder=9/Dir=0/Npix=1/x.parquet"])
+    assert nc.main(["ingest-ned", "--base-url", served, "--dest", str(dest), "--jobs", "1"]) == 0
     assert nc.main(["manifest", "--dest", str(dest)]) == 0
     out = capsys.readouterr().out
-    assert "NED_TEST_1.0" in out and "0 missing or mismatched" in out
+    assert "NED_TEST_1.0" in out and '"complete": true' in out
 
 
 def test_cli_parse_failure_exits_64():

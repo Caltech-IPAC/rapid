@@ -20,7 +20,7 @@ radius_arcsec)`` returns column arrays keyed by NED_COLUMNS for every NED
 object in the cone, an EMPTY table when NED has nothing there, and None
 only when the slice could not be obtained. With a complete local copy that
 last case means the copy could not be read at all; a pixel with no file is
-genuinely empty sky, because the repartition writes a file for every pixel
+genuinely empty sky, because the ingest writes a file for every pixel
 that has rows.
 
 Why this exists: the web service (`dev`'s AstroqueryNedReader) took 3-24 s
