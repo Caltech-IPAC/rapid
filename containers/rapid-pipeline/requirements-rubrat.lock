@@ -1,11 +1,13 @@
-# containers/rapid-pipeline/requirements-rubrat.lock: TensorFlow and Keras at dev's pins
-# (modules/rubrat/legacy/rubrat_docs/environment.yml) and every package they need that the
+# containers/rapid-pipeline/requirements-rubrat.lock: TensorFlow at dev's pin, Keras at 3.15.0
+# (dev pinned 3.14.1, which OSV holds seven advisories against, CVE-2026-12481's Lambda
+# deserialisation among them, and none against 3.15.0; the keras line was moved by hand
+# 2026-11-03, same requires_dist, nothing re-resolved) and every package they need that the
 # rapid-python base environment lacks, resolved against it (pip install --dry-run --report,
 # Python 3.13, numpy 2.5.3, 2026-10-27), each wheel pinned by hash. The release build installs
 # it into the sidecar virtual environment with --require-hashes --no-deps (the Containerfile;
 # temporary, rapid_docs decisions.md, rb-port); regenerate it when the base environment moves.
 tensorflow==2.20.0 --hash=sha256:5fa3729b0126f75a99882b89fb7d536515721eda8014a63e259e780ba0a37372
-keras==3.14.1 --hash=sha256:ebd2c14d2af3c9de18083604d408483996407fc7d2f9ebd1d565961f96608c29
+keras==3.15.0 --hash=sha256:9bbd7df12b7b53500d00dc24d97b7e066c771260482cb7118de0b7687a7a2781
 grpcio==1.85.0 --hash=sha256:55cee7cfe71b29f6b377681936f9a5f35e59f5c941a4d84e2712cb309753e7a9
 ml_dtypes==0.6.0 --hash=sha256:26b1f1fa4f0435a2946859823f6e2bf06796f1e9f10f5a05b08a5e3c8f46ff69
 tensorboard==2.20.0 --hash=sha256:9dc9f978cb84c0723acf9a345d96c184f0293d18f166bb8d59ee098e6cfaaba6
