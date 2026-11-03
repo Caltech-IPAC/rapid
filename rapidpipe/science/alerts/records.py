@@ -288,9 +288,9 @@ class RefMatch:
 class NedMatch:
     """One NED object near a detection, as a candidate host galaxy.
 
-    One entry of the alert's nedMatches array, which the packet stage
-    leaves null (no NED match runs); each match keeps its own ptype so
-    consumers can re-cut.
+    One entry of the alert's nedMatches array, built by match_nedcat() from
+    the team's copy of the object directory; each match keeps its own
+    ptype so consumers can re-cut.
 
     NED has no stable numeric object id in this product, so `prefname` is
     the identifier. It is NED's *preferred* name, which can in principle

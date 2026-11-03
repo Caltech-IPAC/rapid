@@ -115,9 +115,27 @@ stamp_half_width = 64
 # Days before the trigger (dev PRV_WINDOW_DAYS, FORCED_WINDOW_DAYS).
 prv_window_days = 365.25
 forced_window_days = 30.0
+# The three catalog matches, each on by default (dev [ALERTS] ned_match and
+# siblings): a switched-on catalog must be official for the loop to plan a
+# packet job, and a match that cannot run at execution ships its field null
+# with the reason in the manifest; the set still issues (rapid_docs
+# decision-catalog-matches). Off: the catalog is not named and the field
+# is null by decision.
+gaia_match = true
+ned_match = true
+lvs_match = true
 # Gaia DR3 matches (dev providers.py): radius in arcseconds, at most this many.
 gaia_radius_arcsec = 1.0
 gaia_max_matches = 3
+# NED host matches (dev providers.py), likewise; ned_host_selection is dev's
+# NED_SELECTION_ENABLED, off since 2026-09-18 pending a re-evaluation on the
+# local copy (the allowlist-or-redshift rule keeps 0.2-2.5% of NED there).
+ned_radius_arcsec = 10.0
+ned_max_matches = 3
+ned_host_selection = false
+# NED-LVS galaxy matches (dev providers.py), likewise.
+lvs_radius_arcsec = 30.0
+lvs_max_matches = 3
 # Reference-catalog star and galaxy matches (dev providers.py), likewise.
 refcat_radius_arcsec = 5.0
 refcat_max_matches = 3

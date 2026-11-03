@@ -95,7 +95,7 @@ One pass, in order:
   run exists, and whose filter and SCA have official PSFs, at most
   ``max_intake``; it names the science PSF of its filter and SCA, and
   expects the ``exposures`` key only when nothing holds or claims it (the
-  18 SCAs of an exposure share it); with the dataset's Gaia ``catalogs``
+  18 SCAs of an exposure share it); with the dataset's ``gaia`` catalog
   official, it names that too, for the intake's WCS offset metric.
 - ``reference``: a job per (field, filter) that a selected official L2
   row has as its own ``field`` (with the bound, a row at or after it), no
@@ -124,7 +124,8 @@ One pass, in order:
   field's objects as they stand when it reads them, in any order.
 - ``packet``: a job per official source set of a selected key with no
   official packet set and no packet job of this run pending or failed,
-  naming the reference, the run's Gaia catalog, the science PSF and the
+  naming the reference, the dataset's catalogs whose ``[packet] <name>_match``
+  is on (``gaia``, ``ned``, ``lvs``; a missing one is a usage error), the science PSF and the
   source set; it reads the object catalog and the forced window as they
   stand at its read (``rapidpipe.stages.packet``).
 - ``kafka``: the caller's ``publish()`` over the run's unstamped official
@@ -360,7 +361,7 @@ class Snapshot:
     diffs: dict[tuple[int, int, int], int]                       # key -> difference job
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
     packets: dict[tuple[int, int, int], int]                     # key -> packet set job
-    gaia: dict | None                                            # the dataset's {"key", "job"}
+    catalogs: dict[str, dict]                                    # name -> the dataset's {"key", "job"}
 
 
 def _rows(cur, sql: str, params=()) -> list[dict]:
@@ -395,9 +396,12 @@ def snapshot(conn, run: int) -> Snapshot:
     by = defaultdict(list)
     for b in bound:
         by[b["product"]].append(b)
-    gaia = [{"key": b["key"], "job": b["job"]} for b in by["catalogs"]]
-    if len(gaia) > 1:
-        raise NotFound(f"dataset {d} has {len(gaia)} official catalogs; the loop names one Gaia catalog")
+    catalogs: dict[str, dict] = {}
+    for b in by["catalogs"]:
+        name = b["key"].get("name")
+        if name in catalogs:
+            raise NotFound(f"dataset {d} has two official catalogs named {name!r}; the loop names one per name")
+        catalogs[name] = {"key": b["key"], "job": b["job"]}
     return Snapshot(
         dataset=d, survey=meta[0]["survey"], settings=meta[0]["settings"], fids=fids,
         published_stems=stems, jobs=jobs,
@@ -409,7 +413,7 @@ def snapshot(conn, run: int) -> Snapshot:
         diffs={_l2key(b["key"]): b["job"] for b in by["diffimages"]},
         sources={_l2key(b["key"]): b["job"] for b in by["sources"]},
         packets={_l2key(b["key"]): b["job"] for b in by["packets"]},
-        gaia=gaia[0] if gaia else None)
+        catalogs=catalogs)
 
 
 #: The Batch job name's suffix of the loop's one automatic rerun of a job (``launch.submit``'s
@@ -615,8 +619,9 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
                                "binding": None})
             claimed.add(expid)
         inputs = [psf(fid, a["sca"], "science")]
-        if snap.gaia is not None:              # the intake measures the WCS against it
-            inputs.append({"product": "catalogs", "key": snap.gaia["key"], "source_job": snap.gaia["job"]})
+        if "gaia" in snap.catalogs:            # the intake measures the WCS against it
+            inputs.append({"product": "catalogs", "key": snap.catalogs["gaia"]["key"],
+                           "source_job": snap.catalogs["gaia"]["job"]})
         out.append({"stage": "intake", "scope": {"dataset": d, "file": stem},
                     "inputs": inputs, "expects": expects})
 
@@ -677,15 +682,18 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     for k, row in sorted(after.items()):
         if k not in snap.sources or k in snap.packets or k in packet_keys:
             continue
-        if snap.gaia is None:
-            raise NotFound("the run has no official catalogs binding for the packet stage's Gaia")
+        wanted = [n for n in ("gaia", "ned", "lvs") if snap.settings["packet"].get(f"{n}_match", True)]
+        missing = [n for n in wanted if n not in snap.catalogs]
+        if missing:
+            raise NotFound(f"the run has no official catalogs binding named {', '.join(missing)} for the"
+                           f" packet stage, and [packet] {', '.join(f'{n}_match' for n in missing)} is on")
         expid, sca, fid = k
         out.append({"stage": "packet", "scope": {"expid": expid, "sca": sca, "fid": fid},
                     "inputs": [{"product": "refimages", "key": {"dataset": d, "field": row["field"],
                                                                 "fid": fid},
                                 "source_job": snap.refs[row["field"], fid]},
-                               {"product": "catalogs", "key": snap.gaia["key"],
-                                "source_job": snap.gaia["job"]},
+                               *[{"product": "catalogs", "key": snap.catalogs[n]["key"],
+                                  "source_job": snap.catalogs[n]["job"]} for n in wanted],
                                psf(fid, sca, "science"),
                                {"product": "sources", "key": key(*k), "source_job": snap.sources[k]}],
                     "expects": [{"product": "packets", "key": key(*k), "binding": None}]})

@@ -227,7 +227,7 @@ def test_a_gaia_prefix_alone_needs_no_source_dir_and_a_non_mirror_is_refused(tmp
     by_url = run_import(tmp_path, source, {"gaia": {**GAIA, "prefix": (source / "gaia").as_uri()}}, "by-url")
     assert read(by_url, "catalogs")[0]["location"] == gaia["location"]
     # a directory that is not a mirror, or an incomplete one, is refused before a manifest
-    with pytest.raises(ValueError, match="not a Gaia mirror"):
+    with pytest.raises(ValueError, match="not a gaia copy"):
         run_import(tmp_path, source, {"gaia": {**GAIA, "prefix": str(source)}}, "not-a-mirror")
     assert not (tmp_path / "outputs" / "not-a-mirror" / "manifest.json").exists()
     (source / "gaia" / "gaia.json").write_text(json.dumps({"release": "gaia_test", "complete": False,
@@ -244,6 +244,36 @@ def test_a_gaia_prefix_alone_needs_no_source_dir_and_a_non_mirror_is_refused(tmp
                                        scope={"psf": {"kind": "science", "path": "psf.fits"}},
                                        survey="S", dataset="D", settings=SETTINGS, inputs=[], attempt=1,
                                        prefix=prefix.as_uri() + "/", connect=fake_connect("")))
+
+
+def test_ned_and_lvs_copies_register_under_their_kinds(tmp_path, source):
+    from tests.support.catalogs import write_hp6_store, write_lvs_store
+    ned = tmp_path / "ned"
+    ned.mkdir()
+    write_hp6_store(ned, [{"ra": RA, "dec": DEC, "prefname": "HOST"}])
+    write_lvs_store(ned, [{"ra": RA, "dec": DEC, "objname": "HOST"}])
+    prefix = run_import(tmp_path, source, {
+        "ned": {"version": "36.1_20260527_v2", "prefix": str(ned)},
+        "lvs": {"version": "20260424", "prefix": str(ned)}}, "ned-lvs")
+    rows = {r["name"]: r for r in read(prefix, "catalogs")}
+    assert set(rows) == {"ned", "lvs"}
+    assert rows["ned"]["version"] == "36.1_20260527_v2" and rows["lvs"]["version"] == "20260424"
+    assert rows["ned"]["location"] == rows["lvs"]["location"] == ned.resolve().as_uri() + "/"
+    recorded = json.loads((prefix / "manifest.json").read_text())
+    assert recorded["ned"]["release"] == "NED_TEST" and recorded["ned"]["complete"] is True
+    assert recorded["lvs"]["release"] == "LVS_TEST" and recorded["lvs"]["rows"] == 1
+    # a name other than the kind is refused; a directory without the copy's record is refused
+    with pytest.raises(ValueError, match="named 'ned'"):
+        run_import(tmp_path, source, {"ned": {"name": "ned-x", "version": "1", "prefix": str(ned)}}, "named")
+    with pytest.raises(ValueError, match="not a lvs copy"):
+        run_import(tmp_path, source, {"lvs": {"version": "1", "prefix": str(source)}}, "no-lvs")
+    # an incomplete NED copy needs "partial": true
+    write_hp6_store(ned, [{"ra": RA, "dec": DEC, "prefname": "HOST"}], complete=False)
+    with pytest.raises(ValueError, match="not complete"):
+        run_import(tmp_path, source, {"ned": {"version": "1", "prefix": str(ned)}}, "incomplete-ned")
+    partial = run_import(tmp_path, source, {"ned": {"version": "1", "prefix": str(ned), "partial": True}},
+                         "partial-ned")
+    assert json.loads((partial / "manifest.json").read_text())["ned"]["complete"] is False
 
 
 def test_an_import_job_takes_at_most_one_epoch(tmp_path, source):

@@ -37,7 +37,8 @@ from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, wri
 
 SURVEY, DATASET, FIELD = "S", "D", 4658155
 #: The run's settings body: the packet table, and the real/bogus model whose version it stamps.
-RUN_SETTINGS = {"packet": {**SETTINGS, "rb_threshold": 0.5134, "rb_version": ""},
+RUN_SETTINGS = {"packet": {**SETTINGS, "ned_match": False, "lvs_match": False,     # gaia alone here
+                           "rb_threshold": 0.5134, "rb_version": ""},
                 "difference": {"rubrat": {"model_prefix": "", "model_key": "rubrat/m-1"}}}
 IMAGE_KEY = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 8}
 OBJECT_KEY = {"dataset": DATASET, "survey": SURVEY, "field": FIELD}

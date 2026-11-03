@@ -75,7 +75,8 @@ D = "r00342"
 SEL = loop.Selection.parse("F146", "8", "all")
 SETTINGS = {"intake": {"source_root": "s3://bucket/l2/", "unsigned": True},
             "reference": {"selection": {"min_frames": 2}},
-            "packet": {"forced_window_days": 30.0}, "kafka": {}}
+            "packet": {"forced_window_days": 30.0, "gaia_match": True, "ned_match": False,
+                       "lvs_match": False}, "kafka": {}}
 
 
 def stem(p: int, v: int, e: int, sca: int = 8) -> str:
@@ -115,7 +116,7 @@ def snap(**kw) -> loop.Snapshot:
                 published_stems=set(), jobs=[],
                 psfs={(8, 8, "science"): (10, 100)},
                 exposures=set(), l2={}, refs={}, diffs={}, sources={}, packets={},
-                gaia={"key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "job": 12})
+                catalogs={"gaia": {"key": {"dataset": D, "name": "gaia", "version": "DR3"}, "job": 12}})
     base.update(kw)
     return loop.Snapshot(**base)
 
@@ -182,7 +183,7 @@ def test_every_official_source_set_gets_one_packet_in_any_order():
     assert [p["scope"]["expid"] for p in packets] == [k2[0], k3[0]]
     assert packets[0]["inputs"] == [
         {"product": "refimages", "key": {"dataset": D, "field": 7, "fid": 8}, "source_job": 30},
-        {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"},
+        {"product": "catalogs", "key": {"dataset": D, "name": "gaia", "version": "DR3"},
          "source_job": 12},
         {"product": "psfs", "key": {"dataset": D, "fid": 8, "sca": 8, "kind": "science"},
          "source_job": 10, "binding": 100},
@@ -520,9 +521,30 @@ def test_a_pending_psf_job_submits_nothing_more():
 def test_an_intake_names_the_datasets_gaia_catalog_once_it_is_official():
     named, _ = loop.plan(snap(), [stem(1, 1, 1)], SEL)
     assert [i for i in stages(named, "intake")[0]["inputs"] if i["product"] == "catalogs"] == [
-        {"product": "catalogs", "key": {"dataset": D, "name": "gaia-x", "version": "DR3"}, "source_job": 12}]
-    alone, _ = loop.plan(snap(gaia=None), [stem(1, 1, 1)], SEL)
+        {"product": "catalogs", "key": {"dataset": D, "name": "gaia", "version": "DR3"}, "source_job": 12}]
+    alone, _ = loop.plan(snap(catalogs={}), [stem(1, 1, 1)], SEL)
     assert [i["product"] for i in stages(alone, "intake")[0]["inputs"]] == ["psfs"]
+
+
+def test_a_packet_job_names_every_switched_on_catalog_and_a_missing_one_is_a_usage_error():
+    k2 = (expid(2, 1, 1), 8, 8)
+    l2 = {k2: l2row(7, 61591.5, 20)}
+    base = dict(l2=l2, refs={(7, 8): 30}, diffs={k2: 41}, sources={k2: 42})
+    ned = {"key": {"dataset": D, "name": "ned", "version": "36.1"}, "job": 13}
+    lvs = {"key": {"dataset": D, "name": "lvs", "version": "20260424"}, "job": 14}
+    gaia = {"key": {"dataset": D, "name": "gaia", "version": "DR3"}, "job": 12}
+    on = {**SETTINGS, "packet": {**SETTINGS["packet"], "ned_match": True, "lvs_match": True}}
+    # all three on and official: named in order, gaia, ned, lvs
+    subs, _ = loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs, "ned": ned}), [], SEL)
+    named = [i["key"]["name"] for i in stages(subs, "packet")[0]["inputs"] if i["product"] == "catalogs"]
+    assert named == ["gaia", "ned", "lvs"]
+    # ned on but not official: refused as a usage error, naming the switch
+    with pytest.raises(loop.NotFound, match="named ned for the packet stage, and .*ned_match is on"):
+        loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs}), [], SEL)
+    # ned and lvs off (the test settings' default): gaia alone, an official ned not named
+    subs, _ = loop.plan(snap(**base, catalogs={"gaia": gaia, "ned": ned}), [], SEL)
+    named = [i["key"]["name"] for i in stages(subs, "packet")[0]["inputs"] if i["product"] == "catalogs"]
+    assert named == ["gaia"]
 
 
 def test_a_container_that_died_unrecorded_is_rerun_once_and_held_pending(monkeypatch):

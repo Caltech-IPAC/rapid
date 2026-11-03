@@ -37,17 +37,20 @@ from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.crossmatch import REFCAT_COLUMNS
 from rapidpipe.science.alerts.records import Source
 from rapidpipe.foundation import prefix
-from rapidpipe.science.catalogs.readers import gaia_reader
+from rapidpipe.science.catalogs.readers import catalog_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
-    Read, WindowImage, _plain, _separation, covering, neighbour, reliability, window_reach,
-    write_set)
-from tests.support.catalogs import write_gaia_store
+    CatalogInput, Read, WindowImage, _plain, _separation, covering, neighbour, reliability,
+    window_reach, write_set)
+from tests.support.catalogs import ra_offset, write_gaia_store, write_hp6_store, write_lvs_store
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
 SETTINGS = {"stamp_half_width": 64, "prv_window_days": 365.25, "forced_window_days": 30.0,
+            "gaia_match": True, "ned_match": True, "lvs_match": True,
             "gaia_radius_arcsec": 1.0, "gaia_max_matches": 3,
+            "ned_radius_arcsec": 10.0, "ned_max_matches": 3, "ned_host_selection": False,
+            "lvs_radius_arcsec": 30.0, "lvs_max_matches": 3,
             "refcat_radius_arcsec": 5.0, "refcat_max_matches": 3}
 SOURCE_JOB = {1: 11, 2: 12, 3: 13}    # epoch -> its source set's job
 MJD = {1: 61685.0, 2: 61686.0, 3: 61687.0}
@@ -106,12 +109,13 @@ def source(epoch: int, sid: int, x: float, y: float, aid: int) -> Source:
                   fluxfit=500.0, fluxerr=10.0, flags=0, field=1, pid=100 + epoch, exptime=60.0)
 
 
-def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: str | None = None):
+def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: str | None = None,
+          broken_catalog: str | None = None):
     """Two objects: A with members in epochs 1, 2 and 3; B (near the edge) only in epoch 2.
 
     The packet set is epoch 2's; epoch 3's detection of A is after the trigger.
     ``unreadable`` names a file under the job directories (``e1/...``) overwritten with bytes
-    that are not FITS.
+    that are not FITS. ``broken_catalog`` names a catalog whose copy could not be opened.
     """
     write_epoch(tmp_path / "e1", [(50, 50, 400.0)], gzipped)
     write_epoch(tmp_path / "e2", [(50, 50, 500.0), (20, 80, 300.0)], gzipped)
@@ -147,16 +151,31 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
                             "psf_fluxerr": 1.0, "science_flux": 54321.0, "science_fluxerr": 1.0,
                             "flags": 0, "time_proc": 61000.0}
     gaia_ra, gaia_dec = wcs().all_pix2world([50.0], [50.0], 1)
+    ra_a, dec_a = float(gaia_ra[0]), float(gaia_dec[0])
     (tmp_path / "gaia").mkdir()
     write_gaia_store(tmp_path / "gaia", [
-        {"source_id": 42, "ra": float(gaia_ra[0]), "dec": float(gaia_dec[0]), "pmra": 0.0, "pmdec": 0.0},
+        {"source_id": 42, "ra": ra_a, "dec": dec_a, "pmra": 0.0, "pmdec": 0.0},
         # a star 0.3 degrees away: in the mirror's one leaf, outside the chip's cone
-        {"source_id": 43, "ra": float(gaia_ra[0]) + 0.3, "dec": float(gaia_dec[0]) + 0.1}])
+        {"source_id": 43, "ra": ra_a + 0.3, "dec": dec_a + 0.1}])
+    # B sits 4.7" from A towards +RA, +Dec (pixel x runs against RA). NED: a host 9" from A
+    # towards -RA (within 10" of A, 12.7" from B), one 40" off; LVS: a galaxy 28" from A towards
+    # -RA (within 30" of A, 31.5" from B)
+    (tmp_path / "ned").mkdir()
+    write_hp6_store(tmp_path / "ned", [
+        {"ra": ra_a - ra_offset(dec_a, 9.0), "dec": dec_a, "prefname": "HOST-A", "ptype": "G", "z": 0.03},
+        {"ra": ra_a - ra_offset(dec_a, 40.0), "dec": dec_a, "prefname": "TOO-FAR", "ptype": "G"}])
+    write_lvs_store(tmp_path / "ned", [{"ra": ra_a - ra_offset(dec_a, 28.0), "dec": dec_a,
+                                        "objname": "LVS-A", "DistMpc": 62.0}])
+    catalogs = {name: CatalogInput(name, 3 + i, catalog_reader(name, (tmp_path / root).as_uri() + "/"))
+                for i, (name, root) in enumerate((("gaia", "gaia"), ("ned", "ned"), ("lvs", "ned")))}
+    if broken_catalog:
+        catalogs[broken_catalog] = CatalogInput(broken_catalog, catalogs[broken_catalog].job, None,
+                                                "RuntimeError: the copy could not be opened")
     read = Read(key={"dataset": "D", "expid": 2, "sca": 8, "fid": 8},
                 source_job=SOURCE_JOB[2], object_job={7: 5, 9: 5}, flags_zero=2,
                 triggers=[a2, b2], aid_of={1: 7, 2: 9}, objects=objects, members=members,
                 images=images, trigger_image=images[1], reuse=reuse,
-                gaia_job=3, gaia=gaia_reader((tmp_path / "gaia").as_uri()), refcat_path=None)
+                catalogs=catalogs, refcat_path=None)
     out = tmp_path / "out"
     out.mkdir()
     summary = write_set(read, SETTINGS, out, out.as_uri() + "/", "D", sync_seed="test")
@@ -175,16 +194,42 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert a["diaObject"]["nDiaSources"] == 2
     assert records[2]["prvDiaSources"] is None and records[2]["diaObject"]["nDiaSources"] == 1
     assert [m["sourceId"] for m in a["gaiaMatches"]] == [42] and records[2]["gaiaMatches"] == []
-    assert a["refStarMatches"] is None and a["nedMatches"] is None and a["lvsMatches"] is None
+    assert [m["prefName"] for m in a["nedMatches"]] == ["HOST-A"] and records[2]["nedMatches"] == []
+    assert a["nedMatches"][0]["z"] == pytest.approx(0.03) and a["nedMatches"][0]["sep"] == pytest.approx(9.0, abs=0.02)
+    assert [m["prefName"] for m in a["lvsMatches"]] == ["LVS-A"] and records[2]["lvsMatches"] == []
+    assert a["lvsMatches"][0]["distMpc"] == pytest.approx(62.0)
+    assert a["refStarMatches"] is None
     external = pq.read_table(out / "external.parquet").to_pylist()
-    assert [(e["sid"], e["catid"], e["catalog_job"]) for e in external] == [(1, "42", 3)]
-    # the mirror read is recorded: the chip's cone, the rows it held, the row groups fetched
-    gaia = summary["gaia"]
+    assert [(e["sid"], e["catid"], e["catalog_job"]) for e in external] == [
+        (1, "42", 3), (1, "HOST-A", 4), (1, "LVS-A", 5)]
+    assert (summary["gaia_matches"], summary["ned_matches"], summary["lvs_matches"]) == (1, 1, 1)
+    assert summary["catalogs_failed"] == []
+    # each copy's read is recorded: the chip's cone, the rows it held, and for Gaia the row groups
+    gaia = summary["catalogs"]["gaia"]
     assert gaia["release"] == "gaia_test" and gaia["ref_epoch"] == 2016.0
     assert gaia["rows"] == 1 and gaia["reads"] and all(len(r) == 3 for r in gaia["reads"])
     assert abs(gaia["cone"]["ra"] - RA0) < 1e-3 and abs(gaia["cone"]["dec"] - DEC0) < 1e-3
-    # the half-diagonal (7.8" for 100 px at 0.11") plus 11"/yr over the 11.8 years from 2016.0
-    assert 130.0 < gaia["cone"]["radius_arcsec"] < 145.0
+    # the half-diagonal (7.8" for 100 px at 0.11"), the 1" radius and 1" slack, plus 11"/yr over
+    # the 11.8 years from 2016.0
+    assert 132.0 < gaia["cone"]["radius_arcsec"] < 147.0
+    ned, lvs = summary["catalogs"]["ned"], summary["catalogs"]["lvs"]
+    assert ned["release"] == "NED_TEST" and ned["rows"] == 1 and ned["n_reads"] >= 1      # TOO-FAR is outside the cone
+    assert lvs["release"] == "LVS_TEST" and lvs["rows"] == 1 and lvs["n_reads"] == 1
+    assert 7.0 + 10.0 < ned["cone"]["radius_arcsec"] < 20.0 and 7.0 + 30.0 < lvs["cone"]["radius_arcsec"] < 40.0
+
+
+def test_a_catalog_that_cannot_be_opened_ships_its_field_null_and_is_recorded(tmp_path):
+    out, summary, records = build(tmp_path, reuse_first_epoch=False, broken_catalog="ned")
+    schema = load_schema()
+    for record in records.values():
+        assert fastavro.validation.validate(record, schema, raise_errors=True)
+        assert record["nedMatches"] is None                       # did not run, not "nothing found"
+    assert [m["sourceId"] for m in records[1]["gaiaMatches"]] == [42]
+    assert [m["prefName"] for m in records[1]["lvsMatches"]] == ["LVS-A"]
+    assert summary["catalogs_failed"] == ["ned"] and summary["ned_matches"] == 0
+    assert summary["catalogs"]["ned"] == {"error": "RuntimeError: the copy could not be opened"}
+    external = pq.read_table(out / "external.parquet").to_pylist()
+    assert [e["catid"] for e in external] == ["42", "LVS-A"]
 
 
 def test_index_rows_locate_their_records(tmp_path):

@@ -493,7 +493,8 @@ CREATE TABLE catalogs (
     UNIQUE (dataset, name, version, job)
 );
 
--- Gaia match rows of a packet set, each naming the catalog job matched against.
+-- Catalog match rows of a packet set (Gaia, NED, NED-LVS), each naming the catalog job
+-- matched against; catid is Gaia's source_id or NED's preferred name.
 CREATE TABLE external (
     job bigint NOT NULL REFERENCES jobs (id),        -- the packet set's job
     source_job bigint NOT NULL REFERENCES jobs (id),

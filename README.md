@@ -42,7 +42,7 @@ podman run --rm -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/py
   -m rapidpipe.science.catalogs.store ingest-gaia --dest /out/gaia --leaves 2/138 --jobs 1
 ```
 
-It prints the ingest record: `"leaves_done": 1`, `"complete": false` (one leaf of 2,016), and the rows. `python -m rapidpipe.science.catalogs.store --help` lists the other builders (NED, NED-LVS, the whole Gaia mirror, and `gaia-from-table` for a catalog of your own on Gaia's columns).
+It prints the ingest record: `"leaves_done": 1`, `"complete": false` (one leaf of 2,016), and the rows. `python -m rapidpipe.science.catalogs.store --help` lists the other builders (NED, NED-LVS, the whole Gaia mirror, and `gaia-from-table` for a catalog of your own on Gaia's columns). The packet stage also matches NED and NED-LVS from the team's copies ([the ruling](https://roman-rapid.readthedocs.io/en/latest/system/decisions.html#decision-catalog-matches)); the run below switches those two off, since neither copy is built locally, so its packets carry Gaia matches and null NED fields.
 
 ### The environment
 
@@ -93,6 +93,7 @@ SRC=s3://stpubdata/roman/nexus/soc_simulations/r00342/l2/
 REV=$(podman image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")
 RUN=$(rp run create --who "$USER" --why "local quickstart" --revision "$REV" \
   --overlay /code/rapidpipe/settings/datasets/hlwas-r00342.toml --set "intake.source_root=\"$SRC\"" \
+  --set packet.ned_match=false --set packet.lvs_match=false \
   --survey HLWAS --dataset r00342-local)
 echo '[{"open": {"survey": "HLWAS", "dataset": "r00342-local", "run": '$RUN'}}]' > "$L/live.json"
 rp official change --group /work/live.json --who "$USER" --why "local run $RUN live"
