@@ -1,22 +1,21 @@
 # ported-from: alerts/catalog_store.py @ a41c4d7b
 """The external catalogs behind the alert cross-matches, each copied into S3
 or a local directory without ever staging it on a disk: the NED object
-directory (mirror, verify, repartition), NED-LVS (ingest-lvs) and Gaia DR3
-(ingest-gaia, gaia-from-table). `dev`'s ``alerts/catalog_store.py`` (Emily
-Everetts, Claude Code, 09/2026), ported whole; the departures are listed at
-the end of this docstring. NED first.
+directory (ingest-ned), NED-LVS (ingest-lvs) and Gaia DR3 (ingest-gaia,
+gaia-from-table). `dev`'s ``alerts/catalog_store.py`` (Emily Everetts,
+Claude Code, 09/2026), ported whole; the departures are listed at the end
+of this docstring. NED first.
 
 Caltech/IPAC-IRSA publishes NED as a HATS collection (HEALPix-partitioned
 parquet). Its 264 leaves are order-2/3 pixels of 50-200 square degrees, up to
 8 million rows each, and, despite hats.properties, not sorted within a
 file. Fine for archiving, far too coarse for a per-chip cone read (one chip
-cone overlaps ~6 million rows). So the collection is mirrored, re-cut, and
-the mirrored leaves are then deleted, leaving one copy of the rows:
+cone overlaps ~6 million rows). So each leaf is streamed into memory,
+re-cut, and dropped, leaving one copy of the rows and no leaf:
 
     <prefix>/objectdir/hats/            the collection's metadata files, verbatim
                                         (hats.properties, partition_info.csv,
-                                        schema.txt, md5sums.txt); its leaves live
-                                        here only between mirror and repartition
+                                        schema.txt, md5sums.txt); never its leaves
     <prefix>/objectdir_hp6/hp6=<p>/part.parquet
                                         the rows re-cut into order-6 NESTED HEALPix
                                         pixels (~0.84 deg^2; a chip touches at most
@@ -30,23 +29,19 @@ a new release, only does the missing work.
 Usage, end to end for a new release (``python -m rapidpipe.science.catalogs.store`` is this
 module's command line):
 
-    # on a machine that can reach the collection URL (IPAC network) AND S3;
-    # streams HTTP -> S3, nothing is written locally
-    python -m rapidpipe.science.catalogs.store mirror --base-url <collection-url> \\
-                                    --dest s3://<the catalogs bucket>/ned
-    python -m rapidpipe.science.catalogs.store verify --dest s3://<the catalogs bucket>/ned
-
-    # on EC2, next to the bucket; reads each leaf into memory (<= ~1 GB) and
-    # deletes it from S3 once its order-6 files are written
-    python -m rapidpipe.science.catalogs.store repartition --dest s3://<the catalogs bucket>/ned \\
-                                         --jobs 4 --delete-leaves
-    python -m rapidpipe.science.catalogs.store manifest    --dest s3://<the catalogs bucket>/ned
+    # on a machine that can reach the collection URL (IPAC network) AND S3:
+    # each leaf is streamed into memory (<= ~1 GB), re-cut, and only its
+    # order-6 files are written; no leaf is stored anywhere, nothing is
+    # written locally, and nothing is deleted (the catalogs bucket refuses
+    # every delete). Resumable: a leaf with a done marker is skipped.
+    python -m rapidpipe.science.catalogs.store ingest-ned --base-url <collection-url> \\
+                                    --dest s3://<the catalogs bucket>/ned/<release> --jobs 2
 
     # NED-LVS (the Local Volume Sample, one FITS table; see that section):
     # mirrored the same way, then converted to parquet streaming from the
-    # store -- no local disk, ~0.5 GB of memory, runs from any machine
-    python -m rapidpipe.science.catalogs.store ingest-lvs  --dest s3://<the catalogs bucket>/ned
-    python -m rapidpipe.science.catalogs.store manifest    --dest s3://<the catalogs bucket>/ned
+    # store -- no local disk, ~0.5 GB of memory, runs from any machine; it
+    # shares NED's prefix and refreshes manifest.json when NED is there
+    python -m rapidpipe.science.catalogs.store ingest-lvs  --dest s3://<the catalogs bucket>/ned/<release>
 
     # Gaia DR3 (LINCC's HATS copy; see that section) goes to a prefix of its
     # own: each of its 2,016 partitions is read over HTTP one row group at a
@@ -55,13 +50,14 @@ module's command line):
     python -m rapidpipe.science.catalogs.store ingest-gaia --dest s3://<the catalogs bucket>/gaia/DR3 --jobs 8
 
 ``--dest`` also accepts a local directory, which is how the tests and dry
-runs work (``repartition --leaves`` and ``ingest-gaia --leaves`` limit a run
-to named leaves).
+runs work (``ingest-ned --leaves`` and ``ingest-gaia --leaves`` limit a run
+to named leaves). ``manifest`` rewrites ``manifest.json`` from the done
+markers on its own.
 
 Row keys: ``_healpix_29`` is the NESTED order-29 pixel index (verified against
 healpy on release 36.1_20260527_v2), so the order-6 pixel is
 ``_healpix_29 >> 46`` and every order-6 pixel lies inside exactly one leaf:
-leaves repartition independently, no merge step.
+leaves are re-cut independently, no merge step.
 
 Departures from `dev` (rapid_docs ``decision-gaia-mirror``, 2026-10-29):
 
@@ -88,7 +84,7 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -116,7 +112,7 @@ COLLECTION_FILES = ("hats.properties", "partition_info.csv", "schema.txt",
 # Layout under the prefix.
 HATS_SUBDIR = "objectdir/hats"
 HP6_SUBDIR = "objectdir_hp6"
-DONE_SUBDIR = "_repartition_done"       # one marker per finished leaf, under HP6_SUBDIR
+DONE_SUBDIR = "_ingest_done"            # one marker per finished leaf, under HP6_SUBDIR
 MANIFEST_NAME = "manifest.json"
 
 # Repartition target: HEALPix order 6 (NESTED), 49,152 pixels of ~0.84 deg^2.
@@ -221,7 +217,7 @@ class Store:
             # S3 layer does not follow S3's region redirect (an unset region
             # means us-east-1 and every request fails with HTTP 301), and a
             # session pointed at the wrong region is the setup under which
-            # a 70 GB repartition would run as cross-region traffic. So no
+            # a 70 GB ingest would run as cross-region traffic. So no
             # default and no silent lookup: refuse, and say what to export.
             region = os.environ.get("AWS_DEFAULT_REGION")
             actual = self._bucket_region()
@@ -401,7 +397,7 @@ class _IterReader:
 
 
 # ---------------------------------------------------------------------------
-# mirror / verify
+# streaming one file into the store
 # ---------------------------------------------------------------------------
 
 def http_chunks(url: str, session: Any, timeout_s: float = 300.0) -> Iterator[bytes]:
@@ -419,8 +415,8 @@ def mirror_file(url: str, store: Store, dest_rel: str,
     Returns ``"skipped"`` when the store already holds it with the expected
     md5, else ``"mirrored"``. A stored object whose md5 disagrees with the
     manifest is deleted and re-streamed; after `retries` failures a
-    RuntimeError names the file. Used for every file of the object-
-    directory collection (mirror()) and for the NED-LVS FITS (ingest_lvs()).
+    RuntimeError names the file. Used for the collections' metadata files
+    (ingest_ned(), ingest_gaia()) and for the NED-LVS FITS (ingest_lvs()).
     """
     session = session or requests.Session()
     if expected_md5 and store.stored_md5(dest_rel) == expected_md5:
@@ -444,7 +440,7 @@ def mirror_file(url: str, store: Store, dest_rel: str,
 class _ThreadSessions:
     """One ``requests.Session`` per worker thread, all closed at the end
     (a session per file leaked sockets: ResourceWarning in the tests).
-    Shared by mirror() and ingest_gaia()."""
+    Shared by ingest_ned() and ingest_gaia()."""
 
     def __init__(self) -> None:
         self._local = threading.local()
@@ -463,71 +459,8 @@ class _ThreadSessions:
             s.close()
 
 
-def mirror(base_url: str, dest: str, jobs: int = 4) -> dict[str, int]:
-    """Mirror the whole collection at `base_url` into ``<dest>/objectdir/hats``.
-
-    Nothing is written locally. Idempotent: files already present with the
-    manifest's md5 are skipped, so a rerun finishes an interrupted mirror
-    and a new release replaces only what changed.
-    """
-    base_url = base_url.rstrip("/") + "/"
-    store = Store(dest)
-    sessions = _ThreadSessions()
-
-    def one(rel: str, md5: str) -> str:
-        return mirror_file(base_url + rel, store, f"{HATS_SUBDIR}/{rel}", md5,
-                           session=sessions.get())
-
-    try:
-        for name in COLLECTION_FILES:              # small; always refreshed
-            mirror_file(base_url + name, store, f"{HATS_SUBDIR}/{name}",
-                        session=sessions.get())
-        md5s = parse_md5sums(store.read_text(f"{HATS_SUBDIR}/md5sums.txt"))
-        counts = {"skipped": 0, "mirrored": 0, "failed": 0}
-        with ThreadPoolExecutor(max_workers=jobs) as pool:
-            futures = {pool.submit(one, rel, md5): rel for rel, md5 in md5s.items()}
-            for i, fut in enumerate(as_completed(futures), start=1):
-                rel = futures[fut]
-                try:
-                    counts[fut.result()] += 1
-                except Exception as exc:
-                    counts["failed"] += 1
-                    logger.error("%s: %s", rel, exc)
-                if i % 10 == 0 or i == len(futures):
-                    logger.info("mirror: %d/%d files %s", i, len(futures), counts)
-    finally:
-        sessions.close_all()
-    return counts
-
-
-def consumed_leaves(store: Store) -> set[str]:
-    """Leaves whose done marker says the mirrored copy was deleted after
-    repartitioning (``repartition --delete-leaves``)."""
-    out = set()
-    for rel in store.list_files(f"{HP6_SUBDIR}/{DONE_SUBDIR}"):
-        if rel.endswith(".json"):
-            summary = json.loads(store.read_text(rel))
-            if summary.get("source_deleted"):
-                out.add(summary["leaf"])
-    return out
-
-
-def verify(dest: str) -> list[str]:
-    """Files in ``md5sums.txt`` that are missing from the store or whose
-    stored md5 differs from the manifest's. Leaves deliberately deleted
-    after repartitioning are not reported."""
-    store = Store(dest)
-    md5s = parse_md5sums(store.read_text(f"{HATS_SUBDIR}/md5sums.txt"))
-    consumed = consumed_leaves(store)
-    bad = [rel for rel, md5 in md5s.items()
-           if rel not in consumed and store.stored_md5(f"{HATS_SUBDIR}/{rel}") != md5]
-    logger.info("verify: %d files listed, %d consumed by repartition, "
-                "%d missing or mismatched", len(md5s), len(consumed), len(bad))
-    return bad
-
-
 # ---------------------------------------------------------------------------
-# repartition
+# the re-cut of one leaf into order-6 files
 # ---------------------------------------------------------------------------
 
 def normalise_ptype(table: pa.Table) -> pa.Table:
@@ -551,91 +484,119 @@ def split_by_hp6(table: pa.Table) -> Iterator[tuple[int, pa.Table]]:
 
 
 def done_marker(leaf_rel: str) -> str:
+    """The marker written once a leaf's order-6 files are all there; its body is
+    the leaf's summary (rows, pixels, the source md5), the manifest's inventory."""
     return f"{HP6_SUBDIR}/{DONE_SUBDIR}/{leaf_rel.replace('/', '__')}.json"
 
 
-def repartition_leaf(dest: str, leaf_rel: str,
-                     delete_source: bool = False) -> dict[str, Any]:
-    """Re-cut one mirrored leaf into order-6 files under ``<dest>/objectdir_hp6``.
-
-    Reads the leaf into memory (largest in release 36.1: 7.8 M rows,
-    ~0.7 GB), groups by order-6 pixel and writes one file per pixel. A
-    done marker per leaf makes reruns skip finished leaves.
-
-    With `delete_source` the mirrored leaf is removed once its order-6
-    files and marker exist, so only one copy of the rows is kept (the
-    marker records ``source_deleted``). The collection's small metadata
-    files stay, and the leaf can always be mirrored again from the source.
-    A leaf whose marker exists but which is still present, a run that
-    stopped between marker and delete, is deleted on the next run.
-    """
-    store = Store(dest)
-    marker = done_marker(leaf_rel)
-    source_rel = f"{HATS_SUBDIR}/{leaf_rel}"
-    if store.exists(marker):
-        summary = json.loads(store.read_text(marker))
-        if delete_source and store.exists(source_rel):
-            store.delete(source_rel)
-            summary["source_deleted"] = True
-            store.write_text(marker, json.dumps(summary))
-        return {**summary, "status": "skipped"}
-    t0 = time.time()
-    table = normalise_ptype(store.read_table(source_rel))
+def write_hp6_files(store: Store, table: pa.Table) -> list[dict[str, int]]:
+    """Write one order-6 file per pixel of `table`, one leaf's rows with
+    ``ptype`` normalised; returns ``[{"hp6", "rows"}, ...]`` in pixel order."""
     pixels = []
     for pixel, rows in split_by_hp6(table):
         store.write_table(rows, hp6_file(pixel))
         pixels.append({"hp6": pixel, "rows": rows.num_rows})
-    summary = {"leaf": leaf_rel, "rows": table.num_rows, "n_hp6": len(pixels),
-               "pixels": pixels, "seconds": round(time.time() - t0, 1),
-               "finished_at": datetime.now(timezone.utc).isoformat(),
-               "source_deleted": False}
-    store.write_text(marker, json.dumps(summary))
-    if delete_source:
-        store.delete(source_rel)
-        summary["source_deleted"] = True
-        store.write_text(marker, json.dumps(summary))
-    return {**summary, "status": "done"}
+    return pixels
 
 
-def repartition(dest: str, jobs: int = 2, leaves: list[str] | None = None,
-                delete_leaves: bool = False) -> dict[str, int]:
-    """Repartition every leaf of the mirrored collection under `dest`.
+# ---------------------------------------------------------------------------
+# ingest-ned: the re-cut straight from the collection, no leaf stored
+# ---------------------------------------------------------------------------
 
-    Parameters
-    ----------
-    dest : str
-        The prefix holding ``objectdir/hats`` (s3://... or a local dir).
-    jobs : int
-        Worker processes; each holds one leaf in memory.
-    leaves : list of str, optional
-        Leaf paths relative to the collection root (dry runs, tests);
-        default is every leaf in ``partition_info.csv``.
-    delete_leaves : bool
-        Remove each mirrored leaf after it has been re-cut, keeping a
-        single copy of the catalog (see repartition_leaf).
+def leaf_bytes(url: str, session: Any, expected_md5: str | None = None,
+               retries: int = 5) -> bytes:
+    """The body of `url` in memory, its md5 checked against `expected_md5`
+    when one is given; `retries` attempts with the same backoff as
+    :func:`mirror_file`, then a RuntimeError naming the URL."""
+    last: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            data = b"".join(http_chunks(url, session))
+            got = hashlib.md5(data).hexdigest()
+            if expected_md5 and got != expected_md5:
+                raise RuntimeError(f"md5 mismatch: got {got}, expected {expected_md5}")
+            return data
+        except Exception as exc:
+            last = exc
+            logger.warning("%s: attempt %d/%d failed (%s)", url, attempt, retries, exc)
+            time.sleep(min(60, 2 ** attempt))
+    raise RuntimeError(f"giving up on {url}: {last}")
+
+
+def ingest_ned(base_url: str, dest: str, jobs: int = 2, leaves: list[str] | None = None,
+               force: bool = False) -> dict[str, Any]:
+    """Re-cut the collection at `base_url` into order-6 files under `dest`,
+    leaf by leaf from the collection itself, storing no leaf.
+
+    The catalogs bucket refuses every delete, so `dev`'s recipe, mirror the
+    collection and delete each leaf once it is re-cut, cannot run there and
+    is not carried. This one copies the collection's metadata files under
+    ``objectdir/hats`` (on S3 only those absent, as the Gaia ingest does on
+    a bucket that refuses overwrites), then by `jobs` threads reads each
+    leaf of ``partition_info.csv`` (or just `leaves`, for dry runs) into
+    memory, checks its md5 against ``md5sums.txt``, writes its order-6
+    files and its done marker, and drops it.
+    The largest leaf (release 36.1: 7.8 M rows, ~0.7 GB) times `jobs` is
+    the memory needed, and nothing is written locally. A leaf with a marker
+    is skipped unless `force`, so a rerun finishes an interrupted ingest; a
+    leaf interrupted before its marker is re-cut again, its files
+    rewritten, which is why the bucket's create-once seal stays off while a
+    release is ingested. Ends by writing ``manifest.json`` and returns it
+    with this run's ``counts``.
     """
+    base_url = base_url.rstrip("/") + "/"
     store = Store(dest)
-    if leaves is None:
-        leaves = [leaf_path(o, p) for o, p in
-                  parse_partition_info(store.read_text(f"{HATS_SUBDIR}/partition_info.csv"))]
-    counts = {"done": 0, "skipped": 0, "failed": 0, "rows": 0}
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
-        futures = {pool.submit(repartition_leaf, dest, leaf, delete_leaves): leaf
-                   for leaf in leaves}
-        for i, fut in enumerate(as_completed(futures), start=1):
-            leaf = futures[fut]
-            try:
-                result = fut.result()
-                counts[result["status"]] += 1
-                counts["rows"] += result["rows"]
-                logger.info("repartition %d/%d: %s %s (%s rows, %d hp6 files, %.0f s)",
-                            i, len(leaves), result["status"], leaf,
-                            f"{result['rows']:,}", result["n_hp6"],
-                            result.get("seconds", 0))
-            except Exception as exc:
-                counts["failed"] += 1
-                logger.error("repartition %d/%d: FAILED %s: %s", i, len(leaves), leaf, exc)
-    return counts
+    sessions = _ThreadSessions()
+    t0 = time.time()
+    try:
+        for name in COLLECTION_FILES:
+            rel = f"{HATS_SUBDIR}/{name}"
+            if not store.exists(rel) or not store.is_s3:
+                mirror_file(base_url + name, store, rel, session=sessions.get())
+        md5s = parse_md5sums(store.read_text(f"{HATS_SUBDIR}/md5sums.txt"))
+        all_leaves = [leaf_path(o, p) for o, p in
+                      parse_partition_info(store.read_text(f"{HATS_SUBDIR}/partition_info.csv"))]
+        todo = all_leaves if leaves is None else list(leaves)
+        unknown = sorted(set(todo) - set(all_leaves))
+        if unknown:
+            raise ValueError(f"leaves not in partition_info.csv: {unknown}")
+
+        def one(leaf_rel: str) -> str:
+            marker = done_marker(leaf_rel)
+            if store.exists(marker) and not force:
+                return "skipped"
+            t1 = time.time()
+            data = leaf_bytes(base_url + leaf_rel, sessions.get(), md5s.get(leaf_rel))
+            table = normalise_ptype(pq.read_table(pa.BufferReader(data)))
+            del data
+            pixels = write_hp6_files(store, table)
+            store.write_text(marker, json.dumps({
+                "leaf": leaf_rel, "rows": table.num_rows, "n_hp6": len(pixels),
+                "pixels": pixels, "seconds": round(time.time() - t1, 1),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "source_md5": md5s.get(leaf_rel)}))
+            return "done"
+
+        counts = {"done": 0, "skipped": 0, "failed": 0}
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = {pool.submit(one, leaf): leaf for leaf in todo}
+            for i, fut in enumerate(as_completed(futures), start=1):
+                try:
+                    counts[fut.result()] += 1
+                except Exception as exc:
+                    counts["failed"] += 1
+                    logger.error("ned leaf %s: %s", futures[fut], exc)
+                if i % 10 == 0 or i == len(futures):
+                    logger.info("ned: %d/%d leaves %s (%.0f s)", i, len(futures), counts,
+                                time.time() - t0)
+    finally:
+        sessions.close_all()
+    manifest = write_manifest(dest)
+    logger.info("ned: %s, %d/%d leaves, %s rows, this run %s (%.0f s)",
+                manifest["release"], manifest["hp6"]["leaves_done"],
+                manifest["hp6"]["leaves_total"], f"{manifest['hp6']['rows']:,}", counts,
+                time.time() - t0)
+    return {**manifest, "counts": counts}
 
 
 # ---------------------------------------------------------------------------
@@ -651,7 +612,7 @@ def repartition(dest: str, jobs: int = 2, leaves: list[str] | None = None,
 # (NEDLVS_20260424.fits), the primary header carries VERSION/EXTRACT/DOI,
 # HDU 1 is a BINTABLE of 84 columns.
 #
-# Same design as the object directory, minus the repartition: the file is
+# Same design as the object directory, minus the re-cut: the file is
 # mirrored into the store exactly as a collection leaf is (mirror_file:
 # streamed, md5 recorded, no local staging), then converted from the store
 # to one parquet file, also streaming: a FITS binary table is a fixed-width
@@ -897,6 +858,9 @@ def ingest_lvs(dest: str, url: str = LVS_URL, force: bool = False) -> dict[str, 
     logger.info("lvs: release %s, %s rows, %d columns -> %s (%.0f s)",
                 info["release"], f"{info['rows']:,}", len(info["columns"]),
                 LVS_PARQUET, info["seconds"])
+    if all(store.exists(f"{HATS_SUBDIR}/{name}") for name in COLLECTION_FILES):
+        write_manifest(dest)                 # NED shares the prefix: its manifest carries "lvs"
+        logger.info("lvs: %s refreshed with the NED-LVS record", MANIFEST_NAME)
     return {**info, "status": "done"}
 
 
@@ -1308,7 +1272,6 @@ def build_manifest(dest: str) -> dict[str, Any]:
                 "file_pattern": hp6_file(0).replace("hp6=0", "hp6=<pixel>"),
                 "leaves_done": len(done), "leaves_total": len(leaves),
                 "complete": len(done) == len(leaves),
-                "source_leaves_deleted": sum(bool(d.get("source_deleted")) for d in done),
                 "rows": sum(d["rows"] for d in done),
                 "n_files": len(hp6_pixels),
                 # summary in place of the file list (49k entries at order 6);
@@ -1338,33 +1301,27 @@ def write_manifest(dest: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = ArgumentParser(
         prog="catalog_store",
-        description="Build the pipeline's copies of the external catalogs: mirror, verify "
-                    "and repartition the NED object directory (HATS collection), ingest "
-                    "NED-LVS, and ingest Gaia DR3; no local staging.")
+        description="Build the pipeline's copies of the external catalogs: ingest the NED "
+                    "object directory (HATS collection) re-cut to order 6, ingest NED-LVS, "
+                    "and ingest Gaia DR3; no local staging, nothing deleted.")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("mirror", help="stream the collection into the store")
+    p = sub.add_parser("manifest", help="write manifest.json under the prefix")
+    p.add_argument("--dest", required=True)
+
+    p = sub.add_parser("ingest-ned", help="re-cut the collection into order-6 files straight "
+                                          "from its URL, one leaf in memory at a time, storing "
+                                          "no leaf (the catalogs bucket refuses deletes)")
     p.add_argument("--base-url", required=True,
                    help="URL of the collection root (the directory holding hats.properties)")
     p.add_argument("--dest", required=True, help="s3://bucket/prefix or a local dir")
-    p.add_argument("--jobs", type=int, default=4, help="parallel transfers")
-
-    p = sub.add_parser("verify", help="check stored md5s against md5sums.txt")
-    p.add_argument("--dest", required=True)
-
-    p = sub.add_parser("repartition", help="re-cut the leaves into order-6 files")
-    p.add_argument("--dest", required=True)
-    p.add_argument("--jobs", type=int, default=2, help="worker processes (one leaf each)")
+    p.add_argument("--jobs", type=int, default=2, help="parallel leaves, one in memory each")
     p.add_argument("--leaves", nargs="*", default=None,
                    help="leaf paths relative to the collection root (dry runs)")
-    p.add_argument("--delete-leaves", action="store_true",
-                   help="remove each mirrored leaf once it is re-cut, so only "
-                        "the order-6 copy remains (the metadata files stay)")
-
-    p = sub.add_parser("manifest", help="write manifest.json under the prefix")
-    p.add_argument("--dest", required=True)
+    p.add_argument("--force", action="store_true",
+                   help="redo leaves that already have a done marker")
 
     p = sub.add_parser("ingest-lvs", help="stream the current NED-LVS FITS into "
                                           "the store and convert it to parquet")
@@ -1399,26 +1356,19 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=getattr(logging, args.log_level),
                         format="%(asctime)s %(levelname)s %(message)s")
 
-    if args.command == "mirror":
-        counts = mirror(args.base_url, args.dest, jobs=args.jobs)
-        print(counts)
-        return 1 if counts["failed"] else 0
-    if args.command == "verify":
-        bad = verify(args.dest)
-        for rel in bad:
-            print("BAD", rel)
-        print(f"{len(bad)} missing or mismatched")
-        return 1 if bad else 0
-    if args.command == "repartition":
-        counts = repartition(args.dest, jobs=args.jobs, leaves=args.leaves,
-                             delete_leaves=args.delete_leaves)
-        print(counts)
-        return 1 if counts["failed"] else 0
     if args.command == "manifest":
         manifest = write_manifest(args.dest)
         print(json.dumps({k: v for k, v in manifest.items()
                           if k not in ("hats", "hats_properties")}, indent=1))
         return 0
+    if args.command == "ingest-ned":
+        info = ingest_ned(args.base_url, args.dest, jobs=args.jobs, leaves=args.leaves,
+                          force=args.force)
+        print(json.dumps({"release": info["release"], "counts": info["counts"],
+                          **{k: info["hp6"][k] for k in
+                             ("leaves_done", "leaves_total", "complete", "rows", "n_files")}},
+                         indent=1))
+        return 1 if info["counts"]["failed"] else 0
     if args.command == "ingest-lvs":
         info = ingest_lvs(args.dest, url=args.url, force=args.force)
         print(json.dumps({k: info.get(k) for k in

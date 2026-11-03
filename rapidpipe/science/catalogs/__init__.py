@@ -8,7 +8,7 @@
 - :mod:`store`: a :class:`~rapidpipe.science.catalogs.store.Store` over
   ``s3://bucket/prefix`` or a local directory, and the builders that fill
   it without staging anything on a disk: the NED object directory
-  (``mirror``, ``verify``, ``repartition``, ``manifest``), NED-LVS
+  (``ingest-ned``, ``manifest``), NED-LVS
   (``ingest-lvs``) and Gaia DR3 (``ingest-gaia``, ``gaia-from-table``).
 - :mod:`readers`: the cone readers over those copies, one per catalog
   (``Hp6NedReader``, ``LvsReader``, ``GaiaReader``), each returning the
