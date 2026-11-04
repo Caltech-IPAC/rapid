@@ -180,3 +180,34 @@ def test_sources_either_side_of_ra_zero_share_their_field_and_healpix():
                                     thresholds={"sumrat": None, "rb": None, "snr": None})
     assert len(set(rows["field"].tolist())) == 1
     assert len(set(rows["hp9"].tolist())) == 1
+
+
+@pytest.mark.parametrize("damage", ["nan_patch", "zero_uncertainty", "all_nan", "nothing_passes"])
+def test_a_value_that_cannot_be_computed_is_null_and_nothing_fails(damage):
+    """dev's -999 cases: the source's values are null, the other sources' are computed."""
+    data, error, body = image(), np.ones((120, 120)), settings()
+    if damage == "nan_patch":
+        data[85:97, 55:67] = np.nan                                  # over the third source
+    elif damage == "zero_uncertainty":
+        error[85:97, 55:67] = 0.0                                    # photutils cannot weight it
+    elif damage == "all_nan":
+        data[:] = np.nan
+    else:
+        body = settings(snr_prefilter_threshold=1e9)
+    catalog = xsources.read_catalog(CATALOG)
+    extra, _ = xsources.extra_columns(catalog, data, error, psf(), body)
+    rows, _ = xsources.xsource_rows(catalog, extra, isdiffpos=True, key=KEY, pid=1, mjdobs=1.0,
+                                    naxis1=120, naxis2=120,
+                                    thresholds=thresholds(settings()["database_prefilter"]))
+    table = {r["num"]: r for r in xsources.xsources_table([rows]).to_pylist()}
+    third = table[3]                                                 # the source at (61.1, 91.3)
+    if damage in ("nan_patch", "all_nan"):
+        assert third["sumrat"] is None and third["fluxfit"] is None and third["sharpness"] is None
+    elif damage == "zero_uncertainty":
+        assert third["fluxfit"] is None and third["sumrat"] is not None
+    else:
+        assert all(r["fluxfit"] is None for r in table.values())
+    if damage != "all_nan":
+        assert table[4]["sumrat"] is not None                        # the bright source, untouched
+    if damage in ("nan_patch", "zero_uncertainty"):
+        assert table[4]["fluxfit"] == pytest.approx(500.0, rel=0.15)
