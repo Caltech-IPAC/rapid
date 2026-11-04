@@ -112,7 +112,12 @@ KEYS = {
     "catalogs": ("dataset", "name", "version"),
 }
 TABLES = ("exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "diffimages", "psfs",
-          "sources", "objects", "memberships", "packets", "forced", "external", "catalogs")
+          "sources", "xsources", "objects", "memberships", "packets", "forced", "external", "catalogs")
+#: Tables whose rows live in child tables, read through <table>_of(jobs) (schema.sql), never the
+#: parent, a read of which visits every child (rapid_docs decisions.md, children-reads).
+CHILD_TABLES = ("sources", "xsources")
+#: The jobs of the run ``%(run)s`` names, as the bigint[] ``rows_of`` takes.
+RUN_JOBS = "ARRAY(SELECT id FROM jobs WHERE run = %(run)s)"
 #: the child tables' other columns naming a job
 JOB_COLUMNS = {"memberships": ("source_job", "object_job"), "packets": ("object_job", "source_job"),
                "external": ("source_job", "catalog_job")}
@@ -153,6 +158,26 @@ def each(check, items: list) -> list:
         return list(pool.map(check, items))
 
 
+def rows_of(table: str, jobs: str) -> str:
+    """The FROM item that reads ``table``'s rows of the jobs ``jobs`` names.
+
+    Parameters
+    ----------
+    table : str
+        A product table.
+    jobs : str
+        An SQL ``bigint[]`` expression naming the jobs whose rows are wanted.
+
+    Returns
+    -------
+    str
+        ``<table>_of(<jobs>)`` for a table of :data:`CHILD_TABLES`, which reads
+        the jobs' child tables only; otherwise the table itself, which the
+        caller's own condition on ``job`` narrows.
+    """
+    return f"{table}_of({jobs})" if table in CHILD_TABLES else table
+
+
 def keyed(product: str, alias: str = "t") -> str:
     return "jsonb_build_object(" + ", ".join(f"'{c}', {alias}.{c}" for c in KEYS[product]) + ")"
 
@@ -181,16 +206,18 @@ def check_lineage(run: int) -> bool:
     t0, bad = time.perf_counter(), []
     for table in TABLES:
         for col in ("job", *JOB_COLUMNS.get(table, ())):
-            (r,) = q(f"SELECT count(*) n FROM {table} t JOIN jobs rj ON rj.id = t.job AND rj.run = %s"
+            (r,) = q(f"SELECT count(*) n FROM {rows_of(table, RUN_JOBS)} t"
+                     " JOIN jobs rj ON rj.id = t.job AND rj.run = %(run)s"
                      f" LEFT JOIN jobs j ON j.id = t.{col} WHERE j.state IS DISTINCT FROM 'published'",
-                     (run,))
+                     {"run": run})
             if r["n"]:
                 bad.append(f"{table}.{col}: {r['n']} rows of the run naming an unpublished job")
     n_inputs = 0
     for product in KEYS:
         rows = q(f"""SELECT i.job, i.kind, i.key, i.source_job FROM job_inputs i JOIN jobs rj ON rj.id = i.job
                      WHERE rj.run = %s AND i.kind = 'input' AND i.product = %s
-                       AND NOT EXISTS (SELECT 1 FROM {product} t JOIN jobs sj ON sj.id = t.job
+                       AND NOT EXISTS (SELECT 1 FROM {rows_of(product, 'ARRAY[i.source_job]')} t
+                                       JOIN jobs sj ON sj.id = t.job
                                        AND sj.state = 'published'
                                        WHERE t.job = i.source_job AND i.key = {keyed(product)})""",
                  (run, product))
@@ -213,7 +240,8 @@ def check_lineage(run: int) -> bool:
     for product in KEYS:
         rows = q(f"""SELECT o.id, o.job, o.key FROM official o JOIN jobs rj ON rj.id = o.job
                      WHERE rj.run = %s AND o.product = %s AND NOT EXISTS (
-                       SELECT 1 FROM {product} t JOIN jobs j ON j.id = t.job AND j.state = 'published'
+                       SELECT 1 FROM {rows_of(product, 'ARRAY[o.job]')} t
+                       JOIN jobs j ON j.id = t.job AND j.state = 'published'
                        WHERE t.job = o.job AND o.key = {keyed(product)})""", (run, product))
         bad += [f"binding {r['id']}: {product} {r['key']} of job {r['job']} has no published row"
                 for r in rows]
@@ -252,7 +280,8 @@ def job_table_failures(j: dict) -> tuple[list[str], int, int]:
         per_table["objects"] -= len(gone)
         per_table["memberships"] += reconcile["attached_memberships"] - moved
     for table in TABLES:
-        (r,) = q(f"SELECT count(*) n FROM {table} WHERE job = %s", (j["id"],))
+        (r,) = q(f"SELECT count(*) n FROM {rows_of(table, 'ARRAY[%(job)s]::bigint[]')} t"
+                 " WHERE t.job = %(job)s", {"job": j["id"]})
         if table in per_table and r["n"] != per_table[table]:
             bad.append(f"job {j['id']} {table}: Parquet {per_table[table]} rows, table {r['n']}")
         elif table not in per_table and r["n"]:
@@ -279,17 +308,21 @@ def check_catalog(run: int) -> bool:
     (row,) = q("SELECT settings -> 'associate' AS a FROM runs WHERE id = %s", (run,))
     radius, flags, snr = (float(row["a"]["match_radius"]), int(row["a"]["source_flags"]),
                           float(row["a"]["min_snr"]))
-    unmatched = q("""SELECT s.job, s.sid FROM sources_official s
-                     WHERE s.run = %s AND s.flags & ~%s = %s
+    unmatched = q("""SELECT s.job, s.sid FROM sources_of(ARRAY(SELECT o.job FROM official o
+                         JOIN jobs oj ON oj.id = o.job WHERE o.closed_at IS NULL
+                         AND o.product = 'sources' AND oj.run = %s)) s
+                     WHERE s.flags & ~%s = %s
                      AND s.fluxerr > 0 AND s.fluxfit / s.fluxerr >= %s
                      AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.job = s.job AND m.sid = s.sid)""",
                   (run, INFORMATIONAL_SOURCE_FLAGS, flags, snr))
     bad += [f"source ({r['job']}, {r['sid']}) is accepted and a member of nothing" for r in unmatched[:5]]
     members = q("""SELECT m.job, m.sid, m.object_job, m.aid, s.ra, s.dec, s.field, o.ra0, o.dec0,
                           o.field AS object_field
-                   FROM memberships m JOIN jobs j ON j.id = m.job AND j.run = %s
-                   JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
-                   JOIN objects o ON o.job = m.object_job AND o.aid = m.aid""", (run,))
+                   FROM memberships m JOIN jobs j ON j.id = m.job AND j.run = %(run)s
+                   JOIN sources_of(ARRAY(SELECT DISTINCT n.source_job FROM memberships n
+                                         JOIN jobs nj ON nj.id = n.job AND nj.run = %(run)s)) s
+                     ON s.job = m.source_job AND s.sid = m.sid
+                   JOIN objects o ON o.job = m.object_job AND o.aid = m.aid""", {"run": run})
     far = [m for m in members if not within(m["ra"], m["dec"], m["ra0"], m["dec0"], radius)]
     bad += [f"membership ({m['job']}, {m['sid']}) of object ({m['object_job']}, {m['aid']}) is outside"
             " the radius" for m in far[:5]]
@@ -323,8 +356,10 @@ def check_catalog(run: int) -> bool:
                        count(*) n, sum(s.ra - o.ra0) ra, sum(s.dec - o.dec0) dec, sum(s.fluxfit) flux
                 FROM objects_official o
                 JOIN memberships_official m ON m.object_job = o.job AND m.aid = o.aid
-                JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
-                WHERE o.run = %s GROUP BY 1, 2, 3, 4, 5, 6""", (run,))
+                JOIN sources_of(ARRAY(SELECT DISTINCT n.source_job FROM memberships_official n
+                                      JOIN jobs nj ON nj.id = n.object_job AND nj.run = %(run)s)) s
+                  ON s.job = m.source_job AND s.sid = m.sid
+                WHERE o.run = %(run)s GROUP BY 1, 2, 3, 4, 5, 6""", {"run": run})
     off = [x for x in sums if x["nsources"] != x["n"]
            or not math.isclose(x["sumflux"], x["flux"], rel_tol=1e-6)
            or not math.isclose(x["sumra"], x["ra"], rel_tol=1e-6, abs_tol=1e-12)
@@ -344,10 +379,10 @@ def members_by_aid(job: int, pairs: list[tuple[int, int]]) -> dict:
     read = [r["source_job"] for r in q("SELECT source_job FROM job_inputs WHERE job = %s"
                                        " AND kind = 'input' AND product = 'sources'", (job,))]
     rows = q("SELECT DISTINCT m.object_job, m.aid, m.source_job, m.sid, s.mjdobs FROM memberships m"
-             " JOIN sources s ON s.job = m.source_job AND s.sid = m.sid"
-             " WHERE m.job = ANY(%s) AND (m.object_job, m.aid) IN"
-             " (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))",
-             (read, [p[0] for p in pairs], [p[1] for p in pairs]))
+             " JOIN sources_of(%(read)s::bigint[]) s ON s.job = m.source_job AND s.sid = m.sid"
+             " WHERE m.job = ANY(%(read)s) AND (m.object_job, m.aid) IN"
+             " (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))",
+             {"read": read, "jobs": [p[0] for p in pairs], "aids": [p[1] for p in pairs]})
     out = defaultdict(dict)
     for r in rows:
         out[(r["object_job"], r["aid"])][(r["source_job"], r["sid"])] = r["mjdobs"]
@@ -483,8 +518,8 @@ def check_twice(a: int, b: int) -> bool:
     cols = [r["column_name"] for r in q("SELECT column_name FROM information_schema.columns"
                                         " WHERE table_name = 'sources' ORDER BY ordinal_position")]
     keep = ", ".join(c for c in cols if c not in ("job", "pid"))
-    ra = q(f"SELECT {keep} FROM sources WHERE job = %s ORDER BY sid", (a,))
-    rb = q(f"SELECT {keep} FROM sources WHERE job = %s ORDER BY sid", (b,))
+    ra = q(f"SELECT {keep} FROM sources_of(ARRAY[%s]::bigint[]) ORDER BY sid", (a,))
+    rb = q(f"SELECT {keep} FROM sources_of(ARRAY[%s]::bigint[]) ORDER BY sid", (b,))
     differ = sum(1 for x, y in zip(ra, rb) if not all(rpk._same(x[c], y[c]) for c in x))
     if len(ra) != len(rb) or differ:
         bad.append(f"jobs {a} and {b}: {len(ra)} and {len(rb)} source rows, {differ} differ")
@@ -526,8 +561,8 @@ def check_counts(run: int, scas: set[int] | None = None) -> bool:
            for (stage, state), n in sorted(Counter((j["stage"], j["state"]) for j in unfinished).items())]
     if not jobs:
         bad.append(f"run {run} has no jobs")
-    rows = {t: q(f"SELECT count(*) n FROM {t} x JOIN jobs j ON j.id = x.job WHERE j.run = %s", (run,))[0]["n"]
-            for t in TABLES}
+    rows = {t: q(f"SELECT count(*) n FROM {rows_of(t, RUN_JOBS)} x JOIN jobs j ON j.id = x.job"
+                 " WHERE j.run = %(run)s", {"run": run})[0]["n"] for t in TABLES}
     (o,) = q("SELECT count(*) n FROM official o JOIN jobs j ON j.id = o.job WHERE j.run = %s"
              " AND o.closed_at IS NULL", (run,))
     detail = (f"jobs {json.dumps({f'{r['stage']} {r['state']}': r['n'] for r in jobs})}; rows"

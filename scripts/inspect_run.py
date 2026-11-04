@@ -175,8 +175,8 @@ def gallery(cur, run: int, job: int, out: Path) -> Path:
     ref = fits.getdata(get(base + REFERENCE), 0).astype(float)
     kept = []
     if not stars:
-        cur.execute("SELECT xfit, yfit, fluxfit / fluxerr FROM sources WHERE job = %s AND fluxerr > 0",
-                    (job,))
+        cur.execute("SELECT s.xfit, s.yfit, s.fluxfit / s.fluxerr FROM sources_of(ARRAY[%s]::bigint[]) s"
+                    " WHERE s.fluxerr > 0", (job,))
         kept = cur.fetchall()
     stars, chosen = cutout_stars(stars, kept, diff.shape)
     finite = diff[np.isfinite(diff)]

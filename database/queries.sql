@@ -18,6 +18,10 @@
 -- - A query "within a named set" reads the base tables through that set's
 --   recorded inputs (Part 1 statement 4: inputs named at launch are the
 --   authority), not the official views.
+-- - sources and xsources are read through sources_of(jobs) and
+--   xsources_of(jobs), which read the named source sets' child tables only,
+--   never the parent tables or their _official views, whose every read visits
+--   every child (schema.sql; rapid_docs decisions.md, children-reads).
 
 --------------------------------------------------------------------------------
 -- The plan's eight queries
@@ -28,7 +32,7 @@
 -- The current L2 file, difference image and source set for a dataset,
 -- exposure, SCA and filter (dev: providers.py's resolve_pid and chip sources).
 SELECT l.rid, l.filename AS l2file, d.pid, d.filename AS diffimage, o.job AS source_set,
-       (SELECT count(*) FROM sources s WHERE s.job = o.job) AS nsources
+       (SELECT count(*) FROM sources_of(ARRAY[o.job]) s) AS nsources
 FROM l2files_official l
 LEFT JOIN diffimages_official d
     ON (d.dataset, d.expid, d.sca, d.fid) = (l.dataset, l.expid, l.sca, l.fid)
@@ -57,7 +61,9 @@ SELECT * FROM (
     SELECT 'detection' AS kind, s.mjdobs, s.fluxfit::double precision AS flux,
            s.fluxerr::double precision AS fluxerr, m.source_job AS job, m.sid AS id
     FROM memberships_official m
-    JOIN sources s ON s.job = m.source_job AND s.sid = m.sid
+    JOIN sources_of(ARRAY(SELECT DISTINCT o.source_job FROM memberships_official o
+                          WHERE o.object_job = %(object_job)s AND o.aid = %(aid)s)) s
+        ON s.job = m.source_job AND s.sid = m.sid
     WHERE m.object_job = %(object_job)s AND m.aid = %(aid)s
     UNION ALL
     (SELECT DISTINCT ON (f.forced_id) 'forced', f.mjdobs, f.psf_flux, f.psf_fluxerr, f.job,
@@ -234,11 +240,14 @@ ORDER BY o.aid;
 -- providers.py R2): no rejecting flag, the informational bright-footprint
 -- bit 16384 cleared (rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS).
 SELECT s.sid, s.ra, s.dec, s.fluxfit, s.fluxerr, f.filter, e.exptime
-FROM sources_official s
+FROM sources_of(ARRAY(SELECT o.job FROM official o
+                      WHERE o.closed_at IS NULL AND o.product = 'sources'
+                        AND o.key = jsonb_build_object('dataset', %(dataset)s::text,
+                            'expid', %(expid)s::integer, 'sca', %(sca)s::smallint,
+                            'fid', %(fid)s::smallint))) s
 JOIN filters f ON f.fid = s.fid
 LEFT JOIN exposures_official e ON (e.dataset, e.expid) = (s.dataset, s.expid)
-WHERE s.dataset = %(dataset)s AND s.expid = %(expid)s AND s.sca = %(sca)s AND s.fid = %(fid)s
-  AND s.flags & ~16384 = 0
+WHERE s.flags & ~16384 = 0
 ORDER BY s.sid;
 
 -- name: reference_for_field

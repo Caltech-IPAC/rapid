@@ -283,8 +283,10 @@ def load(conn, run_id: int) -> dict:
     intake = run["settings"]["settings"]["intake"] if "settings" in run["settings"] else run["settings"]["intake"]
     shift = tuple(float(v) for v in intake.get("crpix_shift", [0.0, 0.0]))
     sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
-                             " s.field = d.field AS in_field FROM sources_official s"
-                             " JOIN diffimages d ON d.pid = s.pid WHERE s.run = %s", (run_id,)))
+                             " s.field = d.field AS in_field"
+                             " FROM sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
+                             " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
+                             " JOIN diffimages d ON d.pid = s.pid", (run_id,)))
     packets = pd.DataFrame(q(
         "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
         " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
