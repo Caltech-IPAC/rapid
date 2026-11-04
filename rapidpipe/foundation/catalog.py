@@ -30,11 +30,22 @@ members is ``S' = S + n d`` and ``Q' = Q + 2 d S + n d²`` per axis.
 `dev`'s alternative, tolerating the duplicates and merging them later
 (``xmerges``), changes object ids after alerts have carried them; not
 taken (rapid_docs ``decisions.md``).
+
+The xsources' catalog, ``xobjects`` and ``xmemberships`` (`dev`'s
+XAstroObjects and XMerges), is reconciled the same way, by the same
+functions over its own tables and ids (:data:`CATALOGS`); a job that
+publishes both takes the locks of both catalogs' fields at once, in one
+ascending order.
 """
 
 from __future__ import annotations
 
 from rapidpipe.products.spatial import ra_offset, within
+
+#: The catalogs reconciled at publish, by objects table: (objects table, memberships table,
+#: object id column, source id column).
+CATALOGS = {"objects": ("objects", "memberships", "aid", "sid"),
+            "xobjects": ("xobjects", "xmemberships", "xaid", "xsid")}
 
 
 def lock(cur, run: int, fields: list[int]) -> None:
@@ -45,18 +56,20 @@ def lock(cur, run: int, fields: list[int]) -> None:
                     [v for f in ordered for v in (int(run), f)])
 
 
-def between(cur, job: int, run: int, catalog: dict, read_jobs: list[int]) -> list[tuple]:
-    """``(job, aid, ra0, dec0, field)`` of the run's objects in the catalog's fields founded outside the read.
+def between(cur, job: int, run: int, catalog: dict, read_jobs: list[int],
+            table: str = "objects") -> list[tuple]:
+    """``(job, id, ra0, dec0, field)`` of the run's objects in the catalog's fields founded outside the read.
 
     A job publishes all its objects in one transaction, so a founding job
     the read saw had published every object it has; one founded since is
     one whose job the read did not see. Read from those fields' children of
-    ``objects`` (``objects_in``), never the parent.
+    ``table`` (``objects_in`` or ``xobjects_in``), never the parent.
     """
-    cur.execute("SELECT o.job, o.aid, o.ra0, o.dec0, o.field FROM objects_in(%s::integer[]) o"
+    ident = CATALOGS[table][2]
+    cur.execute(f"SELECT o.job, o.{ident}, o.ra0, o.dec0, o.field FROM {table}_in(%s::integer[]) o"
                 " JOIN jobs j ON j.id = o.job"
                 " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s"
-                " AND o.job <> %s AND NOT o.job = ANY(%s) ORDER BY o.job, o.aid",
+                f" AND o.job <> %s AND NOT o.job = ANY(%s) ORDER BY o.job, o.{ident}",
                 (fields(catalog), run, catalog["dataset"], catalog["survey"], job,
                  list(read_jobs)))
     return cur.fetchall()
@@ -68,7 +81,7 @@ def fields(catalog: dict) -> list[int]:
 
 
 def attach(job: int, founded: list[dict], memberships: list[dict], others: list[tuple],
-           radius: float) -> tuple[list[dict], list[dict], dict]:
+           radius: float, ident: str = "aid", sid: str = "sid") -> tuple[list[dict], list[dict], dict]:
     """Founded objects and memberships after attaching to ``others`` (``between``'s rows).
 
     A founded object within ``radius`` of any of ``others`` is dropped; each
@@ -77,30 +90,31 @@ def attach(job: int, founded: list[dict], memberships: list[dict], others: list[
     that falls within none is dropped, as a sequential run would never
     have made it. An attached membership takes the surviving object's field.
     Returns the kept founded rows, the memberships and the counts recorded
-    on the job.
+    on the job. ``ident`` and ``sid`` name the object and source id columns
+    (``xaid`` and ``xsid`` for the xsources' catalog).
     """
     targets = {}
     for obj in founded:
         near = [o for o in others if within(obj["ra0"], obj["dec0"], o[2], o[3], radius)]
         if near:
-            targets[obj["aid"]] = (obj, near)
-    kept = [obj for obj in founded if obj["aid"] not in targets]
+            targets[obj[ident]] = (obj, near)
+    kept = [obj for obj in founded if obj[ident] not in targets]
     out, seen, attached = [], set(), 0
     for m in memberships:
-        if m["object_job"] != job or m["aid"] not in targets:
+        if m["object_job"] != job or m[ident] not in targets:
             out.append(m)
-            seen.add((m["object_job"], m["aid"], m["source_job"], m["sid"]))
+            seen.add((m["object_job"], m[ident], m["source_job"], m[sid]))
             continue
-        obj, near = targets[m["aid"]]
+        obj, near = targets[m[ident]]
         ra = (obj["ra0"] + m["dra"]) % 360.0
         dec = obj["dec0"] + m["ddec"]
         for owner, aid, ra0, dec0, field in near:
-            key = (owner, aid, m["source_job"], m["sid"])
+            key = (owner, aid, m["source_job"], m[sid])
             if key in seen or not within(ra, dec, ra0, dec0, radius):
                 continue
             seen.add(key)
             attached += 1
-            out.append({**m, "object_job": owner, "aid": aid, "field": field,
+            out.append({**m, "object_job": owner, ident: aid, "field": field,
                         "dra": m["dra"] + ra_offset(obj["ra0"], ra0),
                         "ddec": m["ddec"] + (obj["dec0"] - dec0)})
     return kept, out, {"objects_between": len(others), "reconciled": len(targets),

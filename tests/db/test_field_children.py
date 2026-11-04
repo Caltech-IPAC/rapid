@@ -67,14 +67,26 @@ def _analyses(conn, tables) -> dict[str, int]:
                             " WHERE relname = ANY(%s)", (list(tables),)))
 
 
+def _xobject(xaid: int, field: int) -> dict:
+    return {"xaid": xaid, "dataset": DATASET, "survey": SURVEY, "field": field,
+            "ra0": 20.0 + xaid, "dec0": -5.0, "flux0": 7.5}
+
+
+def _xmember(job: int, xaid: int, field: int, xsid: int) -> dict:
+    return {"object_job": job, "xaid": xaid, "field": field, "source_job": job, "xsid": xsid,
+            "dra": -1e-6 * xsid, "ddec": 0.0, "flux": 50.0 + xsid}
+
+
 def _publish_two_fields(conn, tmp_path) -> tuple[int, int, int]:
-    """A difference job founding objects in fields 7 and 9 and a packet job carrying both; returns
-    (run, difference job, packet job)."""
+    """A difference job founding objects and xobjects in fields 7 and 9 and a packet job carrying
+    both fields' objects; returns (run, difference job, packet job)."""
     run = new_run(conn)
     diff = new_job(conn, run)
     publish(conn, diff, 1, write_attempt(tmp_path / f"job-{diff}", {
         "objects": [_object(1, 7), _object(2, 7), _object(3, 9)],
-        "memberships": [_member(diff, 1, 7, 1), _member(diff, 2, 7, 2), _member(diff, 3, 9, 3)]}))
+        "memberships": [_member(diff, 1, 7, 1), _member(diff, 2, 7, 2), _member(diff, 3, 9, 3)],
+        "xobjects": [_xobject(1, 7), _xobject(4, 9)],
+        "xmemberships": [_xmember(diff, 1, 7, 1), _xmember(diff, 4, 9, 2), _xmember(diff, 4, 9, 3)]}))
     pkt = new_job(conn, run)
     publish(conn, pkt, 1, write_attempt(tmp_path / f"job-{pkt}", {
         "packets": [_packet(diff, 1, 7, 1), _packet(diff, 3, 9, 3)],
@@ -93,7 +105,8 @@ def test_each_row_lands_in_its_objects_field_child_and_the_parents_hold_none(con
                            " ORDER BY 1") == [(f"{parent}_7", 7), (f"{parent}_9", 9)]
     assert _rows(conn, "SELECT job, parent, field FROM job_fields ORDER BY 1, 2, 3") == [
         (diff, "memberships", 7), (diff, "memberships", 9), (diff, "objects", 7), (diff, "objects", 9),
-        (pkt, "forced", 7), (pkt, "forced", 9), (pkt, "packets", 7), (pkt, "packets", 9)]
+        (diff, "xmemberships", 7), (diff, "xmemberships", 9), (diff, "xobjects", 7),
+        (diff, "xobjects", 9), (pkt, "forced", 7), (pkt, "forced", 9), (pkt, "packets", 7), (pkt, "packets", 9)]
     # COPY keeps a NaN, a null and every digit of a float.
     assert _rows(conn, "SELECT psf_flux = 'NaN', psf_fluxerr, science_flux FROM forced_7") == [
         (True, None, 1.0 / 3.0)]
@@ -223,6 +236,9 @@ def test_the_readers_give_the_rows_the_parents_give(connect, tmp_path):
     assert _rows(conn, "SELECT * FROM objects_official_in(ARRAY[7, 9]) ORDER BY job, aid") == view
     assert _rows(conn, "SELECT * FROM objects_official_in(ARRAY[9]) ORDER BY job, aid") == [
         v for v in view if v[4] == 9]
+    xview = _rows(conn, "SELECT * FROM xobjects_official ORDER BY job, xaid")
+    assert len(xview) == 2 and [v[9] for v in xview] == [1, 2]   # nsources: xaid 1 one, xaid 4 two
+    assert _rows(conn, "SELECT * FROM xobjects_official_in(ARRAY[7, 9]) ORDER BY job, xaid") == xview
 
 
 def test_a_child_carries_the_parents_indexes(connect, tmp_path):
@@ -257,6 +273,7 @@ def test_the_readers_scan_no_parent(connect, tmp_path):
             cur.execute(f"SELECT count(*) FROM {parent}_of(%s::bigint[])", ([diff, pkt],))
             assert cur.fetchone()[0] > 0
         cur.execute("SELECT count(*) FROM objects_official_in(ARRAY[7, 9])")
+        cur.execute("SELECT count(*) FROM xobjects_official_in(ARRAY[7, 9])")
         cur.execute("SELECT pg_stat_force_next_flush()")
     conn.commit()
     with conn.cursor() as cur:
@@ -316,7 +333,8 @@ def test_the_readers_need_no_inheritance(connect, tmp_path):
     readers = [*(f"SELECT t::text FROM {p}_in(ARRAY[7, 9]) t ORDER BY 1" for p in FIELD_PARENTS),
                *(f"SELECT t::text FROM {p}_of(ARRAY[{diff}, {pkt}]::bigint[]) t ORDER BY 1"
                  for p in FIELD_PARENTS),
-               "SELECT t::text FROM objects_official_in(ARRAY[7, 9]) t ORDER BY 1"]
+               "SELECT t::text FROM objects_official_in(ARRAY[7, 9]) t ORDER BY 1",
+               "SELECT t::text FROM xobjects_official_in(ARRAY[7, 9]) t ORDER BY 1"]
     before = [_rows(conn, q) for q in readers]
     assert all(before)
     children = [(p, f"{p}_{f}") for p in FIELD_PARENTS for f in (7, 9)]

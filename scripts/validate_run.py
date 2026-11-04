@@ -109,17 +109,21 @@ KEYS = {
     "refimages": ("dataset", "field", "fid"),
     "psfs": ("dataset", "fid", "sca", "kind"),
     "objects": ("dataset", "survey", "field"),
+    "xobjects": ("dataset", "survey", "field"),
     "catalogs": ("dataset", "name", "version"),
 }
 TABLES = ("exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "diffimages", "psfs",
-          "sources", "xsources", "objects", "memberships", "packets", "forced", "external", "catalogs")
+          "sources", "xsources", "objects", "memberships", "xobjects", "xmemberships", "packets", "forced",
+          "external", "catalogs")
 #: Tables whose rows live in child tables, read through <table>_of(jobs) (schema.sql), never the
 #: parent, a read of which visits every child (rapid_docs decisions.md, children-reads).
-CHILD_TABLES = ("sources", "xsources", "objects", "memberships", "packets", "forced")
+CHILD_TABLES = ("sources", "xsources", "objects", "memberships", "xobjects", "xmemberships", "packets",
+                "forced")
 #: The jobs of the run ``%(run)s`` names, as the bigint[] ``rows_of`` takes.
 RUN_JOBS = "ARRAY(SELECT id FROM jobs WHERE run = %(run)s)"
 #: the child tables' other columns naming a job
-JOB_COLUMNS = {"memberships": ("source_job", "object_job"), "packets": ("object_job", "source_job"),
+JOB_COLUMNS = {"memberships": ("source_job", "object_job"), "xmemberships": ("source_job", "object_job"),
+               "packets": ("object_job", "source_job"),
                "external": ("source_job", "catalog_job")}
 FORCED_COMPARED = ("forced_id", "psf_flux", "psf_fluxerr", "science_flux", "science_fluxerr", "flags",
                    "time_proc", "x", "y", "ra", "dec", "pid")
@@ -267,18 +271,22 @@ def job_table_failures(j: dict) -> tuple[list[str], int, int]:
         n_outputs += 1
         if out["checksum"] != "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest():
             bad.append(f"job {j['id']} {out['path']}: the checksum differs from the manifest's")
-    reconcile = j["manifest"].get("reconcile")
-    if reconcile and reconcile["reconciled"]:
+    for key, objects, memberships, ident in (("reconcile", "objects", "memberships", "aid"),
+                                             ("xreconcile", "xobjects", "xmemberships", "xaid")):
+        reconcile = j["manifest"].get(key)
+        if not (reconcile and reconcile["reconciled"]):
+            continue
         # Founded objects the publisher attached elsewhere are not rows; their memberships moved.
-        stored = {r["aid"] for r in q("SELECT aid FROM objects_of(ARRAY[%s]::bigint[])", (j["id"],))}
-        gone = set(pq.read_table(parquet["objects"], columns=["aid"]).column("aid").to_pylist()) - stored
-        members = pq.read_table(parquet["memberships"], columns=["object_job", "aid"]).to_pylist()
-        moved = sum(1 for m in members if m["object_job"] == j["id"] and m["aid"] in gone)
+        stored = {r[ident] for r in q(f"SELECT {ident} FROM {objects}_of(ARRAY[%s]::bigint[])",
+                                      (j["id"],))}
+        gone = set(pq.read_table(parquet[objects], columns=[ident]).column(ident).to_pylist()) - stored
+        members = pq.read_table(parquet[memberships], columns=["object_job", ident]).to_pylist()
+        moved = sum(1 for m in members if m["object_job"] == j["id"] and m[ident] in gone)
         if len(gone) != reconcile["reconciled"]:
-            bad.append(f"job {j['id']}: {len(gone)} founded objects not stored, reconcile says"
+            bad.append(f"job {j['id']}: {len(gone)} founded {objects} not stored, {key} says"
                        f" {reconcile['reconciled']}")
-        per_table["objects"] -= len(gone)
-        per_table["memberships"] += reconcile["attached_memberships"] - moved
+        per_table[objects] -= len(gone)
+        per_table[memberships] += reconcile["attached_memberships"] - moved
     for table in TABLES:
         (r,) = q(f"SELECT count(*) n FROM {rows_of(table, 'ARRAY[%(job)s]::bigint[]')} t"
                  " WHERE t.job = %(job)s", {"job": j["id"]})

@@ -12,8 +12,8 @@ schema's ``source_set_child``, which SQL readers use too, with
 ``sources_of`` and ``xsources_of``), for an imported set as for one the
 difference stage made.
 
-``objects``, ``memberships``, ``packets`` and ``forced`` keep theirs in one
-child per field, ``<parent>_<field>``, made by ``create_field_child``, each
+``objects``, ``memberships``, ``xobjects``, ``xmemberships``, ``packets``
+and ``forced`` keep theirs in one child per field, ``<parent>_<field>``, made by ``create_field_child``, each
 row filed under its object's field. The publisher records the fields a
 job's rows went to in ``job_fields``; SQL reads them through
 ``<parent>_in(fields)`` and ``<parent>_of(jobs)`` (``database/schema.sql``).
@@ -29,7 +29,7 @@ from typing import Iterable
 PARENTS = ("sources", "xsources")
 
 #: The tables whose rows live in child tables by field, the object's.
-FIELD_PARENTS = ("objects", "memberships", "packets", "forced")
+FIELD_PARENTS = ("objects", "memberships", "xobjects", "xmemberships", "packets", "forced")
 
 #: MJD 0, the day ``create_catalog_child`` counts from; MJD days begin at 0h UT.
 MJD_EPOCH = date(1858, 11, 17)

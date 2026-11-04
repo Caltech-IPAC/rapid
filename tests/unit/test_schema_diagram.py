@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from rapidpipe.foundation.children import FIELD_PARENTS
+
 ROOT = Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location("schema_diagram", ROOT / "scripts" / "schema_diagram.py")
 schema_diagram = importlib.util.module_from_spec(_SPEC)
@@ -60,10 +62,10 @@ def test_dot_only_writes_the_dot_beside_out(tmp_path):
 
 def test_the_parents_of_child_tables_are_marked_with_their_childrens_names():
     assert PARENTS == {"sources": "sources_<yyyymmdd>_<sca>", "xsources": "xsources_<yyyymmdd>_<sca>",
-                       **{t: f"{t}_<field>" for t in ("objects", "memberships", "packets", "forced")}}
+                       **{t: f"{t}_<field>" for t in FIELD_PARENTS}}
     dot = schema_diagram.to_dot(TABLES, PARENTS)
     for parent in ("sources", "xsources"):
         assert f"rows in children {parent}_&lt;yyyymmdd&gt;_&lt;sca&gt;" in dot
-    for parent in ("objects", "memberships", "packets", "forced"):
+    for parent in FIELD_PARENTS:
         assert f"rows in children {parent}_&lt;field&gt;" in dot
-    assert dot.count("rows in children") == 6
+    assert dot.count("rows in children") == 2 + len(FIELD_PARENTS)

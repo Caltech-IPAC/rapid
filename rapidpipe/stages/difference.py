@@ -107,7 +107,10 @@ their neighbours as they stand, records that read in the manifest's
 wherever on the image it falls (the field rule, runbook part 12 step 1),
 and publishes the objects it founded and its memberships, which the
 publisher reconciles under the touched fields' locks against those founded
-since the read, :mod:`rapidpipe.foundation.catalog`).
+since the read, :mod:`rapidpipe.foundation.catalog`), and under ``sfft``
+``xobjects`` and ``xmemberships`` (:func:`xassociate`, `dev`'s
+crossMatchXSources: the same over the xsources, reconciled the same way
+under the manifest's ``xcatalog``).
 The manifest records `dev`'s gain-matching and
 catalog measurements under ``difference``, the reference PSF's
 measurement under ``difference.refpsf``, and ``metrics``, one flat dict of
@@ -134,7 +137,9 @@ uncapped catalog's ``n_sources_near_bright_px`` and
 ``n_sources_ring_snr_gt20``, defined there; ``pixel_columns_s``, the
 seconds the pixel columns took for both SFFT catalogs; ``n_objects_read``,
 ``n_objects_founded``, ``n_memberships`` and ``n_sources_out_of_field``,
-the accepted sources outside the image's own field, the association's). The
+the accepted sources outside the image's own field, the association's;
+``n_xobjects_read``, ``n_xobjects_founded`` and ``n_xmemberships``, the
+xsources' cross-match's). The
 residual stars' positions sit beside them as ``difference.residual_stars``
 for a reader's gallery. A metric the job cannot make is absent.
 
@@ -189,6 +194,7 @@ from rapidpipe.foundation.prefix import get
 from rapidpipe.products.diffimage import (
     INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT, catalog_outcome_bit)
 from rapidpipe.science.crossmatch.memory import associate_epoch
+from rapidpipe.science.crossmatch.xsources import accepted as accepted_xsources, xassociate_epoch
 from rapidpipe.science.difference import (
     background,
     columns,
@@ -248,6 +254,19 @@ MEMBERSHIPS_SCHEMA = pa.schema([
     ("object_job", pa.int64()), ("aid", pa.int64()), ("field", pa.int32()), ("source_job", pa.int64()),
     ("sid", pa.int64()),
     ("dra", pa.float64()), ("ddec", pa.float64()), ("flux", pa.float64()),
+])
+
+#: The fields' xobjects of the job's run as they stand, from those fields' children of ``xobjects``.
+XOBJECTS_SQL = ("SELECT o.job, o.xaid, o.field, o.ra0, o.dec0 FROM xobjects_in(%s::integer[]) o"
+                " JOIN jobs j ON j.id = o.job WHERE j.run = %s AND o.dataset = %s AND o.survey = %s")
+
+XOBJECTS_SCHEMA = pa.schema([
+    ("xaid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),
+    ("ra0", pa.float64()), ("dec0", pa.float64()), ("flux0", pa.float32()),
+])
+XMEMBERSHIPS_SCHEMA = pa.schema([
+    ("object_job", pa.int64()), ("xaid", pa.int64()), ("field", pa.int32()), ("source_job", pa.int64()),
+    ("xsid", pa.int64()), ("dra", pa.float64()), ("ddec", pa.float64()), ("flux", pa.float64()),
 ])
 
 DIFFIMAGES_SCHEMA = pa.schema([
@@ -934,10 +953,20 @@ def run(job: JobContext) -> None:
                    n_objects_founded=association["founded"],
                    n_memberships=association["memberships"],
                    n_sources_out_of_field=association["sources_out_of_field"])
+    outputs += [("objects", "objects.parquet"), ("memberships", "memberships.parquet")]
+    xcatalog = {}
+    if sfft_catalogs.xsources is not None:     # the xsources' cross-match, dev's crossMatchXSources
+        xreads, xcatalog["xcatalog"], xassociation = xassociate(job, xsources_rows)
+        reads = reads + xreads
+        xcatalog["xassociation"] = xassociation
+        metrics.update(n_xobjects_read=xassociation["objects_read"],
+                       n_xobjects_founded=xassociation["founded"],
+                       n_xmemberships=xassociation["memberships"])
+        outputs += [("xobjects", "xobjects.parquet"), ("xmemberships", "xmemberships.parquet")]
     job.write_manifest(
-        outputs + [("objects", "objects.parquet"), ("memberships", "memberships.parquet")],
+        outputs,
         empty_ok=("sources", "xsources"),       # a difference with nothing above the cut
-        reads=reads, catalog=catalog, association=association,
+        reads=reads, catalog=catalog, association=association, **xcatalog,
         difference={
             "pid": inputs.pid, "rid": inputs.rid, "rfid": inputs.rfid,
             "zero_point": {"value": zero_point, "source": zero_point_source},
@@ -1019,6 +1048,52 @@ def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[lis
     counts = {**epoch.counts, "fields_read": len(near),
               "sources_out_of_field": sum(r["field"] != image_field for r in accepted)}
     return reads, catalog, counts
+
+
+def xassociate(job: JobContext, xsources: pa.Table) -> tuple[list, dict, dict]:
+    """Cross-match the epoch's xsources against their fields' xobjects of the run; write the rows.
+
+    :func:`associate` for the xsources, as `dev`'s crossMatchXSources is
+    crossMatchSources for them (:mod:`rapidpipe.science.crossmatch.xsources`):
+    the xsources whose SExtractor ``flags`` equal ``[associate]
+    xsource_flags``, both signs, are matched within ``match_radius`` against
+    the run's xobjects in their fields and those fields' neighbours
+    (:data:`XOBJECTS_SQL`, the read recorded as one ``xobjects`` input per
+    field and founding job), each founding in its own field with its
+    ``fluxap`` as ``flux0``. Writes ``xobjects.parquet`` and
+    ``xmemberships.parquet`` under ``job.path`` (each membership filed under
+    its xobject's field); returns the manifest's ``reads``, its ``xcatalog``
+    (the fields the publisher locks and reconciles the xobjects under) and
+    the counts.
+    """
+    settings = job.settings["associate"]
+    radius = float(settings["match_radius"])
+    rows = accepted_xsources(
+        xsources.select(["xsid", "expid", "mjdobs", "field", "ra", "dec", "fluxap", "flags"]).to_pylist(),
+        int(settings["xsource_flags"]))
+    near = _with_neighbours({r["field"] for r in rows})
+    with job.connect() as conn, conn.cursor() as cur:
+        cur.execute(XOBJECTS_SQL, (sorted(near), job.run, job.dataset, job.survey))
+        found = cur.fetchall()
+        conn.commit()
+    xobjects = {xaid: (owner, ra0, dec0) for owner, xaid, _, ra0, dec0 in found}
+    field_of = {(owner, xaid): field for owner, xaid, field, _, _ in found}
+    epoch = xassociate_epoch(xobjects, rows, job=job.job, radius=radius)
+    field_of.update({(job.job, r["xaid"]): r["field"] for r in epoch.founded})
+    memberships = [{**m, "field": field_of[m["object_job"], m["xaid"]]} for m in epoch.memberships]
+    pq.write_table(pa.Table.from_pylist(
+        [{**r, "dataset": job.dataset, "survey": job.survey} for r in epoch.founded],
+        schema=XOBJECTS_SCHEMA), job.path / "xobjects.parquet")
+    pq.write_table(pa.Table.from_pylist(memberships, schema=XMEMBERSHIPS_SCHEMA),
+                   job.path / "xmemberships.parquet")
+    reads = [{"product": "xobjects",
+              "key": {"dataset": job.dataset, "survey": job.survey, "field": field},
+              "source_job": owner}
+             for field, owner in sorted({(field, owner) for owner, _, field, _, _ in found})]
+    xcatalog = {"dataset": job.dataset, "survey": job.survey,
+                "fields": sorted(_with_neighbours({m["field"] for m in memberships})),
+                "radius": radius}
+    return reads, xcatalog, {**epoch.counts, "fields_read": len(near)}
 
 
 def _with_neighbours(fields: set[int]) -> set[int]:
