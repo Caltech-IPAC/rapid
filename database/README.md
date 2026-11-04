@@ -34,7 +34,9 @@ the pipeline imports.
   (`xsources_official` joins the set's `sources` binding).
 
   `objects`, `memberships`, `packets` and `forced` are split by field, as
-  `dev`'s `astroobjects` and `merges` are: one child per Roman
+  `dev`'s `astroobjects` and `merges` are, and so are `xobjects` and
+  `xmemberships`, `dev`'s `xastroobjects` and `xmerges`: the xsources'
+  catalog, which the SFFT difference job's cross-match writes: one child per Roman
   tessellation field, `<parent>_<field>` (for example `objects_1234`),
   each row filed under its object's field, so an object's row, its
   memberships, its packet rows and its forced photometry share one
@@ -65,8 +67,8 @@ the pipeline imports.
 - [`schema.svg`](schema.svg): the schema's entity diagram, every table and
   column with its declared foreign keys (solid) and the references the code
   follows by convention (dashed); a parent of child tables (`sources`,
-  `xsources`, `objects`, `memberships`, `packets`, `forced`) is marked
-  with its children's names. `scripts/schema_diagram.py` draws it from
+  `xsources`, `objects`, `memberships`, `xobjects`, `xmemberships`,
+  `packets`, `forced`) is marked with its children's names. `scripts/schema_diagram.py` draws it from
   `schema.sql` through `schema.dot` with Graphviz; a change to `schema.sql`
   reruns it (`tests/unit/test_schema_diagram.py` fails on a stale
   `schema.dot`).

@@ -41,7 +41,7 @@ STATIC = ["filters", "scas", "surveys", "fields"]
 #: Sets whose child rows share one official binding (schema.sql's views).
 GROUPS = {
     "refimages": ["refimages", "refimimages", "refimcatalogs"],
-    "sources": ["sources", "xsources", "memberships", "objects"],
+    "sources": ["sources", "xsources", "memberships", "objects", "xmemberships", "xobjects"],
     "packets": ["packets", "forced", "external"],
 }
 #: References the code follows that the schema does not declare:
@@ -56,6 +56,8 @@ CONVENTION = [
     ("xsources", "pid", "diffimages", "pid"),
     ("memberships", "aid", "objects", "aid"),
     ("memberships", "sid", "sources", "sid"),
+    ("xmemberships", "xaid", "xobjects", "xaid"),
+    ("xmemberships", "xsid", "xsources", "xsid"),
     ("packets", "aid", "objects", "aid"),
     ("packets", "sid", "sources", "sid"),
     ("forced", "aid", "objects", "aid"),

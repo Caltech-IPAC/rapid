@@ -107,6 +107,10 @@ match_radius = 0.00001528
 # Sources matched: flags equal to this, and fluxfit / fluxerr at least min_snr.
 source_flags = 0
 min_snr = 5.0
+# Xsources matched (the xsources' cross-match into xobjects and xmemberships, under
+# sfft): SExtractor flags equal to this, both signs, no S/N cut (dev's
+# crossMatchXSources.py matches flags = 0).
+xsource_flags = 0
 
 [packet]
 edge_pixels = 2

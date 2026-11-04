@@ -118,6 +118,8 @@ def fake_connect(files: dict[str, Path], queries: list):
                 self.row = (files["science_psf"].as_uri(),)
             elif "FROM objects" in statement:
                 self.rows = []                  # the field's catalog: empty, every source founds
+            elif "FROM xobjects" in statement:
+                self.rows = []                  # the xsources' catalog: empty, every xsource founds
             else:
                 assert "nextval" in statement
                 self.row = (PID,)
@@ -199,8 +201,9 @@ def manifest(prefix: Path) -> dict:
 def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, fakes):
     prefix = run_difference(tmp_path, files)
     assert [o["table"] for o in manifest(prefix)["outputs"]] == [
-        "diffimages", "sources", "xsources", "objects", "memberships"]
-    for table in ("diffimages", "sources", "xsources", "objects", "memberships"):
+        "diffimages", "sources", "xsources", "objects", "memberships", "xobjects", "xmemberships"]
+    for table in ("diffimages", "sources", "xsources", "objects", "memberships", "xobjects",
+                  "xmemberships"):
         assert set(pq.read_schema(prefix / f"{table}.parquet").names) == schema_columns(table)
     (row,) = read(prefix, "diffimages")
     assert {k: row[k] for k in ("pid", "dataset", "expid", "sca", "fid", "rid", "rfid")} == {
@@ -245,6 +248,36 @@ def test_a_job_associates_its_sources_with_the_catalog_it_read_and_records_the_r
     assert recorded["metrics"]["n_objects_read"] == 0
     assert recorded["metrics"]["n_sources_out_of_field"] == sum(
         sources[m["sid"]]["field"] != row["field"] for m in own)
+
+
+def test_a_job_cross_matches_its_xsources_into_xobjects_and_records_the_read(tmp_path, files, fakes):
+    """dev's crossMatchXSources: an empty xobjects catalog, so each accepted xsource (SExtractor
+    flags 0, both signs) founds an xobject in its own field with its fluxap as flux0, or joins one
+    founded at its position; each xmembership's flux is its xsource's fluxap and it is filed
+    under its xobject's field; the read and the xcatalog the publisher locks are recorded."""
+    prefix = run_difference(tmp_path, files)
+    recorded = manifest(prefix)
+    xsources = {x["xsid"]: x for x in read(prefix, "xsources")}
+    founded, members = read(prefix, "xobjects"), read(prefix, "xmemberships")
+    accepted = {i for i, x in xsources.items() if x["flags"] == 0}
+    assert accepted and {m["xsid"] for m in members} == accepted
+    assert {(m["object_job"], m["source_job"]) for m in members} == {(9, 9)}
+    by_xaid = {o["xaid"]: o for o in founded}
+    for m in members:
+        x, o = xsources[m["xsid"]], by_xaid[m["xaid"]]
+        assert m["flux"] == pytest.approx(x["fluxap"]) and m["field"] == o["field"]
+    for o in founded:                                     # the founder: its own position and fluxap
+        (founder,) = [xsources[m["xsid"]] for m in members
+                      if m["xaid"] == o["xaid"] and m["dra"] == 0.0 and m["ddec"] == 0.0][:1]
+        assert (o["ra0"], o["dec0"], o["field"]) == (founder["ra"], founder["dec"], founder["field"])
+        assert o["flux0"] == pytest.approx(founder["fluxap"])
+    touched = {o["field"] for o in founded}
+    near = touched.union(*(difference.field_neighbours(f) for f in touched))
+    assert recorded["xcatalog"] == {"dataset": "D", "survey": "S", "fields": sorted(near),
+                                    "radius": THIN["associate"]["match_radius"]}
+    assert [r for r in recorded["reads"] if r["product"] == "xobjects"] == []
+    assert recorded["metrics"]["n_xobjects_founded"] == len(founded)
+    assert recorded["metrics"]["n_xmemberships"] == len(members)
 
 
 def test_the_job_publishes_the_kept_set_gzipped_and_nothing_else(tmp_path, files, fakes):
@@ -421,11 +454,12 @@ def test_skip_loading_sources_records_declares_an_empty_set_and_still_loads_xsou
                             body=settings(skip_loading_sources_records=True))
     recorded = manifest(prefix)
     assert [o["table"] for o in recorded["outputs"]] == [
-        "diffimages", "sources", "xsources", "objects", "memberships"]
+        "diffimages", "sources", "xsources", "objects", "memberships", "xobjects", "xmemberships"]
     assert "sources" in recorded["empty_ok"]
     assert read(prefix, "sources") == [] and read(prefix, "xsources")
     assert set(pq.read_schema(prefix / "sources.parquet").names) == schema_columns("sources")
     assert read(prefix, "objects") == [] and read(prefix, "memberships") == []
+    assert read(prefix, "xmemberships")                   # the xsources are still cross-matched
     assert recorded["difference"]["sources_loaded"] is False
     assert loaded["difference"]["sources_loaded"] is True
     # The quality metrics are the computed set's either way.

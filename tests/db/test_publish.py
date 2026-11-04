@@ -254,3 +254,63 @@ def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_e
         assert cur.fetchall() == [("memberships", 1)]
     a_conn.commit()
 
+
+
+def _x_attempt(tmp_path, job, founded, memberships, xfounded, xmemberships, xreads, fields):
+    """A difference job's catalog outputs and its xsources' (xobjects, xmemberships) with both
+    catalogs' keys in the manifest."""
+    root = tmp_path / f"job-{job}" / "attempt-1"
+    write_attempt(root, {
+        "objects": [{"field": 1, **o, "dataset": DATASET, "survey": SURVEY} for o in founded],
+        "memberships": memberships,
+        "xobjects": [{"field": 1, "flux0": 5.0, **o, "dataset": DATASET, "survey": SURVEY}
+                     for o in xfounded],
+        "xmemberships": xmemberships})
+    manifest = json.loads((root / "manifest.json").read_text())
+    manifest["reads"] = xreads
+    for key in ("catalog", "xcatalog"):
+        manifest[key] = {"dataset": DATASET, "survey": SURVEY, "fields": fields, "radius": 1e-4}
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    return root.as_uri()
+
+
+def _xmember(job, owner, xaid, xsid, dra=0.0, field=1):
+    return {"object_job": owner, "xaid": xaid, "field": field, "source_job": job, "xsid": xsid,
+            "dra": dra, "ddec": 0.0, "flux": 2.0}
+
+
+def test_reconcile_attaches_a_founded_xobject_to_one_founded_since_the_read(connect, tmp_path):
+    """dev's crossMatchXSources' catalog, reconciled as the objects are: jobs A and B both read an
+    empty xobjects catalog and founded an xobject at one star; A publishes first; B's xobject is
+    not inserted and its xmembership goes to A's, rebased, recorded as xreconcile beside the
+    objects' reconcile (B's objects, elsewhere, are untouched); a job C that read A's xobjects
+    records that read and founds nothing."""
+    conn = connect()
+    run = new_run(conn)
+    a, b, c = (new_job(conn, run) for _ in range(3))
+    publish(conn, a, 1, _x_attempt(tmp_path, a, [], [], [{"xaid": 7, "ra0": 10.0, "dec0": -5.0}],
+                                   [_xmember(a, a, 7, 1)], [], [1, 2]))
+    d = 0.5e-4
+    result = publish(conn, b, 1, _x_attempt(
+        tmp_path, b, [{"aid": 5, "ra0": 40.0, "dec0": -5.0}], [_member(b, b, 5, 1)],
+        [{"xaid": 8, "ra0": 10.0 + d, "dec0": -5.0}], [_xmember(b, b, 8, 1, dra=0.1e-4)], [], [1, 2]))
+    publish(conn, c, 1, _x_attempt(
+        tmp_path, c, [], [], [], [_xmember(c, a, 7, 1)],
+        [{"product": "xobjects", "key": FIELD_KEY, "source_job": a}], [1, 2]))
+
+    assert result["published"]
+    manifest = job_show(conn, b)["manifest"]
+    assert manifest["xreconcile"] == {"objects_between": 1, "reconciled": 1, "attached_memberships": 1}
+    assert manifest["reconcile"] == {"objects_between": 0, "reconciled": 0, "attached_memberships": 0}
+    with conn.cursor() as cur:
+        cur.execute("SELECT job, xaid, flux0 FROM xobjects ORDER BY job")
+        assert cur.fetchall() == [(a, 7, 5.0)]
+        cur.execute("SELECT object_job, xaid, dra FROM xmemberships WHERE job = %s", (b,))
+        ((owner, xaid, dra),) = cur.fetchall()
+        cur.execute("SELECT job, aid FROM objects")
+        assert cur.fetchall() == [(b, 5)]
+    conn.commit()
+    assert (owner, xaid) == (a, 7) and dra == pytest.approx(0.1e-4 + d)
+    assert [(i["product"], i["source_job"]) for i in job_show(conn, c)["inputs"]
+            if i["kind"] == "input"] == [("xobjects", a)]
+    assert job_show(conn, c)["manifest"]["xreconcile"]["objects_between"] == 0

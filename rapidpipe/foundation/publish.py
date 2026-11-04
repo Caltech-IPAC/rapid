@@ -14,10 +14,11 @@ Two optional manifest keys, written by a stage that reads at execution
 what Part 1 statement 4 otherwise names at launch (amendment of
 2026-10-24): ``reads``, a list of ``{"product", "key", "source_job"}``,
 recorded as the job's ``input`` rows in ``job_inputs`` when it publishes
-(the difference job's object catalog, the packet job's members and
+(the difference job's object catalogs, the packet job's members and
 forced-photometry window); and ``catalog``, ``{"dataset", "survey",
 "fields", "radius"}`` on a difference job, whose founded ``objects`` and
-``memberships`` are reconciled under the locks of those fields (each
+``memberships`` (and, under ``xcatalog``, its ``xobjects`` and
+``xmemberships``, recorded as ``xreconcile``) are reconciled under the locks of those fields (each
 field that gained an object or a membership and its neighbours) against
 the objects founded in them since its read before they load (:mod:`rapidpipe.foundation.catalog`),
 the outcome recorded in the stored manifest as ``reconcile``.
@@ -69,8 +70,8 @@ from rapidpipe.foundation.prefix import get
 #: The tables a manifest may declare outputs for.
 PRODUCT_TABLES = frozenset({
     "exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "diffimages",
-    "psfs", "sources", "xsources", "objects", "memberships", "packets", "forced", "external",
-    "catalogs",
+    "psfs", "sources", "xsources", "objects", "memberships", "xobjects", "xmemberships", "packets",
+    "forced", "external", "catalogs",
 })
 
 #: The product tables whose rows live in child tables, one per UT observation date
@@ -79,7 +80,7 @@ DATE_SCA_CHILDREN = frozenset({"sources", "xsources"})
 
 #: The product tables whose rows live in child tables, one per field (the row's
 #: object's), loaded by ``COPY``.
-FIELD_CHILDREN = frozenset({"objects", "memberships", "packets", "forced"})
+FIELD_CHILDREN = frozenset({"objects", "memberships", "xobjects", "xmemberships", "packets", "forced"})
 
 #: Every product table whose rows live in child tables.
 CHILDREN = DATE_SCA_CHILDREN | FIELD_CHILDREN
@@ -138,9 +139,8 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 return {"job": job_id, "attempt": published_attempt, "published": False,
                         "group": None, "refusal": refusal, "live": None}
             reads = manifest.get("reads", [])
-            if "catalog" in manifest:
-                manifest["reconcile"] = _reconcile(cur, job_id, run, manifest["catalog"],
-                                                   reads, rows)
+            if "catalog" in manifest or "xcatalog" in manifest:
+                _reconcile(cur, job_id, run, manifest, reads, rows)
             tables = []
             for output in manifest["outputs"]:
                 table = output["table"]
@@ -307,16 +307,29 @@ def _insert(cur, table: str, rows: list[dict], job_id: int) -> None:
                    page_size=1000)
 
 
-def _reconcile(cur, job_id: int, run: int, catalog: dict, reads: list[dict],
-               rows: dict[str, list[dict]]) -> dict:
-    """Attach the job's founded objects to those founded since its read, under the fields' locks."""
-    object_catalog.lock(cur, run, object_catalog.fields(catalog))
-    read_jobs = [r["source_job"] for r in reads if r["product"] == "objects"]
-    others = object_catalog.between(cur, job_id, run, catalog, read_jobs)
-    rows["objects"], rows["memberships"], outcome = object_catalog.attach(
-        job_id, rows.get("objects", []), rows.get("memberships", []), others,
-        float(catalog["radius"]))
-    return outcome
+#: The manifest keys of the catalogs a difference job reconciles, the objects table each names,
+#: and the key its outcome is recorded under.
+RECONCILED = (("catalog", "objects", "reconcile"), ("xcatalog", "xobjects", "xreconcile"))
+
+
+def _reconcile(cur, job_id: int, run: int, manifest: dict, reads: list[dict],
+               rows: dict[str, list[dict]]) -> None:
+    """Attach the job's founded objects and xobjects to those founded since its read, under the fields' locks.
+
+    The locks of every field either catalog names are taken at once, in one
+    ascending order; each catalog's outcome is recorded on the manifest
+    (``reconcile``, ``xreconcile``).
+    """
+    present = [(key, table, out) for key, table, out in RECONCILED if key in manifest]
+    object_catalog.lock(cur, run, sorted({f for key, _, _ in present
+                                          for f in object_catalog.fields(manifest[key])}))
+    for key, table, out in present:
+        objects_table, memberships_table, ident, sid = object_catalog.CATALOGS[table]
+        read_jobs = [r["source_job"] for r in reads if r["product"] == table]
+        others = object_catalog.between(cur, job_id, run, manifest[key], read_jobs, table)
+        rows[objects_table], rows[memberships_table], manifest[out] = object_catalog.attach(
+            job_id, rows.get(objects_table, []), rows.get(memberships_table, []), others,
+            float(manifest[key]["radius"]), ident, sid)
 
 
 def _bind(cur, job_id: int, run: int, loaded: dict[str, int],

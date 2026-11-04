@@ -121,6 +121,7 @@ class Association:
     new_objects: dict[int, tuple[float, float, int]]  # aid -> (ra0, dec0, field)
     memberships: list[tuple[int, int, int]]  # (aid, source_job, sid)
     exposures: int
+    founders: dict[int, tuple[int, int]] = dataclass_field(default_factory=dict)  # aid -> (source_job, sid)
 
 
 def associate(catalog: Catalog, sources: Iterable[Source]) -> Association:
@@ -137,6 +138,7 @@ def associate(catalog: Catalog, sources: Iterable[Source]) -> Association:
         by_expid[source.expid].append(source)
         pairs.append((source.expid, source.mjdobs))
     new_objects: dict[int, tuple[float, float, int]] = {}
+    founders: dict[int, tuple[int, int]] = {}
     memberships: list[tuple[int, int, int]] = []
     order = expid_order(pairs)
     for expid in order:
@@ -145,13 +147,16 @@ def associate(catalog: Catalog, sources: Iterable[Source]) -> Association:
             aids = catalog.matches(source.ra, source.dec)
             if not aids:
                 aid = new_object_id(source.ra, source.dec)
-                founded.setdefault(aid, (source.ra, source.dec, source.field))
+                if aid not in founded:
+                    founded[aid] = (source.ra, source.dec, source.field)
+                    founders[aid] = (source.source_job, source.sid)
                 aids = [aid]
             memberships.extend((aid, source.source_job, source.sid) for aid in aids)
         for aid, (ra, dec, _) in founded.items():
             catalog.add(aid, ra, dec)
         new_objects.update(founded)
-    return Association(new_objects=new_objects, memberships=memberships, exposures=len(order))
+    return Association(new_objects=new_objects, memberships=memberships, exposures=len(order),
+                       founders=founders)
 
 
 @dataclass
@@ -169,10 +174,11 @@ class EpochAssociation:
     founded: list[dict]
     memberships: list[dict]
     counts: dict
+    founders: dict[int, int] = dataclass_field(default_factory=dict)  # aid -> its founding source's sid
 
 
 def associate_epoch(objects: dict[int, tuple[int, float, float]], sources: Iterable[dict], *,
-                    job: int, radius: float) -> EpochAssociation:
+                    job: int, radius: float, flux: str = "fluxfit") -> EpochAssociation:
     """Match one epoch's accepted ``sources`` against ``objects`` as read; found in each source's field.
 
     ``objects`` maps ``aid`` to ``(founding job, ra0, dec0)``: the objects
@@ -180,7 +186,8 @@ def associate_epoch(objects: dict[int, tuple[int, float, float]], sources: Itera
     neighbours, when the job read them. ``sources`` are dicts with ``sid,
     expid, mjdobs, field, ra, dec, fluxfit``, the job's own (its id ``job``
     is their source set); a founded object's job is ``job`` and its field
-    the founding source's.
+    the founding source's. ``flux`` names the column a membership's flux is
+    taken from (``fluxap`` for the xsources, `dev`'s crossMatchXSources).
     """
     sources = list(sources)
     catalog = Catalog(radius, {aid: (ra0, dec0) for aid, (_, ra0, dec0) in objects.items()})
@@ -195,9 +202,10 @@ def associate_epoch(objects: dict[int, tuple[int, float, float]], sources: Itera
         source = by_sid[sid]
         memberships.append({"object_job": owner, "aid": aid, "source_job": source_job, "sid": sid,
                             "dra": ra_offset(source["ra"], ra0), "ddec": source["dec"] - dec0,
-                            "flux": float(source["fluxfit"])})
+                            "flux": float(source[flux])})
     founded = [{"aid": aid, "field": field, "ra0": ra, "dec0": dec}
                for aid, (ra, dec, field) in sorted(result.new_objects.items())]
     return EpochAssociation(founded=founded, memberships=memberships, counts={
         "sources": len(sources), "objects_read": len(objects), "founded": len(founded),
-        "memberships": len(memberships)})
+        "memberships": len(memberships)},
+        founders={aid: sid for aid, (_, sid) in result.founders.items()})
