@@ -48,7 +48,8 @@ the pipeline imports.
   constraints let a filter on `mjdobs` or `sca` skip the others.
 - [`schema.svg`](schema.svg): the schema's entity diagram, every table and
   column with its declared foreign keys (solid) and the references the code
-  follows by convention (dashed). `scripts/schema_diagram.py` draws it from
+  follows by convention (dashed); a parent of child tables (`sources`,
+  `xsources`) is marked with its children's names. `scripts/schema_diagram.py` draws it from
   `schema.sql` through `schema.dot` with Graphviz; a change to `schema.sql`
   reruns it (`tests/unit/test_schema_diagram.py` fails on a stale
   `schema.dot`).
