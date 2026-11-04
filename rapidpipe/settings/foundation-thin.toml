@@ -486,6 +486,14 @@ sextractor_interp_type = "ALL"
 # The brightest sources kept per difference image, by fluxfit / fluxerr,
 # as [import] max_sources; 0 keeps every source.
 max_sources = 500
+# true: the difference job loads no sources records. Its source set is still
+# declared, with no rows, so the set's binding opens and its xsources, which
+# are always loaded, are official through it; with no sources nothing is
+# associated (no objects or memberships) and the epoch's packet set is empty.
+# The quality metrics are still those of the set computed. dev's sources
+# loader (loadPSFCatIntoDBSourcesTable.py) is a step a run can skip; this is
+# that choice (Russ Laher, 2026-11-04).
+skip_loading_sources_records = false
 # The published differencer, dev's [ALERTS] diff_flavor: "sfft" or "zogy".
 # The published rows are this differencer's image, uncertainty, PSF and
 # positive PSF-fit catalog; the other still runs and its PSF-fit catalogs stay
