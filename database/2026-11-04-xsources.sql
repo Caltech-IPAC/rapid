@@ -1,6 +1,6 @@
 -- xsources: dev's table of the SFFT difference image's SExtractor sources
 -- (xsources). schema.sql carries the table, its no-rows check, its view and
--- create_catalog_child taking it for a fresh database; this file brings an
+-- the child-table functions for a fresh database; this file brings an
 -- existing one to it, applied once, in one transaction, as postgres. It adds a
 -- table and a view and touches no row, so it runs beside the pipeline, before
 -- the first difference job of an image that writes xsources. The function is
@@ -74,14 +74,25 @@ CREATE TABLE xsources (
 
 ALTER TABLE xsources ADD CONSTRAINT xsources_holds_no_rows CHECK (false) NO INHERIT;
 
--- The child of `parent` that holds rows at `mjdobs` on `sca`, made if it does
--- not exist (schema.sql states it in full); it now takes xsources too.
+-- The child-table functions (schema.sql states them in full):
+-- catalog_child_name, new; create_catalog_child, replaced (it now takes
+-- xsources and names through catalog_child_name, keeping its owner and its
+-- EXECUTE grant); source_set_child, sources_of and xsources_of, new, which let a
+-- query read a source set's rows from its child without its parent.
+-- The name of the child of `parent` holding rows at `mjdobs` on `sca`:
+-- <parent>_<yyyymmdd>_<sca>, the UT date of mjdobs (MJD days begin at 0h UT).
+CREATE OR REPLACE FUNCTION catalog_child_name(parent text, mjdobs double precision, sca integer)
+RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT parent || '_' || to_char(date '1858-11-17' + floor(mjdobs)::integer, 'YYYYMMDD') || '_' || sca
+$$;
+
 CREATE OR REPLACE FUNCTION create_catalog_child(parent text, mjdobs double precision, sca integer)
 RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
     day double precision := floor(mjdobs);
-    child text := parent || '_' || to_char(date '1858-11-17' + day::integer, 'YYYYMMDD') || '_' || sca;
+    child text := catalog_child_name(parent, mjdobs, sca);
 BEGIN
     IF parent <> ALL (ARRAY['sources', 'xsources']) THEN
         RAISE EXCEPTION 'create_catalog_child: % is not a catalog table with children', parent;
@@ -103,6 +114,55 @@ BEGIN
 END
 $$;
 
+REVOKE EXECUTE ON FUNCTION create_catalog_child(text, double precision, integer) FROM PUBLIC;
+
+-- Reading the children a task needs, never a parent: a query on sources or
+-- xsources (or their _official views) visits every child, and they grow by up
+-- to 18 a night. A source set's child is named by its difference image's L2
+-- mjdobs and SCA (the job that wrote the set wrote the image), so finding it
+-- reads no parent; null when the set has no child of `parent` (no such rows).
+-- An image with no L2 row (an imported or synthetic one without its lineage)
+-- falls back to its own jd, which the stages set to the same mjdobs + 2400000.5.
+CREATE FUNCTION source_set_child(parent text, job bigint)
+RETURNS text
+LANGUAGE sql STABLE AS $$
+    SELECT c.relname::text
+    FROM diffimages d
+    LEFT JOIN l2files l ON l.rid = d.rid
+    JOIN pg_class c
+        ON c.relname = catalog_child_name(parent, coalesce(l.mjdobs, d.jd - 2400000.5), d.sca)
+    JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+    WHERE d.job = source_set_child.job
+$$;
+
+-- The rows of the source sets `jobs`, read from their children only:
+-- FROM sources_of(ARRAY[...]) s where a query would read FROM sources s.
+CREATE FUNCTION sources_of(jobs bigint[])
+RETURNS SETOF sources
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT source_set_child('sources', j) FROM unnest(jobs) j LOOP
+        CONTINUE WHEN child IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I WHERE job = ANY($1)', child) USING jobs;
+    END LOOP;
+END
+$$;
+
+-- The xsources of the source sets `jobs`, read from their children only.
+CREATE FUNCTION xsources_of(jobs bigint[])
+RETURNS SETOF xsources
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT source_set_child('xsources', j) FROM unnest(jobs) j LOOP
+        CONTINUE WHEN child IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I WHERE job = ANY($1)', child) USING jobs;
+    END LOOP;
+END
+$$;
 
 -- An official xsource: its source set is official.
 CREATE VIEW xsources_official AS

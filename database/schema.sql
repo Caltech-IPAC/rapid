@@ -595,12 +595,20 @@ CREATE TABLE external (
 -- makes two callers agree. SECURITY DEFINER: the pipeline's role holds table
 -- grants only, so the schema's owner makes the tables, and EXECUTE is granted
 -- to that role alone (docs/foundation-smdc-step.md).
+-- The name of the child of `parent` holding rows at `mjdobs` on `sca`:
+-- <parent>_<yyyymmdd>_<sca>, the UT date of mjdobs (MJD days begin at 0h UT).
+CREATE FUNCTION catalog_child_name(parent text, mjdobs double precision, sca integer)
+RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT parent || '_' || to_char(date '1858-11-17' + floor(mjdobs)::integer, 'YYYYMMDD') || '_' || sca
+$$;
+
 CREATE FUNCTION create_catalog_child(parent text, mjdobs double precision, sca integer)
 RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
     day double precision := floor(mjdobs);
-    child text := parent || '_' || to_char(date '1858-11-17' + day::integer, 'YYYYMMDD') || '_' || sca;
+    child text := catalog_child_name(parent, mjdobs, sca);
 BEGIN
     IF parent <> ALL (ARRAY['sources', 'xsources']) THEN
         RAISE EXCEPTION 'create_catalog_child: % is not a catalog table with children', parent;
@@ -623,6 +631,54 @@ END
 $$;
 
 REVOKE EXECUTE ON FUNCTION create_catalog_child(text, double precision, integer) FROM PUBLIC;
+
+-- Reading the children a task needs, never a parent: a query on sources or
+-- xsources (or their _official views) visits every child, and they grow by up
+-- to 18 a night. A source set's child is named by its difference image's L2
+-- mjdobs and SCA (the job that wrote the set wrote the image), so finding it
+-- reads no parent; null when the set has no child of `parent` (no such rows).
+-- An image with no L2 row (an imported or synthetic one without its lineage)
+-- falls back to its own jd, which the stages set to the same mjdobs + 2400000.5.
+CREATE FUNCTION source_set_child(parent text, job bigint)
+RETURNS text
+LANGUAGE sql STABLE AS $$
+    SELECT c.relname::text
+    FROM diffimages d
+    LEFT JOIN l2files l ON l.rid = d.rid
+    JOIN pg_class c
+        ON c.relname = catalog_child_name(parent, coalesce(l.mjdobs, d.jd - 2400000.5), d.sca)
+    JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+    WHERE d.job = source_set_child.job
+$$;
+
+-- The rows of the source sets `jobs`, read from their children only:
+-- FROM sources_of(ARRAY[...]) s where a query would read FROM sources s.
+CREATE FUNCTION sources_of(jobs bigint[])
+RETURNS SETOF sources
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT source_set_child('sources', j) FROM unnest(jobs) j LOOP
+        CONTINUE WHEN child IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I WHERE job = ANY($1)', child) USING jobs;
+    END LOOP;
+END
+$$;
+
+-- The xsources of the source sets `jobs`, read from their children only.
+CREATE FUNCTION xsources_of(jobs bigint[])
+RETURNS SETOF xsources
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT source_set_child('xsources', j) FROM unnest(jobs) j LOOP
+        CONTINUE WHEN child IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I WHERE job = ANY($1)', child) USING jobs;
+    END LOOP;
+END
+$$;
 
 --------------------------------------------------------------------------------
 -- Official views: plain joins of rows to open bindings, every column plus

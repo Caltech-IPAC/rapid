@@ -185,8 +185,10 @@ def main(argv: list[str] | None = None) -> int:
                    " JOIN refimages r ON r.job = n.source_job JOIN refimimages i ON i.job = r.job AND i.rfid = r.rfid"
                    " JOIN l2files l ON l.rid = i.rid JOIN filters f ON f.fid = l.fid WHERE d.run = %s", (a.run,))
         sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
-                                 " s.field = d.field AS in_field FROM sources_official s"
-                                 " JOIN diffimages d ON d.pid = s.pid WHERE s.run = %s", (a.run,)))
+                                 " s.field = d.field AS in_field"
+                                 " FROM sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
+                                 " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
+                                 " JOIN diffimages d ON d.pid = s.pid", (a.run,)))
         packets = pd.DataFrame(q(
             "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
             " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"

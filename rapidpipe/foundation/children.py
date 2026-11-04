@@ -7,8 +7,10 @@ queries the children its task needs by name, not the parent: a query on
 the parent visits every child, and their number grows by up to 18 a
 night. A source set's child is found without touching it: the job that
 wrote the set also wrote its difference image, whose L2 row's ``mjdobs``
-and whose own ``sca`` name the child (:func:`set_children`), for an
-imported set as for one the difference stage made.
+and whose own ``sca`` name the child (:func:`set_children`, through the
+schema's ``source_set_child``, which SQL readers use too, with
+``sources_of`` and ``xsources_of``), for an imported set as for one the
+difference stage made.
 """
 
 from __future__ import annotations
@@ -69,15 +71,11 @@ def set_children(cur, parent: str, jobs: Iterable[int]) -> dict[int, str]:
     jobs = sorted(set(jobs))
     if not jobs:
         return {}
+    if parent not in PARENTS:
+        raise ValueError(f"{parent!r} has no child tables; {PARENTS} do")
     with cur.connection.cursor() as plain:
-        plain.execute("SELECT d.job, l.mjdobs, d.sca FROM diffimages d"
-                      " JOIN l2files l ON l.rid = d.rid WHERE d.job = ANY(%s)", (jobs,))
-        names = {job: child_name(parent, mjdobs, sca) for job, mjdobs, sca in plain.fetchall()}
-        plain.execute("SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
-                      " WHERE n.nspname = current_schema() AND c.relname = ANY(%s)",
-                      (sorted(set(names.values())),))
-        made = {r[0] for r in plain.fetchall()}
-    return {job: name for job, name in names.items() if name in made}
+        plain.execute("SELECT j, source_set_child(%s, j) FROM unnest(%s::bigint[]) j", (parent, jobs))
+        return {job: child for job, child in plain.fetchall() if child is not None}
 
 
 __all__ = ("MJD_EPOCH", "PARENTS", "child_name", "set_children")
