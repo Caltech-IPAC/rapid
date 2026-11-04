@@ -20,9 +20,14 @@ from __future__ import annotations
 
 import contextlib
 import io
+import logging
+import os
+import re
 from datetime import datetime
 
 import fastavro
+import psycopg2
+import psycopg2.extras
 import pyarrow as pa
 import pytest
 import pyarrow.parquet as pq
@@ -198,3 +203,47 @@ def test_a_reference_without_its_catalog_row_fails_the_packet_job(connect, tmp_p
     with pytest.raises(ValueError, match="no refimcatalogs row"):
         run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
     assert query(conn, "SELECT state FROM jobs WHERE id = %s", (job,)) == [("failed",)]
+
+
+#: A statement that reads a parent of child tables (or its official view), not a named child.
+PARENT_READ = re.compile(r'\b(?:FROM|JOIN)\s+"?x?sources(?:_official)?"?(?=[\s;)]|$)', re.I)
+
+
+def test_a_packet_job_reads_its_sources_from_child_tables_never_the_parent(connect, tmp_path,
+                                                                          monkeypatch):
+    """rapidpipe.foundation.children: the set's own child and the members' children, by name.
+
+    Every statement the job sends is recorded: the stage's ``RealDictCursor`` and the plain
+    cursor ``set_children`` opens.
+    """
+    statements: list[str] = []
+
+    class RecordingDict(psycopg2.extras.RealDictCursor):
+        def execute(self, query, vars=None):
+            result = super().execute(query, vars)
+            statements.append(self.query.decode())
+            return result
+
+    class Recording(psycopg2.extras.LoggingConnection):
+        def filter(self, msg, curs):
+            statements.append(msg.decode() if isinstance(msg, bytes) else msg)
+            return msg
+
+    def recording():
+        connection = psycopg2.connect(
+            host=os.environ["PGHOST"], port=os.environ.get("PGPORT", "5432"),
+            dbname=os.environ["PGDATABASE"], user=os.environ["PGUSER"],
+            password=os.environ.get("PGPASSWORD", ""), connection_factory=Recording)
+        connection.initialize(logging.getLogger("packet-sql"))
+        return contextlib.closing(connection)
+
+    monkeypatch.setattr(packet, "RealDictCursor", RecordingDict)
+    conn = connect()
+    job, *_ = packet_job(conn, tmp_path)
+    result = run_job(recording, job, tmp_path.as_uri(), packet.run)
+
+    assert result["published"]
+    assert any("FROM memberships m" in s for s in statements)    # the stage's reads were seen
+    assert [s for s in statements if PARENT_READ.search(s)] == []
+    children = [s for s in statements if re.search(r'FROM "sources_\d{8}_8" s', s)]
+    assert len(children) == 2                                     # the set's own, its members'

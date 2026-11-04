@@ -88,8 +88,8 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     inside a savepoint, bind the job's ``expects`` keys if its run is live
     for its survey and dataset, recording a refusal on the job instead
     when the binding is refused. ``ANALYZE`` every table it wrote to after
-    commit: the loaded tables (a parent of children and the children it
-    loaded), and ``official`` when it bound.
+    commit: the loaded tables (of a parent of children, the children it
+    loaded, never the parent), and ``official`` when it bound.
 
     Returns ``{"job", "attempt", "published", "group", "refusal", "live"}``:
     ``published`` is whether this call published, ``group`` the automatic
@@ -152,11 +152,14 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
         raise
     with conn.cursor() as cur:
         for table in sorted(set(tables) | ({"official"} if group is not None else set())):
-            cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(table)))
-            # A parent's ANALYZE samples its children for the whole tree's statistics
-            # but leaves each child's own; the children loaded get theirs here.
-            for child in sorted(children.get(table, {}).values()):
-                cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(child)))
+            if table in CHILDREN:
+                # The children loaded, not the parent: a parent's ANALYZE samples every
+                # child, which grows with their number, and the pipeline reads a set's rows
+                # from its child (rapidpipe.foundation.children), whose own statistics plan it.
+                for child in sorted(children.get(table, {}).values()):
+                    cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(child)))
+            else:
+                cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(table)))
     conn.commit()
     return {"job": job_id, "attempt": attempt, "published": True, "group": group,
             "refusal": refusal, "live": live}

@@ -143,8 +143,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from astropy.time import Time
+from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
+from rapidpipe.foundation.children import set_children
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import cache_dir, get, is_staged
 from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT
@@ -217,15 +219,22 @@ SOURCE_JOINS = (
 TRIGGER_SQL = ("SELECT sid, object_job, aid FROM memberships WHERE job = %s"
                " ORDER BY sid, aid, object_job")
 
-#: Every member of the triggers' objects whose source set is official, and the set's own.
-MEMBERS_SQL = (
-    f"SELECT DISTINCT ON (m.aid, s.job, s.sid) m.aid AS member_aid, {SOURCE_COLUMNS}"
-    " FROM memberships m JOIN sources s ON s.job = m.source_job AND s.sid = m.sid"
-    f"{SOURCE_JOINS}"
+#: The memberships of the triggers' objects whose source set is official, and the set's own.
+MEMBERSHIPS_SQL = (
+    "SELECT m.aid, m.source_job, m.sid FROM memberships m"
     " WHERE (m.object_job, m.aid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
     " AND (m.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
-    " AND o.product = 'sources' AND o.job = m.job))"
-    " ORDER BY m.aid, s.job, s.sid")
+    " AND o.product = 'sources' AND o.job = m.job))")
+
+#: Those members' source rows, from one child table of ``sources`` (never the parent: a query
+#: there visits every child, rapidpipe.foundation.children).
+MEMBER_ROWS_SQL = (
+    f"SELECT {SOURCE_COLUMNS} FROM {{child}} s{SOURCE_JOINS}"
+    " WHERE (s.job, s.sid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(sids)s::bigint[]))")
+
+#: The job's own source set's alertable rows, from its child table.
+OWN_ROWS_SQL = (f"SELECT {SOURCE_COLUMNS} FROM {{child}} s{SOURCE_JOINS}"
+                " WHERE s.job = %s AND s.flags & ~%s = %s ORDER BY s.sid")
 
 #: The window's candidate difference images: official, or the trigger's own, of the dataset, by L2
 #: mjdobs, centred within ``reach`` degrees of the trigger image's centre (two of its half-diagonals,
@@ -324,6 +333,46 @@ def _key_where(key: dict, alias: str) -> tuple[str, list]:
     return " AND ".join(f"{alias}.{n} = %s" for n in names), [key[n] for n in names]
 
 
+def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int) -> list[dict]:
+    """The members of the triggers' objects, each with its object's ``member_aid``.
+
+    The memberships first (:data:`MEMBERSHIPS_SQL`), then the members' rows
+    from the child tables of ``sources`` that hold them, one query per child
+    (:data:`MEMBER_ROWS_SQL`), never the parent. A member appears once per
+    object, ordered by object, source set and source id.
+
+    Parameters
+    ----------
+    cur : psycopg2 cursor
+        The reading transaction's ``RealDictCursor``.
+    object_jobs, aids : list of int
+        The triggers' objects, as (founding job, object id) pairs.
+    own : int
+        The job's own source set, whose memberships count before it is official.
+
+    Returns
+    -------
+    list of dict
+        One row per (object, member) with :data:`SOURCE_COLUMNS` and ``member_aid``.
+    """
+    cur.execute(MEMBERSHIPS_SQL, {"jobs": object_jobs, "aids": aids, "own": own})
+    links = {(r["aid"], r["source_job"], r["sid"]) for r in cur.fetchall()}
+    children = set_children(cur, "sources", {job for _, job, _ in links})
+    wanted: dict[str, set[tuple[int, int]]] = {}
+    for _, job, sid in links:
+        if job in children:
+            wanted.setdefault(children[job], set()).add((job, sid))
+    found: dict[tuple[int, int], dict] = {}
+    for child, keys in sorted(wanted.items()):
+        keys = sorted(keys)
+        cur.execute(sql.SQL(MEMBER_ROWS_SQL).format(child=sql.Identifier(child)),
+                    {"jobs": [k[0] for k in keys], "sids": [k[1] for k in keys]})
+        for row in cur.fetchall():
+            found[(row["source_job"], row["sid"])] = dict(row)
+    return [{"member_aid": aid, **found[(job, sid)]}
+            for aid, job, sid in sorted(links) if (job, sid) in found]
+
+
 def _read(job: JobContext) -> Read:
     """Everything the job reads, its inputs and the catalog as it stands, in one short transaction."""
     inputs = [i for i in job.inputs if i["kind"] == "input"]
@@ -346,10 +395,12 @@ def _read(job: JobContext) -> Read:
     reads: list[dict] = []
 
     with job.connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(f"SELECT {SOURCE_COLUMNS} FROM sources s{SOURCE_JOINS}"
-                    " WHERE s.job = %s AND s.flags & ~%s = %s ORDER BY s.sid",
-                    (source_job, INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS))
-        rows = cur.fetchall()
+        own_child = set_children(cur, "sources", [source_job]).get(source_job)
+        rows = []
+        if own_child is not None:                # none: the set loaded no rows
+            cur.execute(sql.SQL(OWN_ROWS_SQL).format(child=sql.Identifier(own_child)),
+                        (source_job, INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS))
+            rows = cur.fetchall()
         alertable = [Source.from_row(r) for r in rows]
         exposures = {(r["dataset"], r["expid"]): r["exposure_job"] for r in rows}
 
@@ -366,13 +417,11 @@ def _read(job: JobContext) -> Read:
                     ([object_job[a] for a in aids], aids))
         origin = {r["aid"]: (r["ra0"], r["dec0"]) for r in cur.fetchall()}
 
-        cur.execute(MEMBERS_SQL, {"jobs": [object_job[a] for a in aids], "aids": aids,
-                                  "own": source_job})
         members: dict[int, list[tuple[int, Source]]] = {}
         objects: dict[int, tuple[float, float, Sums]] = {
             aid: (*origin[aid], Sums(*origin[aid])) for aid in aids}
         member_sets = set()
-        for row in cur.fetchall():
+        for row in _member_rows(cur, [object_job[a] for a in aids], aids, source_job):
             aid = row.pop("member_aid")
             member = Source.from_row(row)
             member.aid = aid
