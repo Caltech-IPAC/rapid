@@ -179,8 +179,8 @@ def _difference_attempt(tmp_path, job, founded, memberships, reads, radius=1e-4,
     return root.as_uri()
 
 
-def _member(job, owner, aid, sid, dra=0.0):
-    return {"object_job": owner, "aid": aid, "source_job": job, "sid": sid,
+def _member(job, owner, aid, sid, dra=0.0, field=1):
+    return {"object_job": owner, "aid": aid, "field": field, "source_job": job, "sid": sid,
             "dra": dra, "ddec": 0.0, "flux": 1.0}
 
 
@@ -231,7 +231,7 @@ def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_e
         fields=[1, 2]))
     prefix = _difference_attempt(
         tmp_path, b, [{"aid": 8, "field": 2, "ra0": 10.0 + 0.5e-4, "dec0": -5.0}],
-        [_member(b, b, 8, 1)], [], fields=[2, 1])
+        [_member(b, b, 8, 1, field=2)], [], fields=[2, 1])
     with a_conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s, 1)", (run,))
     with ThreadPoolExecutor(1) as pool:
@@ -247,5 +247,10 @@ def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_e
         assert cur.fetchall() == [(a, 7, 1)]
         cur.execute("SELECT object_job, aid FROM memberships WHERE job = %s", (b,))
         assert cur.fetchall() == [(a, 7)]
+        # The attached membership is filed under the surviving object's field, 1, not B's 2.
+        cur.execute("SELECT tableoid::regclass::text, field FROM memberships WHERE job = %s", (b,))
+        assert cur.fetchall() == [("memberships_1", 1)]
+        cur.execute("SELECT parent, field FROM job_fields WHERE job = %s ORDER BY 1, 2", (b,))
+        assert cur.fetchall() == [("memberships", 1)]
     a_conn.commit()
 

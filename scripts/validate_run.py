@@ -115,7 +115,7 @@ TABLES = ("exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "
           "sources", "xsources", "objects", "memberships", "packets", "forced", "external", "catalogs")
 #: Tables whose rows live in child tables, read through <table>_of(jobs) (schema.sql), never the
 #: parent, a read of which visits every child (rapid_docs decisions.md, children-reads).
-CHILD_TABLES = ("sources", "xsources")
+CHILD_TABLES = ("sources", "xsources", "objects", "memberships", "packets", "forced")
 #: The jobs of the run ``%(run)s`` names, as the bigint[] ``rows_of`` takes.
 RUN_JOBS = "ARRAY(SELECT id FROM jobs WHERE run = %(run)s)"
 #: the child tables' other columns naming a job
@@ -270,7 +270,7 @@ def job_table_failures(j: dict) -> tuple[list[str], int, int]:
     reconcile = j["manifest"].get("reconcile")
     if reconcile and reconcile["reconciled"]:
         # Founded objects the publisher attached elsewhere are not rows; their memberships moved.
-        stored = {r["aid"] for r in q("SELECT aid FROM objects WHERE job = %s", (j["id"],))}
+        stored = {r["aid"] for r in q("SELECT aid FROM objects_of(ARRAY[%s]::bigint[])", (j["id"],))}
         gone = set(pq.read_table(parquet["objects"], columns=["aid"]).column("aid").to_pylist()) - stored
         members = pq.read_table(parquet["memberships"], columns=["object_job", "aid"]).to_pylist()
         moved = sum(1 for m in members if m["object_job"] == j["id"] and m["aid"] in gone)
@@ -308,21 +308,24 @@ def check_catalog(run: int) -> bool:
     (row,) = q("SELECT settings -> 'associate' AS a FROM runs WHERE id = %s", (run,))
     radius, flags, snr = (float(row["a"]["match_radius"]), int(row["a"]["source_flags"]),
                           float(row["a"]["min_snr"]))
-    unmatched = q("""SELECT s.job, s.sid FROM sources_of(ARRAY(SELECT o.job FROM official o
+    unmatched = q("""WITH sets AS (SELECT ARRAY(SELECT o.job FROM official o
                          JOIN jobs oj ON oj.id = o.job WHERE o.closed_at IS NULL
-                         AND o.product = 'sources' AND oj.run = %s)) s
+                         AND o.product = 'sources' AND oj.run = %s) jobs),
+                     m AS MATERIALIZED (SELECT job, sid FROM memberships_of((SELECT jobs FROM sets)))
+                     SELECT s.job, s.sid FROM sources_of((SELECT jobs FROM sets)) s
                      WHERE s.flags & ~%s = %s
                      AND s.fluxerr > 0 AND s.fluxfit / s.fluxerr >= %s
-                     AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.job = s.job AND m.sid = s.sid)""",
+                     AND NOT EXISTS (SELECT 1 FROM m WHERE m.job = s.job AND m.sid = s.sid)""",
                   (run, INFORMATIONAL_SOURCE_FLAGS, flags, snr))
     bad += [f"source ({r['job']}, {r['sid']}) is accepted and a member of nothing" for r in unmatched[:5]]
-    members = q("""SELECT m.job, m.sid, m.object_job, m.aid, s.ra, s.dec, s.field, o.ra0, o.dec0,
+    members = q(f"""WITH m AS MATERIALIZED (SELECT * FROM memberships_of({RUN_JOBS}))
+                   SELECT m.job, m.sid, m.object_job, m.aid, s.ra, s.dec, s.field, o.ra0, o.dec0,
                           o.field AS object_field
-                   FROM memberships m JOIN jobs j ON j.id = m.job AND j.run = %(run)s
-                   JOIN sources_of(ARRAY(SELECT DISTINCT n.source_job FROM memberships n
-                                         JOIN jobs nj ON nj.id = n.job AND nj.run = %(run)s)) s
+                   FROM m
+                   JOIN sources_of(ARRAY(SELECT DISTINCT source_job FROM m)) s
                      ON s.job = m.source_job AND s.sid = m.sid
-                   JOIN objects o ON o.job = m.object_job AND o.aid = m.aid""", {"run": run})
+                   JOIN objects_in(ARRAY(SELECT DISTINCT field FROM m)) o
+                     ON o.job = m.object_job AND o.aid = m.aid""", {"run": run})
     far = [m for m in members if not within(m["ra"], m["dec"], m["ra0"], m["dec0"], radius)]
     bad += [f"membership ({m['job']}, {m['sid']}) of object ({m['object_job']}, {m['aid']}) is outside"
             " the radius" for m in far[:5]]
@@ -331,8 +334,8 @@ def check_catalog(run: int) -> bool:
     bad += [f"membership ({m['job']}, {m['sid']}) in field {m['field']} is of object"
             f" ({m['object_job']}, {m['aid']}) in field {m['object_field']}, not it or a neighbour"
             for m in astray[:5]]
-    objects = q("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
-                " WHERE j.run = %s ORDER BY o.ra0", (run,))
+    objects = q(f"SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects_of({RUN_JOBS}) o"
+                " ORDER BY o.ra0", {"run": run})
     duplicates = 0
     for i, a in enumerate(objects):     # sorted by ra0: a pair within the radius is within it in RA too
         for b in objects[i + 1:]:
@@ -343,21 +346,25 @@ def check_catalog(run: int) -> bool:
                 if duplicates <= 5:
                     bad.append(f"objects ({a['job']}, {a['aid']}) and ({b['job']}, {b['aid']}),"
                                " founded by two jobs, are within the radius")
-    (r,) = q("""SELECT count(*) n FROM memberships_official m WHERE m.run = %s AND NOT EXISTS (
-                SELECT 1 FROM official o WHERE o.closed_at IS NULL AND o.product = 'sources'
-                AND o.job = m.job)""", (run,))
+    (r,) = q(f"""SELECT count(*) n FROM memberships_of({RUN_JOBS}) m
+                JOIN official b ON b.closed_at IS NULL AND b.product = 'sources' AND b.job = m.job
+                WHERE NOT EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL
+                AND o.product = 'sources' AND o.job = m.job)""", {"run": run})
     if r["n"]:
         bad.append(f"{r['n']} official memberships of a source set that is not official")
-    (r,) = q("""SELECT count(*) n FROM memberships m JOIN jobs j ON j.id = m.job AND j.run = %s
+    (r,) = q(f"""SELECT count(*) n FROM memberships_of({RUN_JOBS}) m
                 WHERE NOT EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL
-                AND o.product = 'sources' AND o.job = m.job)""", (run,))
+                AND o.product = 'sources' AND o.job = m.job)""", {"run": run})
     superseded = r["n"]
-    sums = q("""SELECT o.job, o.aid, o.nsources, o.sumra, o.sumdec, o.sumflux,
+    # The run's objects' fields' children: an object's memberships are filed under its field.
+    sums = q(f"""WITH f AS (SELECT job_fields_of('objects', {RUN_JOBS}) fields),
+                m AS MATERIALIZED (SELECT m.* FROM memberships_in((SELECT fields FROM f)) m
+                    JOIN official b ON b.closed_at IS NULL AND b.product = 'sources' AND b.job = m.job)
+                SELECT o.job, o.aid, o.nsources, o.sumra, o.sumdec, o.sumflux,
                        count(*) n, sum(s.ra - o.ra0) ra, sum(s.dec - o.dec0) dec, sum(s.fluxfit) flux
-                FROM objects_official o
-                JOIN memberships_official m ON m.object_job = o.job AND m.aid = o.aid
-                JOIN sources_of(ARRAY(SELECT DISTINCT n.source_job FROM memberships_official n
-                                      JOIN jobs nj ON nj.id = n.object_job AND nj.run = %(run)s)) s
+                FROM objects_official_in((SELECT fields FROM f)) o
+                JOIN m ON m.object_job = o.job AND m.aid = o.aid
+                JOIN sources_of(ARRAY(SELECT DISTINCT source_job FROM m)) s
                   ON s.job = m.source_job AND s.sid = m.sid
                 WHERE o.run = %(run)s GROUP BY 1, 2, 3, 4, 5, 6""", {"run": run})
     off = [x for x in sums if x["nsources"] != x["n"]
@@ -378,9 +385,10 @@ def members_by_aid(job: int, pairs: list[tuple[int, int]]) -> dict:
     packet job ``job`` recorded reading."""
     read = [r["source_job"] for r in q("SELECT source_job FROM job_inputs WHERE job = %s"
                                        " AND kind = 'input' AND product = 'sources'", (job,))]
-    rows = q("SELECT DISTINCT m.object_job, m.aid, m.source_job, m.sid, s.mjdobs FROM memberships m"
+    rows = q("SELECT DISTINCT m.object_job, m.aid, m.source_job, m.sid, s.mjdobs"
+             " FROM memberships_of(%(read)s::bigint[]) m"
              " JOIN sources_of(%(read)s::bigint[]) s ON s.job = m.source_job AND s.sid = m.sid"
-             " WHERE m.job = ANY(%(read)s) AND (m.object_job, m.aid) IN"
+             " WHERE (m.object_job, m.aid) IN"
              " (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))",
              {"read": read, "jobs": [p[0] for p in pairs], "aids": [p[1] for p in pairs]})
     out = defaultdict(dict)
@@ -391,7 +399,7 @@ def members_by_aid(job: int, pairs: list[tuple[int, int]]) -> dict:
 
 def packet_set_failures(job: int) -> tuple[list[str], Counter]:
     bad, counts = [], Counter()
-    index = q("SELECT * FROM packets WHERE job = %s ORDER BY sid", (job,))
+    index = q("SELECT * FROM packets_of(ARRAY[%s]::bigint[]) ORDER BY sid", (job,))
     inputs = q("SELECT product, source_job FROM job_inputs WHERE job = %s AND kind = 'input'", (job,))
     (named,) = q("SELECT array_agg(DISTINCT i.source_job) s FROM job_inputs i JOIN job_inputs e"
                  " ON e.job = i.job AND e.kind = 'expects' AND e.product = 'packets' AND e.key = i.key"
@@ -465,8 +473,9 @@ def check_packets(run: int) -> bool:
     for b, c in each(packet_set_failures, sets):
         bad += b
         total += c
-    read = [r["job"] for r in q("SELECT DISTINCT job FROM packets_official WHERE job = ANY(%s) ORDER BY job",
-                                (sets,))]
+    read = [r["job"] for r in q("SELECT DISTINCT o.job FROM official o JOIN job_fields f ON f.job = o.job"
+                                " AND f.parent = 'packets' WHERE o.closed_at IS NULL"
+                                " AND o.product = 'packets' AND o.job = ANY(%s) ORDER BY o.job", (sets,))]
     reader = "no bound set with packets for read_packets.py"
     if read:
         out = io.StringIO()

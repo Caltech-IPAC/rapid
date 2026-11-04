@@ -85,7 +85,7 @@ def sample(sets: list[dict]) -> set[int]:
 def index_sids(conn, jobs: list[int]) -> dict[int, set[int]]:
     """Every packet ``sid`` of each of ``jobs``, from the index alone."""
     out: dict[int, set[int]] = {job: set() for job in jobs}
-    for r in publish_kafka._query(conn, "SELECT job, sid FROM packets WHERE job = ANY(%s)", (jobs,)):
+    for r in publish_kafka._query(conn, "SELECT job, sid FROM packets_of(%s::bigint[])", (jobs,)):
         out[r["job"]].add(r["sid"])
     return out
 
@@ -93,7 +93,7 @@ def index_sids(conn, jobs: list[int]) -> dict[int, set[int]]:
 def outbox(conn, job: int) -> tuple[dict[int, bytes], dict[int, str]]:
     """One set's outbox bytes and schema version for each of its packets, by ``sid``."""
     index = publish_kafka._query(conn, "SELECT sid, filename, byte_offset, byte_length,"
-                                       " schema_version FROM packets WHERE job = %s ORDER BY sid", (job,))
+                                       " schema_version FROM packets_of(ARRAY[%s]::bigint[]) ORDER BY sid", (job,))
     return dict(publish_kafka.messages(index)), {r["sid"]: r["schema_version"] for r in index}
 
 

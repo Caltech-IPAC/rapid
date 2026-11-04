@@ -470,6 +470,12 @@ ALTER TABLE xsources ADD CONSTRAINT xsources_holds_no_rows CHECK (false) NO INHE
 -- source it was; its id is the position hash of that source. The publisher
 -- reconciles a job's founded objects against those founded since its read
 -- (rapidpipe.foundation.catalog), so no two jobs found one object.
+--
+-- objects, memberships, packets and forced keep their rows in child tables
+-- that inherit them, one per field, <parent>_<field>, as dev's astroobjects
+-- and merges are split by field; each row is filed under its object's field,
+-- so an object's row, memberships, forced photometry and packet rows share
+-- one field's children. The parents hold no rows (create_field_child below).
 CREATE TABLE objects (
     job bigint NOT NULL REFERENCES jobs (id),        -- the difference job that founded it
     aid bigint NOT NULL,
@@ -484,6 +490,8 @@ CREATE TABLE objects (
 CREATE INDEX objects_job_idx ON objects (job, aid);
 CREATE INDEX objects_field_idx ON objects (dataset, survey, field);
 
+ALTER TABLE objects ADD CONSTRAINT objects_holds_no_rows CHECK (false) NO INHERIT;
+
 -- A difference job's memberships: each of its sources (source_job, sid) in
 -- each object (object_job, aid) it matched, with the source's share of the
 -- object's sufficient sums: its offsets from the object's founding position
@@ -493,6 +501,7 @@ CREATE TABLE memberships (
     job bigint NOT NULL REFERENCES jobs (id),        -- the difference job
     object_job bigint NOT NULL REFERENCES jobs (id), -- the object's founding job
     aid bigint NOT NULL,
+    field integer NOT NULL,                          -- the object's field
     source_job bigint NOT NULL REFERENCES jobs (id), -- the source set's job
     sid bigint NOT NULL,
     dra double precision NOT NULL,
@@ -504,6 +513,8 @@ CREATE TABLE memberships (
 CREATE INDEX memberships_source_idx ON memberships (source_job, sid);
 CREATE INDEX memberships_object_idx ON memberships (object_job, aid);
 
+ALTER TABLE memberships ADD CONSTRAINT memberships_holds_no_rows CHECK (false) NO INHERIT;
+
 -- The packet index: one row per (packet set, source); the Avro bytes are at
 -- (filename, byte_offset, byte_length).
 CREATE TABLE packets (
@@ -514,6 +525,7 @@ CREATE TABLE packets (
     fid smallint NOT NULL,
     object_job bigint NOT NULL REFERENCES jobs (id), -- the object's founding job (an associate job's set before 2026-10-24)
     aid bigint NOT NULL,
+    field integer NOT NULL,                          -- the object's field
     source_job bigint NOT NULL REFERENCES jobs (id), -- the source set
     sid bigint NOT NULL,
     trigger_mjd double precision NOT NULL,
@@ -527,11 +539,14 @@ CREATE TABLE packets (
 
 CREATE INDEX packets_object_idx ON packets (object_job, aid);
 
+ALTER TABLE packets ADD CONSTRAINT packets_holds_no_rows CHECK (false) NO INHERIT;
+
 -- Forced photometry rows of a packet set (dev's FORCED_TABLE_DTYPE).
 CREATE TABLE forced (
     job bigint NOT NULL REFERENCES jobs (id),        -- the packet set's job
     forced_id bigint NOT NULL,                       -- hash of image, object and position
     aid bigint NOT NULL,
+    field integer NOT NULL,                          -- the object's field
     rid integer NOT NULL,                            -- the L2 row measured
     pid integer NOT NULL,                            -- the difference-image row measured
     expid integer NOT NULL,
@@ -553,6 +568,18 @@ CREATE TABLE forced (
 );
 
 CREATE INDEX forced_aid_idx ON forced (aid);
+
+ALTER TABLE forced ADD CONSTRAINT forced_holds_no_rows CHECK (false) NO INHERIT;
+
+-- The fields each job's rows of objects, memberships, packets and forced
+-- were filed under, written by the publisher with the rows, so a reader
+-- finds a job's children without reading a parent.
+CREATE TABLE job_fields (
+    job bigint NOT NULL REFERENCES jobs (id),
+    parent text NOT NULL CHECK (parent IN ('objects', 'memberships', 'packets', 'forced')),
+    field integer NOT NULL,
+    PRIMARY KEY (job, parent, field)
+);
 
 -- Reference catalogs as products: Gaia, NED, NED-LVS, solar-system predictions.
 CREATE TABLE catalogs (
@@ -680,6 +707,99 @@ BEGIN
 END
 $$;
 
+-- The child tables of objects, memberships, packets and forced, one per
+-- field, made as the catalog children are: by the publisher, as the schema's
+-- owner, LIKE the parent with its defaults and indexes, then INHERIT, with a
+-- CHECK holding the child to its field and no foreign key to jobs.
+CREATE FUNCTION field_child_name(parent text, field integer)
+RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT parent || '_' || field
+$$;
+
+CREATE FUNCTION create_field_child(parent text, field integer)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+    child text := field_child_name(parent, field);
+BEGIN
+    IF parent <> ALL (ARRAY['objects', 'memberships', 'packets', 'forced']) THEN
+        RAISE EXCEPTION 'create_field_child: % is not a table with field children', parent;
+    END IF;
+    IF field IS NULL OR field < 0 THEN
+        RAISE EXCEPTION 'create_field_child: field % is not a tessellation field', field;
+    END IF;
+    IF to_regclass('public.' || quote_ident(child)) IS NOT NULL THEN
+        RETURN child;
+    END IF;
+    PERFORM pg_advisory_xact_lock(hashtext('create_field_child'), hashtext(child));
+    -- After the wait, a query of pg_class, as in create_catalog_child.
+    IF NOT EXISTS (SELECT FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'public' AND c.relname = child) THEN
+        EXECUTE format('CREATE TABLE public.%I (LIKE public.%I INCLUDING DEFAULTS INCLUDING INDEXES,'
+                       ' CONSTRAINT %I CHECK (field = %s))', child, parent, child || '_field', field);
+        EXECUTE format('ALTER TABLE public.%I INHERIT public.%I', child, parent);
+    END IF;
+    RETURN child;
+END
+$$;
+
+REVOKE EXECUTE ON FUNCTION create_field_child(text, integer) FROM PUBLIC;
+
+-- Reading the field children a task needs, never a parent. `parent` is a
+-- null of the parent's row type (NULL::objects); the rows of the children of
+-- `fields` that exist, of the jobs `jobs` when it is not null.
+CREATE FUNCTION field_rows(parent anyelement, fields integer[], jobs bigint[])
+RETURNS SETOF anyelement
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    name text := (SELECT t.typname FROM pg_type t WHERE t.oid = pg_typeof(parent));
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT field_child_name(name, f) FROM unnest(fields) f
+                 WHERE f IS NOT NULL ORDER BY 1 LOOP
+        CONTINUE WHEN to_regclass('public.' || quote_ident(child)) IS NULL;
+        IF jobs IS NULL THEN
+            RETURN QUERY EXECUTE format('SELECT * FROM public.%I', child);
+        ELSE
+            RETURN QUERY EXECUTE format('SELECT * FROM public.%I WHERE job = ANY($1)', child)
+                USING jobs;
+        END IF;
+    END LOOP;
+END
+$$;
+
+-- The fields the jobs `jobs` filed rows of `parent` under (job_fields).
+CREATE FUNCTION job_fields_of(parent text, jobs bigint[])
+RETURNS integer[]
+LANGUAGE sql STABLE AS $$
+    SELECT coalesce(array_agg(DISTINCT f.field ORDER BY f.field), '{}')
+    FROM job_fields f WHERE f.parent = job_fields_of.parent AND f.job = ANY(jobs)
+$$;
+
+-- <parent>_in(fields): every row in those fields' children.
+-- <parent>_of(jobs): the rows those jobs wrote, from the children they wrote.
+CREATE FUNCTION objects_in(fields integer[]) RETURNS SETOF objects
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::objects, fields, NULL) $$;
+CREATE FUNCTION objects_of(jobs bigint[]) RETURNS SETOF objects
+LANGUAGE sql STABLE AS $$
+    SELECT * FROM field_rows(NULL::objects, job_fields_of('objects', jobs), jobs) $$;
+CREATE FUNCTION memberships_in(fields integer[]) RETURNS SETOF memberships
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::memberships, fields, NULL) $$;
+CREATE FUNCTION memberships_of(jobs bigint[]) RETURNS SETOF memberships
+LANGUAGE sql STABLE AS $$
+    SELECT * FROM field_rows(NULL::memberships, job_fields_of('memberships', jobs), jobs) $$;
+CREATE FUNCTION packets_in(fields integer[]) RETURNS SETOF packets
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::packets, fields, NULL) $$;
+CREATE FUNCTION packets_of(jobs bigint[]) RETURNS SETOF packets
+LANGUAGE sql STABLE AS $$
+    SELECT * FROM field_rows(NULL::packets, job_fields_of('packets', jobs), jobs) $$;
+CREATE FUNCTION forced_in(fields integer[]) RETURNS SETOF forced
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::forced, fields, NULL) $$;
+CREATE FUNCTION forced_of(jobs bigint[]) RETURNS SETOF forced
+LANGUAGE sql STABLE AS $$
+    SELECT * FROM field_rows(NULL::forced, job_fields_of('forced', jobs), jobs) $$;
+
 --------------------------------------------------------------------------------
 -- Official views: plain joins of rows to open bindings, every column plus
 -- the binding id and the run.
@@ -772,6 +892,23 @@ CROSS JOIN LATERAL (
     WHERE m.object_job = t.job AND m.aid = t.aid
 ) s
 WHERE s.nsources > 0;
+
+-- objects_official of the fields `fields`, read from their children only:
+-- an object's memberships are filed under its field, so its sums are there.
+CREATE FUNCTION objects_official_in(fields integer[])
+RETURNS SETOF objects_official
+LANGUAGE sql STABLE AS $$
+    SELECT t.*, j.run, s.nsources, s.sumra, s.sumra2, s.sumdec, s.sumdec2, s.sumflux, s.sumflux2
+    FROM objects_in(fields) t
+    JOIN jobs j ON j.id = t.job
+    JOIN (SELECT m.object_job, m.aid, count(*)::integer AS nsources,
+                 sum(m.dra) AS sumra, sum(m.dra * m.dra) AS sumra2,
+                 sum(m.ddec) AS sumdec, sum(m.ddec * m.ddec) AS sumdec2,
+                 sum(m.flux) AS sumflux, sum(m.flux * m.flux) AS sumflux2
+          FROM memberships_in(fields) m
+          JOIN official o ON o.closed_at IS NULL AND o.product = 'sources' AND o.job = m.job
+          GROUP BY m.object_job, m.aid) s ON s.object_job = t.job AND s.aid = t.aid
+$$;
 
 CREATE VIEW packets_official AS
 SELECT t.*, o.id AS binding, j.run

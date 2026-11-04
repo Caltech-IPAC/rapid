@@ -127,7 +127,8 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
     # The trigger's catalog rows, as its difference job publishes them beside its sources.
     tables["objects"] = [{"aid": 100, "dataset": DATASET, "survey": SURVEY, "field": FIELD,
                           "ra0": ra, "dec0": dec}]
-    tables["memberships"] = [{"object_job": imported, "aid": 100, "source_job": imported, "sid": 1,
+    tables["memberships"] = [{"object_job": imported, "aid": 100, "field": FIELD,
+                              "source_job": imported, "sid": 1,
                               "dra": 0.0, "ddec": 0.0, "flux": 400.0}]
     publish(conn, imported, 1, write_attempt(tmp_path / "import", tables))
     # The exposure, published by its own job, as intake publishes it apart from the source set.
@@ -138,7 +139,8 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
     stray = create_job(conn, other, "import", {})
     publish(conn, stray, 1, write_attempt(tmp_path / "stray", {
         "sources": tables["sources"],
-        "memberships": [{"object_job": imported, "aid": 100, "source_job": stray, "sid": 1,
+        "memberships": [{"object_job": imported, "aid": 100, "field": FIELD, "source_job": stray,
+                         "sid": 1,
                          "dra": 0.0, "ddec": 0.0, "flux": 400.0}]}))
 
     inputs = [{"product": p, "key": k, "source_job": j} for p, k, j in (
@@ -211,7 +213,8 @@ PARENT_READ = re.compile(r'\b(?:FROM|JOIN)\s+"?x?sources(?:_official)?"?(?=[\s;)
 
 def test_a_packet_job_reads_its_sources_from_child_tables_never_the_parent(connect, tmp_path,
                                                                           monkeypatch):
-    """rapidpipe.foundation.children: the set's own child and the members' children, by name.
+    """rapidpipe.foundation.children: the set's own child and the members' children, by name;
+    its memberships, objects and forced rows through the field children's functions.
 
     Every statement the job sends is recorded: the stage's ``RealDictCursor`` and the plain
     cursor ``set_children`` opens.
@@ -243,7 +246,8 @@ def test_a_packet_job_reads_its_sources_from_child_tables_never_the_parent(conne
     result = run_job(recording, job, tmp_path.as_uri(), packet.run)
 
     assert result["published"]
-    assert any("FROM memberships m" in s for s in statements)    # the stage's reads were seen
+    for function in ("memberships_of(", "memberships_in(", "objects_in(", "forced_in("):
+        assert any(f"FROM {function}" in s for s in statements), function  # the stage's reads were seen
     assert [s for s in statements if PARENT_READ.search(s)] == []
     children = [s for s in statements if re.search(r'FROM "sources_\d{8}_8" s', s)]
     assert len(children) == 2                                     # the set's own, its members'

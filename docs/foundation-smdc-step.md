@@ -346,6 +346,7 @@ GRANT USAGE ON SCHEMA public TO rapid_read;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO rapid_read;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO rapid_read;
 GRANT EXECUTE ON FUNCTION create_catalog_child(text, double precision, integer) TO rapid_rebuild_pipeline;
+GRANT EXECUTE ON FUNCTION create_field_child(text, integer) TO rapid_rebuild_pipeline;
 ```
 
 Check: no table (`relkind` `r`, `p`) of `public` fails
@@ -353,8 +354,10 @@ Check: no table (`relkind` `r`, `p`) of `public` fails
 'SELECT,INSERT,UPDATE,DELETE,MAINTAIN')` and no sequence fails
 `has_sequence_privilege(..., 'USAGE,SELECT,UPDATE')`; `rapid_rebuild_pipeline`
 passes `has_function_privilege(..., 'create_catalog_child(text,double
-precision,integer)', 'EXECUTE')`, the function that makes `sources`' child
-tables as the schema's owner; `SELECT
+precision,integer)', 'EXECUTE')` and `has_function_privilege(...,
+'create_field_child(text,integer)', 'EXECUTE')`, the functions that make
+the child tables of `sources` and `xsources`, and of `objects`,
+`memberships`, `packets` and `forced`, as the schema's owner; `SELECT
 q3c_version()` answers; `rp run show 1` exits 64, "run 1 does not exist"
 (connected, empty). A fresh `schema.sql` takes no dated file
 (`database/README.md`). A schema change to SMDC's existing database is

@@ -40,7 +40,7 @@ def objects_rows(n: int = 3) -> list[dict]:
 
 
 def memberships_rows(source_job: int, n: int = 3) -> list[dict]:
-    return [{"object_job": source_job, "aid": aid, "source_job": source_job, "sid": aid,
+    return [{"object_job": source_job, "aid": aid, "field": 1, "source_job": source_job, "sid": aid,
              "dra": 0.0, "ddec": 0.0, "flux": 100.0} for aid in range(1, n + 1)]
 
 

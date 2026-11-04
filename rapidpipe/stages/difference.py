@@ -235,16 +235,18 @@ REFERENCE_CATALOG_COLUMNS = ["ALPHAWIN_J2000", "DELTAWIN_J2000", "FLUX_AUTO", "F
                              "FLUXERR_APER_4"]
 
 #: `dev`'s pass 2 uses the field's inclusion cone only for a tile with this many neighbours.
-#: The fields' objects of the job's run as they stand: every published difference job's founded ones.
-OBJECTS_SQL = ("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
-               " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s AND o.field = ANY(%s)")
+#: The fields' objects of the job's run as they stand: every published difference job's founded ones,
+#: read from those fields' children of ``objects`` (``objects_in``), never the parent.
+OBJECTS_SQL = ("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects_in(%s::integer[]) o"
+               " JOIN jobs j ON j.id = o.job WHERE j.run = %s AND o.dataset = %s AND o.survey = %s")
 
 OBJECTS_SCHEMA = pa.schema([
     ("aid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),
     ("ra0", pa.float64()), ("dec0", pa.float64()),
 ])
 MEMBERSHIPS_SCHEMA = pa.schema([
-    ("object_job", pa.int64()), ("aid", pa.int64()), ("source_job", pa.int64()), ("sid", pa.int64()),
+    ("object_job", pa.int64()), ("aid", pa.int64()), ("field", pa.int32()), ("source_job", pa.int64()),
+    ("sid", pa.int64()),
     ("dra", pa.float64()), ("ddec", pa.float64()), ("flux", pa.float64()),
 ])
 
@@ -993,19 +995,21 @@ def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[lis
                 and r["fluxerr"] > 0 and r["fluxfit"] / r["fluxerr"] >= float(settings["min_snr"])]
     near = _with_neighbours({r["field"] for r in accepted})
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute(OBJECTS_SQL, (job.run, job.dataset, job.survey, sorted(near)))
+        cur.execute(OBJECTS_SQL, (sorted(near), job.run, job.dataset, job.survey))
         found = cur.fetchall()
         conn.commit()
     objects = {aid: (owner, ra0, dec0) for owner, aid, _, ra0, dec0 in found}
-    field_of = {aid: field for _, aid, field, _, _ in found}
+    field_of = {(owner, aid): field for owner, aid, field, _, _ in found}
     epoch = associate_epoch(objects, accepted, job=job.job, radius=radius)
+    field_of.update({(job.job, r["aid"]): r["field"] for r in epoch.founded})
+    # Each membership is filed under its object's field (schema.sql: the field children).
+    memberships = [{**m, "field": field_of[m["object_job"], m["aid"]]} for m in epoch.memberships]
     pq.write_table(pa.Table.from_pylist(
         [{**r, "dataset": job.dataset, "survey": job.survey} for r in epoch.founded],
         schema=OBJECTS_SCHEMA), job.path / "objects.parquet")
-    pq.write_table(pa.Table.from_pylist(epoch.memberships, schema=MEMBERSHIPS_SCHEMA),
+    pq.write_table(pa.Table.from_pylist(memberships, schema=MEMBERSHIPS_SCHEMA),
                    job.path / "memberships.parquet")
-    field_of.update({r["aid"]: r["field"] for r in epoch.founded})
-    touched = {field_of[m["aid"]] for m in epoch.memberships}
+    touched = {m["field"] for m in memberships}
     reads = [{"product": "objects",
               "key": {"dataset": job.dataset, "survey": job.survey, "field": field},
               "source_job": owner}

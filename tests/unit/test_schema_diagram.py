@@ -59,8 +59,11 @@ def test_dot_only_writes_the_dot_beside_out(tmp_path):
 
 
 def test_the_parents_of_child_tables_are_marked_with_their_childrens_names():
-    assert PARENTS == {"sources", "xsources"}
+    assert PARENTS == {"sources": "sources_<yyyymmdd>_<sca>", "xsources": "xsources_<yyyymmdd>_<sca>",
+                       **{t: f"{t}_<field>" for t in ("objects", "memberships", "packets", "forced")}}
     dot = schema_diagram.to_dot(TABLES, PARENTS)
-    for parent in PARENTS:
+    for parent in ("sources", "xsources"):
         assert f"rows in children {parent}_&lt;yyyymmdd&gt;_&lt;sca&gt;" in dot
-    assert dot.count("rows in children") == 2
+    for parent in ("objects", "memberships", "packets", "forced"):
+        assert f"rows in children {parent}_&lt;field&gt;" in dot
+    assert dot.count("rows in children") == 6

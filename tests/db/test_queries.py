@@ -37,7 +37,9 @@ Q3C = {
     # Driven from the cone, or from the reference through its field (the
     # tessellation tile) when the planner finds that narrower.
     "diffimages_in_cone_with_reference": {"diffimages_radec_idx", "diffimages_field_idx"},
-    "objects_in_cone": {"objects_radec_idx"},
+    # Read through objects_official_in, whose children's q3c indexes (copied from the parent's,
+    # tests/db/test_field_children.py) its plan does not show: no index asserted here.
+    "objects_in_cone": set(),
 }
 #: Spatial statements that need no q3c, and the index each must reach.
 GIN = {"l2files_overlapping_fields": {"l2files_overlapfields_idx"}}
@@ -108,7 +110,8 @@ def _background(w: World, run: int) -> None:
          "ra0": 100.0 + 0.1 * i, "dec0": 40.0} for i in range(BACKGROUND)]})
     # Official through a bound source set's memberships, as the view defines them.
     w.job(run, "difference", {"field": FIELD + 1}, {"memberships": [
-        {"object_job": founder, "aid": i, "source_job": founder, "sid": i, "dra": 0.0, "ddec": 0.0,
+        {"object_job": founder, "aid": i, "field": FIELD + 1, "source_job": founder, "sid": i,
+         "dra": 0.0, "ddec": 0.0,
          "flux": 1.0} for i in range(BACKGROUND)]},
         expects=[{"product": "sources", "key": image_key(1000, 1), "binding": None}])
 
@@ -227,7 +230,7 @@ def test_q3c_statements_return_their_columns_and_reach_their_index(world, capsys
         columns, statement = queries[name]
         _assert_shape(w, params, name, columns, statement)
         used = _indexes(w, params, statement)
-        if not used & expected:
+        if expected and not used & expected:
             missed.append(name)
         with w.conn.cursor() as cur:
             cur.execute("EXPLAIN " + statement, params)

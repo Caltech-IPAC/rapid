@@ -124,9 +124,12 @@ def late_sets(conn, run: int, settle_s: float = SETTLE_S) -> int:
 
 
 def set_index(conn, job: int) -> list[dict]:
-    """One packet set's index rows: ``sid``, ``filename``, ``byte_offset``, ``byte_length``."""
-    return _query(conn, "SELECT sid, filename, byte_offset, byte_length FROM packets"
-                        " WHERE job = %s ORDER BY sid", (job,))
+    """One packet set's index rows: ``sid``, ``filename``, ``byte_offset``, ``byte_length``.
+
+    Read from the children of ``packets`` the set was filed in (``packets_of``), never the parent.
+    """
+    return _query(conn, "SELECT sid, filename, byte_offset, byte_length"
+                        " FROM packets_of(ARRAY[%s]::bigint[]) ORDER BY sid", (job,))
 
 
 def set_run(conn, job: int) -> dict:

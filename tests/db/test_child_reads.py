@@ -1,8 +1,10 @@
-"""Readers of sources and xsources read child tables, and read the same rows the parents give.
+"""Readers of the split tables read child tables, and read the same rows the parents give.
 
 ``sources_of`` and ``xsources_of`` (``database/schema.sql``) and the named queries and
-operator scripts rewritten on them (rapid_docs decisions.md, children-reads) are checked
-against readings of the parent tables on the same data; test code may read a parent.
+operator scripts rewritten on them and on the field children's ``<parent>_in``,
+``<parent>_of`` and ``objects_official_in`` (rapid_docs decisions.md, children-reads and
+field-children) are checked against readings of the parent tables on the same data; test
+code may read a parent.
 """
 
 from __future__ import annotations
@@ -10,13 +12,14 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import re
 from pathlib import Path
 
 from rapidpipe.foundation import publish
 from tests.db.foundation_helpers import DATASET, new_job, new_run, write_attempt
 from tests.db.proof.fixture import World
 from tests.db.test_children import NOV4, source_rows, xsource_rows
-from tests.db.test_queries import load_queries, world  # noqa: F401 (the fixture)
+from tests.db.test_queries import load_queries, q3c_present, world  # noqa: F401 (the fixture)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -74,7 +77,8 @@ def test_sources_of_and_xsources_of_read_the_sets_rows_from_their_children(conne
                  (jobs[0], jobs[1])) == [("sources_20261104_8", "xsources_20261105_3")]
 
 
-#: The three named queries as they read the parents before the change (rapid 523), the reference.
+#: The named queries as they read the parents before the changes (rapid 523, and the field
+#: children's), the reference.
 QUERIES_ON_PARENTS = {
     "current_image_and_source_set": """
 SELECT l.rid, l.filename AS l2file, d.pid, d.filename AS diffimage, o.job AS source_set,
@@ -111,14 +115,51 @@ LEFT JOIN exposures_official e ON (e.dataset, e.expid) = (s.dataset, s.expid)
 WHERE s.dataset = %(dataset)s AND s.expid = %(expid)s AND s.sca = %(sca)s AND s.fid = %(fid)s
   AND s.flags & ~16384 = 0
 ORDER BY s.sid""",
+    "field_objects_and_members": """
+SELECT o.job AS object_job, o.aid, o.ra0, o.dec0, o.nsources, m.source_job, m.sid
+FROM objects_official o
+JOIN memberships_official m ON m.object_job = o.job AND m.aid = o.aid
+WHERE o.dataset = %(dataset)s AND o.survey = %(survey)s AND o.field = %(field)s
+ORDER BY o.aid, m.source_job, m.sid""",
+    "packet_history_by_observation": """
+SELECT p.job, p.sid, p.aid, p.object_job, p.source_job, p.trigger_mjd, p.schema_version,
+       o.id AS binding
+FROM packets p
+LEFT JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = p.job
+WHERE p.dataset = %(dataset)s AND p.expid = %(expid)s AND p.sca = %(sca)s AND p.fid = %(fid)s
+ORDER BY p.job, p.sid""",
+    "packet_history_by_source": """
+SELECT p.job, p.expid, p.sca, p.fid, p.aid, p.object_job, p.trigger_mjd, o.id AS binding
+FROM packets p
+LEFT JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = p.job
+WHERE p.source_job = %(source_job)s AND p.sid = %(sid)s
+ORDER BY p.job""",
+    "packet_history_by_object": """
+SELECT p.job, p.expid, p.sca, p.fid, p.source_job, p.sid, p.object_job, p.trigger_mjd,
+       o.id AS binding
+FROM packets p
+LEFT JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = p.job
+WHERE p.object_job = %(object_job)s AND p.aid = %(aid)s
+ORDER BY p.trigger_mjd, p.job""",
+}
+
+#: The q3c named query as it read the parent; compared where q3c is installed.
+Q3C_ON_PARENTS = {
+    "objects_in_cone": """
+SELECT o.aid, o.ra0, o.dec0, o.nsources, o.job AS object_job
+FROM objects_official o
+WHERE q3c_radial_query(o.ra0, o.dec0, %(ra)s, %(dec)s, %(radius)s)
+  AND o.dataset = %(dataset)s AND o.survey = %(survey)s
+ORDER BY o.aid""",
 }
 
 
 def test_the_named_queries_give_the_rows_they_gave_on_the_parents(world):
     w, params = world
     queries = load_queries()
-    for name, reference in QUERIES_ON_PARENTS.items():
-        assert "_of(" in queries[name][1]
+    references = {**QUERIES_ON_PARENTS, **(Q3C_ON_PARENTS if q3c_present(w.conn) else {})}
+    for name, reference in references.items():
+        assert re.search(r"\b\w+_(?:of|in)\(", queries[name][1]), name
         with w.conn.cursor() as cur:
             cur.execute(reference, params)
             want = cur.fetchall()

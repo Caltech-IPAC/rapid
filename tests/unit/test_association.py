@@ -95,7 +95,7 @@ def test_the_reconcile_reads_every_locked_field_and_an_old_manifest_its_one_fiel
     cur = Recorder()
     between(cur, JOB, 3, {"dataset": "D", "survey": "S", "fields": [8, 7], "radius": R}, [40, 41])
     ((statement, params),) = cur.calls
-    assert "o.field = ANY(%s)" in statement and params == (3, "D", "S", [7, 8], JOB, [40, 41])
+    assert "objects_in(%s::integer[])" in statement and params == ([7, 8], 3, "D", "S", JOB, [40, 41])
     assert fields({"dataset": "D", "survey": "S", "field": 7, "radius": R}) == [7]
 
 
@@ -109,7 +109,7 @@ def test_a_duplicate_founder_attaches_to_the_object_founded_since_the_read_with_
     """Two epochs in flight saw no object at a star: the other published first, at a point
     0.3 arcseconds off; this job's founded object goes to it, and its members' sums are the
     direct aggregation of their coordinates about the surviving origin."""
-    other = (44, 777, 10.0 + 0.3 * R, 5.0 - 0.1 * R)              # (job, aid, ra0, dec0)
+    other = (44, 777, 10.0 + 0.3 * R, 5.0 - 0.1 * R, 6)           # (job, aid, ra0, dec0, field)
     sources = [src(1, 10.0, 5.0),                                  # a later exposure joins it
                {**src(2, 10.0 + 0.4 * R, 5.0 + 0.3 * R), "expid": 2, "mjdobs": 60000.1}]
     epoch = associate_epoch({}, sources, job=JOB, radius=R)
@@ -119,7 +119,7 @@ def test_a_duplicate_founder_attaches_to_the_object_founded_since_the_read_with_
     kept, members, counts = attach(JOB, epoch.founded, epoch.memberships, [other], R)
 
     assert kept == [] and counts == {"objects_between": 1, "reconciled": 1, "attached_memberships": 2}
-    assert {(m["object_job"], m["aid"]) for m in members} == {(44, 777)}
+    assert {(m["object_job"], m["aid"], m["field"]) for m in members} == {(44, 777, 6)}
     direct = [{"dra": ra_offset(s["ra"], other[2]), "ddec": s["dec"] - other[3]} for s in sources]
     for got, want in zip(_sums(members), _sums(direct)):
         assert got == pytest.approx(want, rel=1e-9, abs=1e-18)
@@ -131,7 +131,7 @@ def test_a_duplicate_founder_attaches_to_the_object_founded_since_the_read_with_
 
 
 def test_a_member_outside_the_surviving_objects_radius_is_dropped_and_far_founders_are_kept():
-    other = (44, 777, 10.0 + 0.9 * R, 5.0)
+    other = (44, 777, 10.0 + 0.9 * R, 5.0, 6)
     sources = [src(1, 10.0, 5.0), src(3, 30.0, 5.0),
                {**src(2, 10.0 - 0.6 * R, 5.0), "expid": 2, "mjdobs": 60000.1}]  # 1.5" from the other
     epoch = associate_epoch({}, sources, job=JOB, radius=R)
@@ -147,7 +147,7 @@ def test_memberships_onto_objects_already_read_are_untouched():
     read = {11: (40, 10.0, 5.0)}
     epoch = associate_epoch(read, [src(1, 10.0, 5.0 + 0.1 * R)], job=JOB, radius=R)
     assert epoch.founded == []
-    kept, members, counts = attach(JOB, [], epoch.memberships, [(44, 777, 10.0, 5.0)], R)
+    kept, members, counts = attach(JOB, [], epoch.memberships, [(44, 777, 10.0, 5.0, 6)], R)
     assert members == epoch.memberships and counts["reconciled"] == 0
     assert math.isclose(members[0]["ddec"], 0.1 * R)
 
@@ -234,7 +234,7 @@ def test_two_jobs_founding_either_side_of_a_boundary_share_a_lock_and_end_with_o
         job, catalog, path = jobs[name]
         founded = pq.read_table(path / "objects.parquet").to_pylist()
         memberships = pq.read_table(path / "memberships.parquet").to_pylist()
-        others = [(j, aid, ra0, dec0) for j, aid, field, ra0, dec0 in table
+        others = [(j, aid, ra0, dec0, field) for j, aid, field, ra0, dec0 in table
                   if field in catalog["fields"] and j != job]
         kept, members, _ = attach(job, founded, memberships, others, R)
         table += [(job, o["aid"], o["field"], o["ra0"], o["dec0"]) for o in kept]
