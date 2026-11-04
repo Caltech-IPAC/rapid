@@ -33,6 +33,20 @@ the pipeline imports.
   the difference job's source set and are official when the set is
   (`xsources_official` joins the set's `sources` binding).
 
+  `objects`, `memberships`, `packets` and `forced` are split by field, as
+  `dev`'s `astroobjects` and `merges` are: one child per Roman
+  tessellation field, `<parent>_<field>` (for example `objects_1234`),
+  each row filed under its object's field, so an object's row, its
+  memberships, its packet rows and its forced photometry share one
+  field's children. Each carries a `field` column and a child `CHECK
+  (field = <field>)`; the parents hold no rows. The publisher makes a child
+  through `create_field_child(parent, field)`, owned and granted like
+  `create_catalog_child`, loads it by `COPY` and records the fields each
+  job's rows went to in `job_fields`. In SQL, `<parent>_in(fields)` returns
+  the rows in those fields' children, `<parent>_of(jobs)` the rows those
+  jobs wrote (through `job_fields`), and `objects_official_in(fields)`
+  `objects_official`'s rows of those fields, each from the children only.
+
   Nothing in this repository reads a parent (or its `_official` view): a
   query there visits every child. The pipeline, the operator scripts and
   `queries.sql` read the children their task needs. A source set's child
@@ -41,15 +55,18 @@ the pipeline imports.
   `rapidpipe.foundation.children` uses too. In SQL, `sources_of(jobs)`
   and `xsources_of(jobs)` return the rows of the source sets `jobs`
   names, from their children only: `FROM sources_of(ARRAY[...]) s` where
-  a query would read `FROM sources s`. The publisher analyses the children
+  a query would read `FROM sources s`, and likewise
+  `FROM memberships_in(ARRAY[...]) m` for `FROM memberships m`. The
+  publisher analyses the children
   it loaded, not the parents. `tests/unit/test_no_parent_reads.py` fails
   on a parent read in `rapidpipe`, `scripts` or `queries.sql`. A query by
   hand on a parent is still correct, and the children's `CHECK`
-  constraints let a filter on `mjdobs` or `sca` skip the others.
+  constraints let a filter on `mjdobs`, `sca` or `field` skip the others.
 - [`schema.svg`](schema.svg): the schema's entity diagram, every table and
   column with its declared foreign keys (solid) and the references the code
   follows by convention (dashed); a parent of child tables (`sources`,
-  `xsources`) is marked with its children's names. `scripts/schema_diagram.py` draws it from
+  `xsources`, `objects`, `memberships`, `packets`, `forced`) is marked
+  with its children's names. `scripts/schema_diagram.py` draws it from
   `schema.sql` through `schema.dot` with Graphviz; a change to `schema.sql`
   reruns it (`tests/unit/test_schema_diagram.py` fails on a stale
   `schema.dot`).

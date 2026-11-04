@@ -177,13 +177,14 @@ WINDOW_REACH_MARGIN = 1.05
 
 INDEX_SCHEMA = pa.schema([
     ("dataset", pa.string()), ("expid", pa.int32()), ("sca", pa.int16()), ("fid", pa.int16()),
-    ("object_job", pa.int64()), ("aid", pa.int64()), ("source_job", pa.int64()),
+    ("object_job", pa.int64()), ("aid", pa.int64()), ("field", pa.int32()), ("source_job", pa.int64()),
     ("sid", pa.int64()), ("trigger_mjd", pa.float64()), ("band", pa.string()),
     ("schema_version", pa.string()), ("filename", pa.string()),
     ("byte_offset", pa.int64()), ("byte_length", pa.int64()),
 ])
 FORCED_SCHEMA = pa.schema([
-    ("forced_id", pa.int64()), ("aid", pa.int64()), ("rid", pa.int32()), ("pid", pa.int32()),
+    ("forced_id", pa.int64()), ("aid", pa.int64()), ("field", pa.int32()), ("rid", pa.int32()),
+    ("pid", pa.int32()),
     ("expid", pa.int32()), ("sca", pa.int16()), ("fid", pa.int16()), ("band", pa.string()),
     ("mjdobs", pa.float64()), ("ra", pa.float64()), ("dec", pa.float64()),
     ("x", pa.float32()), ("y", pa.float32()),
@@ -215,13 +216,19 @@ SOURCE_JOINS = (
     " LEFT JOIN exposures e ON e.job = oe.job AND e.dataset = s.dataset AND e.expid = s.expid"
     " LEFT JOIN surveys sv ON sv.program_id = e.program_id")
 
-#: The trigger set's memberships: its sources' objects.
-TRIGGER_SQL = ("SELECT sid, object_job, aid FROM memberships WHERE job = %s"
+#: The trigger set's memberships: its sources' objects and their fields, from the children of
+#: ``memberships`` its difference job wrote (``memberships_of``), never the parent.
+TRIGGER_SQL = ("SELECT sid, object_job, aid, field FROM memberships_of(ARRAY[%s]::bigint[])"
                " ORDER BY sid, aid, object_job")
 
-#: The memberships of the triggers' objects whose source set is official, and the set's own.
+#: The triggers' objects' founding positions, from their fields' children of ``objects``.
+ORIGINS_SQL = ("SELECT o.aid, o.ra0, o.dec0 FROM objects_in(%s::integer[]) o WHERE (o.job, o.aid) IN"
+               " (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))")
+
+#: The memberships of the triggers' objects whose source set is official, and the set's own, from
+#: the objects' fields' children of ``memberships`` (an object's memberships are filed under its field).
 MEMBERSHIPS_SQL = (
-    "SELECT m.aid, m.source_job, m.sid FROM memberships m"
+    "SELECT m.aid, m.source_job, m.sid FROM memberships_in(%(fields)s::integer[]) m"
     " WHERE (m.object_job, m.aid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
     " AND (m.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
     " AND o.product = 'sources' AND o.job = m.job))")
@@ -252,11 +259,13 @@ WINDOW_SQL = (
     " AND o.product = 'diffimages' AND o.job = d.job))"
     " ORDER BY l.mjdobs, d.expid, d.sca, d.fid")
 
-#: Official packet sets' forced rows on the window's images.
-REUSE_SQL = ("SELECT f.*, p.dataset AS p_dataset, p.expid AS p_expid, p.sca AS p_sca, p.fid AS p_fid"
-             " FROM forced f JOIN official o ON o.closed_at IS NULL AND o.product = 'packets'"
-             " AND o.job = f.job JOIN LATERAL (SELECT dataset, expid, sca, fid FROM packets"
-             " WHERE job = f.job LIMIT 1) p ON true WHERE f.pid = ANY(%s)")
+#: Official packet sets' forced rows on the window's images, from the triggers' objects' fields'
+#: children of ``forced`` (a forced row is filed under its object's field), each with its set's key,
+#: the key of its open binding.
+REUSE_SQL = ("SELECT f.*, o.key ->> 'dataset' AS p_dataset, (o.key ->> 'expid')::integer AS p_expid,"
+             " (o.key ->> 'sca')::smallint AS p_sca, (o.key ->> 'fid')::smallint AS p_fid"
+             " FROM forced_in(%s::integer[]) f JOIN official o ON o.closed_at IS NULL"
+             " AND o.product = 'packets' AND o.job = f.job WHERE f.pid = ANY(%s)")
 
 
 @dataclasses.dataclass
@@ -308,6 +317,7 @@ class Read:
     key: dict
     source_job: int
     object_job: dict[int, int]                   # aid -> the object's founding job
+    field_of: dict[int, int]                     # aid -> the object's field
     flags_zero: int                              # the set's sources with no rejecting flag
     triggers: list[Source]                       # those that are members of an object
     aid_of: dict[int, int]                       # trigger sid -> aid
@@ -333,7 +343,8 @@ def _key_where(key: dict, alias: str) -> tuple[str, list]:
     return " AND ".join(f"{alias}.{n} = %s" for n in names), [key[n] for n in names]
 
 
-def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int) -> list[dict]:
+def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
+                 fields: list[int]) -> list[dict]:
     """The members of the triggers' objects, each with its object's ``member_aid``.
 
     The memberships first (:data:`MEMBERSHIPS_SQL`), then the members' rows
@@ -349,13 +360,16 @@ def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int) -> list
         The triggers' objects, as (founding job, object id) pairs.
     own : int
         The job's own source set, whose memberships count before it is official.
+    fields : list of int
+        The objects' fields, whose children of ``memberships`` hold their memberships.
 
     Returns
     -------
     list of dict
         One row per (object, member) with :data:`SOURCE_COLUMNS` and ``member_aid``.
     """
-    cur.execute(MEMBERSHIPS_SQL, {"jobs": object_jobs, "aids": aids, "own": own})
+    cur.execute(MEMBERSHIPS_SQL, {"jobs": object_jobs, "aids": aids, "own": own,
+                                  "fields": sorted(set(fields))})
     links = {(r["aid"], r["source_job"], r["sid"]) for r in cur.fetchall()}
     children = set_children(cur, "sources", {job for _, job, _ in links})
     wanted: dict[str, set[tuple[int, int]]] = {}
@@ -405,23 +419,23 @@ def _read(job: JobContext) -> Read:
         exposures = {(r["dataset"], r["expid"]): r["exposure_job"] for r in rows}
 
         cur.execute(TRIGGER_SQL, (source_job,))
-        aid_of, object_job = {}, {}
+        aid_of, object_job, field_of = {}, {}, {}
         for r in cur.fetchall():                 # ordered by aid: the lowest is first
             if r["sid"] not in aid_of:
                 aid_of[r["sid"]] = r["aid"]
                 object_job[r["aid"]] = r["object_job"]
+                field_of[r["aid"]] = r["field"]
         triggers = [s for s in alertable if s.sid in aid_of]
         aids = sorted({aid_of[s.sid] for s in triggers})
-        cur.execute("SELECT o.aid, o.ra0, o.dec0 FROM objects o WHERE (o.job, o.aid) IN"
-                    " (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))",
-                    ([object_job[a] for a in aids], aids))
+        fields = sorted({field_of[a] for a in aids})
+        cur.execute(ORIGINS_SQL, (fields, [object_job[a] for a in aids], aids))
         origin = {r["aid"]: (r["ra0"], r["dec0"]) for r in cur.fetchall()}
 
         members: dict[int, list[tuple[int, Source]]] = {}
         objects: dict[int, tuple[float, float, Sums]] = {
             aid: (*origin[aid], Sums(*origin[aid])) for aid in aids}
         member_sets = set()
-        for row in _member_rows(cur, [object_job[a] for a in aids], aids, source_job):
+        for row in _member_rows(cur, [object_job[a] for a in aids], aids, source_job, fields):
             aid = row.pop("member_aid")
             member = Source.from_row(row)
             member.aid = aid
@@ -474,7 +488,7 @@ def _read(job: JobContext) -> Read:
 
         reuse: dict[int, dict] = {}
         reused_sets = {}
-        cur.execute(REUSE_SQL, ([i.pid for i in images],))
+        cur.execute(REUSE_SQL, (fields, [i.pid for i in images]))
         for row in cur.fetchall():
             reused_sets[row["job"]] = {"dataset": row.pop("p_dataset"), "expid": row.pop("p_expid"),
                                        "sca": row.pop("p_sca"), "fid": row.pop("p_fid")}
@@ -506,7 +520,7 @@ def _read(job: JobContext) -> Read:
     trigger_image = [i for i in images if (i.expid, i.sca, i.fid) == (key["expid"], key["sca"], key["fid"])]
     if len(trigger_image) != 1:
         raise ValueError(f"job {job.job}: the trigger's difference image is not in its window")
-    return Read(key=key, source_job=source_job, object_job=object_job,
+    return Read(key=key, source_job=source_job, object_job=object_job, field_of=field_of,
                 flags_zero=len(alertable), triggers=triggers,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
@@ -769,6 +783,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     aids = sorted({read.aid_of[s.sid] for s in read.triggers})
     positions = [fp.Position(aid, *read.objects[aid][:2]) for aid in aids]
     forced_rows, measured = measure_forced(window, positions, read.reuse, time_proc)
+    for row in forced_rows:                      # filed under its object's field, as reused rows are
+        row["field"] = read.field_of[row["aid"]]
     forced_rows.sort(key=lambda r: (r["aid"], r["mjdobs"], r["rid"]))
     timing["forced_s"] = time.perf_counter() - t0
 
@@ -857,6 +873,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     url = prefix + f"packets/{name}"
     index = [{"dataset": dataset, "expid": read.key["expid"], "sca": read.key["sca"],
               "fid": read.key["fid"], "object_job": read.object_job[aid], "aid": aid,
+              "field": read.field_of[aid],
               "source_job": read.source_job, "sid": source.sid, "trigger_mjd": source.mjdobs,
               "band": source.band, "schema_version": VERSION, "filename": url,
               "byte_offset": offset, "byte_length": size}

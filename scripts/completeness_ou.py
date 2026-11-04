@@ -192,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
         packets = pd.DataFrame(q(
             "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
             " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
-            " FROM packets_official p JOIN jobs j ON j.id = p.job WHERE p.run = %s", (a.run,)))
+            " FROM packets_of(ARRAY(SELECT o.job FROM official o JOIN jobs r ON r.id = o.job"
+            " WHERE o.closed_at IS NULL AND o.product = 'packets' AND r.run = %s)) p"
+            " JOIN jobs j ON j.id = p.job", (a.run,)))
         metrics = pd.DataFrame(q(
             "SELECT expid, sca, metric, value FROM job_metrics WHERE run = %s AND stage = 'difference'"
             " AND state = 'published' AND metric IN ('n_candidates', 'container_seconds')", (a.run,)))

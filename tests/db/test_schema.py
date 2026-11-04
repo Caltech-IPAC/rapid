@@ -148,13 +148,14 @@ def test_the_catalog_views_follow_the_source_sets_bindings(conn):
     with conn.cursor() as cur:
         run, d1 = _run_and_job(cur)
         d2, d3 = _job(cur, run), _job(cur, run)
+        cur.execute("SELECT create_field_child('objects', 1), create_field_child('memberships', 1)")
         for aid, ra0 in ((1, 10.0), (2, 11.0)):
-            cur.execute("INSERT INTO objects (job, aid, dataset, survey, field, ra0, dec0)"
+            cur.execute("INSERT INTO objects_1 (job, aid, dataset, survey, field, ra0, dec0)"
                         " VALUES (%s, %s, 'D', 'S', 1, %s, -5.0)", (d1, aid, ra0))
         members = [(d1, 1, 0.0, 0.0, 10.0), (d2, 1, 2e-6, -1e-6, 12.0), (d3, 1, 4e-6, 0.0, 99.0),
                    (d3, 2, 0.0, 0.0, 5.0)]
-        cur.executemany("INSERT INTO memberships (job, object_job, aid, source_job, sid, dra, ddec, flux)"
-                        " VALUES (%s, %s, %s, %s, 1, %s, %s, %s)",
+        cur.executemany("INSERT INTO memberships_1 (job, object_job, aid, field, source_job, sid, dra,"
+                        " ddec, flux) VALUES (%s, %s, %s, 1, %s, 1, %s, %s, %s)",
                         [(j, d1, aid, j, dra, ddec, flux) for j, aid, dra, ddec, flux in members])
         for epoch, job in ((1, d1), (2, d2)):
             _open(cur, job, f'{{"dataset": "D", "expid": {epoch}, "sca": 1, "fid": 1}}', "sources")
@@ -166,6 +167,10 @@ def test_the_catalog_views_follow_the_source_sets_bindings(conn):
         objects = cur.fetchall()
         cur.execute("SELECT count(*) FROM objects")
         (stored,) = cur.fetchone()
+        cur.execute("SELECT * FROM objects_official ORDER BY job, aid")
+        view = cur.fetchall()
+        cur.execute("SELECT * FROM objects_official_in(ARRAY[1, 2]) ORDER BY job, aid")
+        assert cur.fetchall() == view
 
     assert official == [d1, d2]
     ((aid, n, sumra, sumra2, sumdec, sumflux, sumflux2, objects_run),) = objects

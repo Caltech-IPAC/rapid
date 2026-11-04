@@ -158,7 +158,7 @@ class World:
         outputs = {"diffimages": [diffimage], "sources": sources,
                    "objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": FIELD}
                                for o in epoch_rows.founded],
-                   "memberships": epoch_rows.memberships}
+                   "memberships": [{**m, "field": FIELD} for m in epoch_rows.memberships]}
         root = self.root / f"job-{job}" / "attempt-1"
         write_attempt(root, outputs)
         manifest = json.loads((root / "manifest.json").read_text())
@@ -185,11 +185,13 @@ class World:
                 " m.object_job, m.aid FROM sources s JOIN memberships m"
                 " ON m.source_job = s.job AND m.sid = s.sid WHERE s.job = %s"
                 " ORDER BY s.sid, m.aid", (source_set,))):
-            index.append({**key, "object_job": object_job, "aid": aid, "source_job": source_set,
+            index.append({**key, "object_job": object_job, "aid": aid, "field": FIELD,
+                          "source_job": source_set,
                           "sid": sid, "trigger_mjd": mjd, "band": "F184",
                           "schema_version": "00.06", "filename": f"packets-{epoch}-{sca}.avro",
                           "byte_offset": 1000 * n, "byte_length": 1000})
-            forced.append({"forced_id": _forced_id(pid, aid, ra, dec), "aid": aid, "rid": 0,
+            forced.append({"forced_id": _forced_id(pid, aid, ra, dec), "aid": aid, "field": FIELD,
+                           "rid": 0,
                            "pid": pid, "expid": epoch, "sca": sca, "fid": FID, "band": "F184",
                            "mjdobs": mjd, "ra": ra, "dec": dec, "x": 0.0, "y": 0.0,
                            "psf_flux": flux, "psf_fluxerr": 1.0, "science_flux": flux,

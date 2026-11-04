@@ -30,13 +30,19 @@ loaded no rows, a table its manifest does not declare included, unless
 the job, as for any refused binding.
 
 The tables of :data:`CHILDREN` keep their rows in child tables that
-inherit them, one per UT observation date and SCA (``schema.sql``), as
-`dev`'s sources and xsources do. Before the transaction that loads a set, the publisher
-makes each child its rows fall in, by ``create_catalog_child``, in a short
-transaction of its own, so the lock inheriting takes on the parent is never
-held while a set loads; then it loads each child by bulk ``COPY``, as
-`dev`'s loaders do (``pipeline/loadSECatIntoDBSourcesTable.py``), where
-every other table takes ``INSERT``.
+inherit them (``schema.sql``): those of :data:`DATE_SCA_CHILDREN` one per
+UT observation date and SCA, as `dev`'s sources and xsources do, those of
+:data:`FIELD_CHILDREN` one per field, the row's object's, as `dev`'s
+astroobjects and merges are split. Before the transaction that loads a set,
+the publisher makes each child its rows fall in, by ``create_catalog_child``
+or ``create_field_child``, in a short transaction of its own, so the lock
+inheriting takes on the parent is never held while a set loads; then it
+loads each child by bulk ``COPY``, as `dev`'s loaders do
+(``pipeline/loadSECatIntoDBSourcesTable.py``), where every other table
+takes ``INSERT``. A membership the reconcile attaches to an object in a
+field whose child does not yet exist gets that child made inside the
+loading transaction. The fields a job's rows went to are recorded in
+``job_fields`` with them, so a reader finds a job's children without a parent.
 
 The prefix is a URL, ``file://`` or ``s3://``; each file is read through
 :func:`rapidpipe.foundation.prefix.get`.
@@ -69,7 +75,14 @@ PRODUCT_TABLES = frozenset({
 
 #: The product tables whose rows live in child tables, one per UT observation date
 #: (``mjdobs``) and SCA, loaded by ``COPY``.
-CHILDREN = frozenset({"sources", "xsources"})
+DATE_SCA_CHILDREN = frozenset({"sources", "xsources"})
+
+#: The product tables whose rows live in child tables, one per field (the row's
+#: object's), loaded by ``COPY``.
+FIELD_CHILDREN = frozenset({"objects", "memberships", "packets", "forced"})
+
+#: Every product table whose rows live in child tables.
+CHILDREN = DATE_SCA_CHILDREN | FIELD_CHILDREN
 
 
 class PublishError(Exception):
@@ -99,7 +112,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     """
     root = prefix.rstrip("/") + "/"
     manifest = rows = None
-    children: dict[str, dict[tuple[int, int], str]] = {}
+    children: dict[str, dict[Any, str]] = {}
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT state FROM jobs WHERE id = %s", (job_id,))
@@ -132,10 +145,15 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             for output in manifest["outputs"]:
                 table = output["table"]
                 if table in CHILDREN:
-                    _copy(cur, children.get(table, {}), rows[table], job_id)
+                    _copy(cur, table, children.setdefault(table, {}), rows[table], job_id)
                 else:
                     _insert(cur, table, rows[table], job_id)
                 tables.append(table)
+            filed = sorted({(table, int(r["field"])) for table in FIELD_CHILDREN & set(tables)
+                            for r in rows[table]})
+            if filed:
+                execute_values(cur, "INSERT INTO job_fields (job, parent, field) VALUES %s",
+                               [(job_id, table, field) for table, field in filed])
             if reads:
                 execute_values(cur, "INSERT INTO job_inputs (job, kind, product, key, source_job)"
                                " VALUES %s", [(job_id, "input", r["product"], Json(r["key"]),
@@ -195,8 +213,8 @@ def _rows(path: Path) -> list[dict]:
     return data.to_pylist()
 
 
-def _children(cur, rows: dict[str, list[dict]]) -> dict[str, dict[tuple[int, int], str]]:
-    """Make the child tables the rows of :data:`CHILDREN` fall in, one per UT observation date and SCA.
+def _children(cur, rows: dict[str, list[dict]]) -> dict[str, dict[Any, str]]:
+    """Make the child tables the rows of :data:`CHILDREN` fall in.
 
     Parameters
     ----------
@@ -208,29 +226,46 @@ def _children(cur, rows: dict[str, list[dict]]) -> dict[str, dict[tuple[int, int
     Returns
     -------
     dict of str to dict
-        For each such table with rows, ``(floor(mjdobs), sca)`` to the child's name.
+        For each such table with rows, its child key (:func:`_child_key`) to the child's name.
     """
-    children: dict[str, dict[tuple[int, int], str]] = {}
+    children: dict[str, dict[Any, str]] = {}
     for table in sorted(CHILDREN & rows.keys()):
-        for day, sca in sorted({_child_key(r) for r in rows[table]}):
-            cur.execute("SELECT create_catalog_child(%s, %s, %s)", (table, float(day), sca))
-            children.setdefault(table, {})[(day, sca)] = cur.fetchone()[0]
+        for key in sorted({_child_key(table, r) for r in rows[table]}):
+            children.setdefault(table, {})[key] = _make_child(cur, table, key)
     return children
 
 
-def _child_key(row: dict) -> tuple[int, int]:
+def _child_key(table: str, row: dict) -> Any:
+    """``(floor(mjdobs), sca)`` for :data:`DATE_SCA_CHILDREN`, the field for :data:`FIELD_CHILDREN`."""
+    if table in FIELD_CHILDREN:
+        if row.get("field") is None:
+            raise PublishError(f"a {table} row carries no field; its child cannot be named")
+        return int(row["field"])
     return math.floor(row["mjdobs"]), int(row["sca"])
 
 
-def _copy(cur, children: dict[tuple[int, int], str], rows: list[dict], job_id: int) -> None:
+def _make_child(cur, table: str, key: Any) -> str:
+    """Make (or find) the child of ``table`` for ``key`` and return its name."""
+    if table in FIELD_CHILDREN:
+        cur.execute("SELECT create_field_child(%s, %s)", (table, key))
+    else:
+        cur.execute("SELECT create_catalog_child(%s, %s, %s)", (table, float(key[0]), key[1]))
+    return cur.fetchone()[0]
+
+
+def _copy(cur, table: str, children: dict[Any, str], rows: list[dict], job_id: int) -> None:
     """Load rows into their child tables by ``COPY``, one statement per child.
 
     Parameters
     ----------
     cur : psycopg2 cursor
         A cursor in the publishing transaction.
-    children : dict of tuple to str
-        ``(floor(mjdobs), sca)`` to the child's name, as made by ``_children``.
+    table : str
+        One of :data:`CHILDREN`.
+    children : dict
+        Child key to the child's name, as made by ``_children``; a child a row
+        needs that is not there (a membership the reconcile attached to an
+        object in another field) is made in this transaction and added.
     rows : list of dict
         The table's rows, every one with the same columns, ``job`` not among them.
     job_id : int
@@ -245,7 +280,10 @@ def _copy(cur, children: dict[tuple[int, int], str], rows: list[dict], job_id: i
     columns = list(rows[0])
     by_child: dict[str, list[dict]] = {}
     for r in rows:
-        by_child.setdefault(children[_child_key(r)], []).append(r)
+        key = _child_key(table, r)
+        if key not in children:
+            children[key] = _make_child(cur, table, key)
+        by_child.setdefault(children[key], []).append(r)
     for child, child_rows in sorted(by_child.items()):
         buffer = io.StringIO()
         writer = csv.writer(buffer, lineterminator="\n")

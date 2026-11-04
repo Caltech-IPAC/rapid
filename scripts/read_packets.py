@@ -112,15 +112,20 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
     """Check one packet set; return its counts and its failures."""
     failures: list[str] = []
     counts = Counter()
-    index = _query(conn, "SELECT * FROM packets_official WHERE job = %s ORDER BY sid", (job,))
+    # The set's rows from the children of packets and forced it was filed in, never the parents.
+    index = _query(conn, "SELECT p.* FROM packets_of(ARRAY[%s]::bigint[]) p WHERE"
+                         " EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
+                         " AND o.product = 'packets' AND o.job = p.job) ORDER BY p.sid", (job,))
     forced = {r["forced_id"]: r for r in _query(
-        conn, "SELECT * FROM forced_official WHERE job = %s", (job,))}
+        conn, "SELECT f.* FROM forced_of(ARRAY[%s]::bigint[]) f WHERE"
+              " EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
+              " AND o.product = 'packets' AND o.job = f.job)", (job,))}
     inputs = {(r["product"], r["source_job"]) for r in _query(
         conn, "SELECT product, source_job FROM job_inputs WHERE job = %s AND kind = 'input'",
         (job,))}
     member_of = {(r["object_job"], r["aid"], r["sid"]) for r in _query(
-        conn, "SELECT m.object_job, m.aid, m.sid FROM memberships m"
-              " WHERE m.job = (SELECT source_job FROM packets WHERE job = %s LIMIT 1)", (job,))}
+        conn, "SELECT m.object_job, m.aid, m.sid FROM memberships_of(ARRAY["
+              "(SELECT p.source_job FROM packets_of(ARRAY[%s]::bigint[]) p LIMIT 1)]) m", (job,))}
     (settings,) = _query(conn, "SELECT r.settings FROM jobs j JOIN runs r ON r.id = j.run"
                                " WHERE j.id = %s", (job,))
     size = 2 * int(settings["settings"]["packet"]["stamp_half_width"]) + 1
@@ -230,9 +235,13 @@ def main(argv: list[str] | None = None) -> int:
     all_failures: list[str] = []
     with connect(application_name="read_packets") as conn:
         jobs = args.job or [r["job"] for r in _query(
-            conn, "SELECT DISTINCT job FROM packets_official ORDER BY job")]
+            conn, "SELECT DISTINCT o.job FROM official o JOIN job_fields f ON f.job = o.job"
+                  " AND f.parent = 'packets' WHERE o.closed_at IS NULL AND o.product = 'packets'"
+                  " ORDER BY o.job")]
         for job in jobs:
-            if not _query(conn, "SELECT 1 FROM packets_official WHERE job = %s LIMIT 1", (job,)):
+            if not _query(conn, "SELECT 1 FROM official o JOIN job_fields f ON f.job = o.job"
+                                " AND f.parent = 'packets' WHERE o.closed_at IS NULL"
+                                " AND o.product = 'packets' AND o.job = %s LIMIT 1", (job,)):
                 all_failures.append(f"job {job}: no packets_official rows")
                 continue
             counts, failures = read_set(conn, job)

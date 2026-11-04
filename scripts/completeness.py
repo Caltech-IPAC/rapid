@@ -290,7 +290,9 @@ def load(conn, run_id: int) -> dict:
     packets = pd.DataFrame(q(
         "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
         " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
-        " FROM packets_official p JOIN jobs j ON j.id = p.job WHERE p.run = %s", (run_id,)))
+        " FROM packets_of(ARRAY(SELECT o.job FROM official o JOIN jobs r ON r.id = o.job"
+        " WHERE o.closed_at IS NULL AND o.product = 'packets' AND r.run = %s)) p"
+        " JOIN jobs j ON j.id = p.job", (run_id,)))
     diffs = {(r["expid"], r["sca"]) for r in q(
         "SELECT expid, sca FROM diffimages_official WHERE run = %s", (run_id,))}
     metrics = pd.DataFrame(q(

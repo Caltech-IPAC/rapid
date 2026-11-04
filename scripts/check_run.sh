@@ -47,7 +47,9 @@ s=$SECONDS
 sets=$("$PY" -c 'import sys
 from rapidpipe.db.connection import connect
 with connect(application_name="check_run") as c, c.cursor() as cur:
-    cur.execute("SELECT DISTINCT job FROM packets_official WHERE run = %s ORDER BY job", (int(sys.argv[1]),))
+    cur.execute("SELECT DISTINCT o.job FROM official o JOIN jobs j ON j.id = o.job JOIN job_fields f"
+                " ON f.job = o.job AND f.parent = 'packets' WHERE o.closed_at IS NULL"
+                " AND o.product = 'packets' AND j.run = %s ORDER BY o.job", (int(sys.argv[1]),))
     print(" ".join(f"--job={r[0]}" for r in cur.fetchall()))' "$RUN") || fail=1
 n=$(wc -w <<<"$sets")
 r=$(xargs -r -n $(( (n + 7) / 8 > 0 ? (n + 7) / 8 : 1 )) -P 8 "$PY" scripts/read_packets.py <<<"$sets" | tee -a /dev/stderr) || fail=1

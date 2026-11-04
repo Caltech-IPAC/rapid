@@ -22,6 +22,11 @@
 --   xsources_of(jobs), which read the named source sets' child tables only,
 --   never the parent tables or their _official views, whose every read visits
 --   every child (schema.sql; rapid_docs decisions.md, children-reads).
+-- - objects, memberships, packets and forced are read through
+--   <table>_in(fields) and <table>_of(jobs), and official objects through
+--   objects_official_in(fields), which read those fields' or jobs' child
+--   tables only. A row is filed under its object's field, so an object's
+--   field names every child holding its rows (decisions.md, field-children).
 
 --------------------------------------------------------------------------------
 -- The plan's eight queries
@@ -47,9 +52,11 @@ WHERE l.dataset = %(dataset)s AND l.expid = %(expid)s AND l.sca = %(sca)s AND l.
 -- joined to astroobjects_<field>). An object is its founding job and id; a
 -- superseded source set's members are absent (plan amendment 2026-10-24).
 SELECT o.job AS object_job, o.aid, o.ra0, o.dec0, o.nsources, m.source_job, m.sid
-FROM objects_official o
-JOIN memberships_official m ON m.object_job = o.job AND m.aid = o.aid
+FROM objects_official_in(ARRAY[%(field)s]::integer[]) o
+JOIN memberships_in(ARRAY[%(field)s]::integer[]) m ON m.object_job = o.job AND m.aid = o.aid
 WHERE o.dataset = %(dataset)s AND o.survey = %(survey)s AND o.field = %(field)s
+  AND EXISTS (SELECT 1 FROM official b WHERE b.closed_at IS NULL AND b.product = 'sources'
+              AND b.job = m.job)
 ORDER BY o.aid, m.source_job, m.sid;
 
 -- name: object_history
@@ -57,22 +64,30 @@ ORDER BY o.aid, m.source_job, m.sid;
 -- An object's official detections and the forced photometry of the packet
 -- sets that carried it, once per forced id. kind is 'detection' (job, id =
 -- the source set and sid) or 'forced' (job, id = the packet set and forced_id).
+-- Every row of the object is in its field's children.
+WITH f AS (SELECT ARRAY(SELECT o.field FROM objects_of(ARRAY[%(object_job)s]::bigint[]) o
+                        WHERE o.aid = %(aid)s) AS fields),
+m AS MATERIALIZED (
+    SELECT m.source_job, m.sid
+    FROM memberships_in((SELECT fields FROM f)) m
+    WHERE m.object_job = %(object_job)s AND m.aid = %(aid)s
+      AND EXISTS (SELECT 1 FROM official b WHERE b.closed_at IS NULL AND b.product = 'sources'
+                  AND b.job = m.job)),
+p AS MATERIALIZED (
+    SELECT DISTINCT p.job FROM packets_in((SELECT fields FROM f)) p
+    WHERE p.object_job = %(object_job)s AND p.aid = %(aid)s)
 SELECT * FROM (
     SELECT 'detection' AS kind, s.mjdobs, s.fluxfit::double precision AS flux,
            s.fluxerr::double precision AS fluxerr, m.source_job AS job, m.sid AS id
-    FROM memberships_official m
-    JOIN sources_of(ARRAY(SELECT DISTINCT o.source_job FROM memberships_official o
-                          WHERE o.object_job = %(object_job)s AND o.aid = %(aid)s)) s
+    FROM m
+    JOIN sources_of(ARRAY(SELECT DISTINCT source_job FROM m)) s
         ON s.job = m.source_job AND s.sid = m.sid
-    WHERE m.object_job = %(object_job)s AND m.aid = %(aid)s
     UNION ALL
-    (SELECT DISTINCT ON (f.forced_id) 'forced', f.mjdobs, f.psf_flux, f.psf_fluxerr, f.job,
-            f.forced_id
-     FROM forced f
-     WHERE f.aid = %(aid)s
-       AND EXISTS (SELECT 1 FROM packets p WHERE p.job = f.job AND p.aid = f.aid
-                   AND p.object_job = %(object_job)s)
-     ORDER BY f.forced_id, f.job)
+    (SELECT DISTINCT ON (fo.forced_id) 'forced', fo.mjdobs, fo.psf_flux, fo.psf_fluxerr, fo.job,
+            fo.forced_id
+     FROM forced_in((SELECT fields FROM f)) fo
+     WHERE fo.aid = %(aid)s AND fo.job IN (SELECT job FROM p)
+     ORDER BY fo.forced_id, fo.job)
 ) history
 ORDER BY mjdobs, kind, job, id;
 
@@ -80,28 +95,38 @@ ORDER BY mjdobs, kind, job, id;
 -- returns: job, sid, aid, object_job, source_job, trigger_mjd, schema_version, binding
 -- Every packet ever made for an image key, every version; binding is the
 -- open packet binding of its set, or null for a superseded or unbound set.
+-- A packet set names its own source set's key among its inputs.
 SELECT p.job, p.sid, p.aid, p.object_job, p.source_job, p.trigger_mjd, p.schema_version,
        o.id AS binding
-FROM packets p
+FROM packets_of(ARRAY(SELECT DISTINCT i.job FROM job_inputs i
+                      WHERE i.kind = 'input' AND i.product = 'sources'
+                        AND i.key = jsonb_build_object('dataset', %(dataset)s::text,
+                            'expid', %(expid)s::integer, 'sca', %(sca)s::smallint,
+                            'fid', %(fid)s::smallint))) p
 LEFT JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = p.job
 WHERE p.dataset = %(dataset)s AND p.expid = %(expid)s AND p.sca = %(sca)s AND p.fid = %(fid)s
 ORDER BY p.job, p.sid;
 
 -- name: packet_history_by_source
 -- returns: job, expid, sca, fid, aid, object_job, trigger_mjd, binding
--- Every packet triggered by one source (source set, sid), every version.
+-- Every packet triggered by one source (source set, sid), every version: of
+-- the packet sets that name that source set among their inputs.
 SELECT p.job, p.expid, p.sca, p.fid, p.aid, p.object_job, p.trigger_mjd, o.id AS binding
-FROM packets p
+FROM packets_of(ARRAY(SELECT DISTINCT i.job FROM job_inputs i
+                      WHERE i.source_job = %(source_job)s AND i.kind = 'input'
+                        AND i.product = 'sources')) p
 LEFT JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = p.job
 WHERE p.source_job = %(source_job)s AND p.sid = %(sid)s
 ORDER BY p.job;
 
 -- name: packet_history_by_object
 -- returns: job, expid, sca, fid, source_job, sid, object_job, trigger_mjd, binding
--- An object's alert history: every packet, every version, that carried it.
+-- An object's alert history: every packet, every version, that carried it,
+-- from its field's children.
 SELECT p.job, p.expid, p.sca, p.fid, p.source_job, p.sid, p.object_job, p.trigger_mjd,
        o.id AS binding
-FROM packets p
+FROM packets_in(ARRAY(SELECT o.field FROM objects_of(ARRAY[%(object_job)s]::bigint[]) o
+                      WHERE o.aid = %(aid)s)) p
 LEFT JOIN official o ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = p.job
 WHERE p.object_job = %(object_job)s AND p.aid = %(aid)s
 ORDER BY p.trigger_mjd, p.job;
@@ -227,9 +252,11 @@ ORDER BY l.dateobs, l.sca;
 -- returns: aid, ra0, dec0, nsources, object_job
 -- Official objects within a cone (the association read's spatial shape, R25,
 -- now a query rather than the matcher's: the matcher runs in memory).
--- q3c index on object positions.
+-- fields: the tessellation fields the cone touches (the caller's, from
+-- rapidpipe.science.spatial), whose children are read; each child carries
+-- the q3c index on object positions.
 SELECT o.aid, o.ra0, o.dec0, o.nsources, o.job AS object_job
-FROM objects_official o
+FROM objects_official_in(%(fields)s::integer[]) o
 WHERE q3c_radial_query(o.ra0, o.dec0, %(ra)s, %(dec)s, %(radius)s)
   AND o.dataset = %(dataset)s AND o.survey = %(survey)s
 ORDER BY o.aid;

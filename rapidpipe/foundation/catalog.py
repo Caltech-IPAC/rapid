@@ -46,16 +46,18 @@ def lock(cur, run: int, fields: list[int]) -> None:
 
 
 def between(cur, job: int, run: int, catalog: dict, read_jobs: list[int]) -> list[tuple]:
-    """``(job, aid, ra0, dec0)`` of the run's objects in the catalog's fields founded outside the read.
+    """``(job, aid, ra0, dec0, field)`` of the run's objects in the catalog's fields founded outside the read.
 
     A job publishes all its objects in one transaction, so a founding job
     the read saw had published every object it has; one founded since is
-    one whose job the read did not see.
+    one whose job the read did not see. Read from those fields' children of
+    ``objects`` (``objects_in``), never the parent.
     """
-    cur.execute("SELECT o.job, o.aid, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
-                " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s AND o.field = ANY(%s)"
+    cur.execute("SELECT o.job, o.aid, o.ra0, o.dec0, o.field FROM objects_in(%s::integer[]) o"
+                " JOIN jobs j ON j.id = o.job"
+                " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s"
                 " AND o.job <> %s AND NOT o.job = ANY(%s) ORDER BY o.job, o.aid",
-                (run, catalog["dataset"], catalog["survey"], fields(catalog), job,
+                (fields(catalog), run, catalog["dataset"], catalog["survey"], job,
                  list(read_jobs)))
     return cur.fetchall()
 
@@ -73,8 +75,9 @@ def attach(job: int, founded: list[dict], memberships: list[dict], others: list[
     of its memberships goes to every such object whose position its source
     is within ``radius`` of, rebased to that object's origin. A membership
     that falls within none is dropped, as a sequential run would never
-    have made it. Returns the kept founded rows, the memberships and the
-    counts recorded on the job.
+    have made it. An attached membership takes the surviving object's field.
+    Returns the kept founded rows, the memberships and the counts recorded
+    on the job.
     """
     targets = {}
     for obj in founded:
@@ -91,13 +94,13 @@ def attach(job: int, founded: list[dict], memberships: list[dict], others: list[
         obj, near = targets[m["aid"]]
         ra = (obj["ra0"] + m["dra"]) % 360.0
         dec = obj["dec0"] + m["ddec"]
-        for owner, aid, ra0, dec0 in near:
+        for owner, aid, ra0, dec0, field in near:
             key = (owner, aid, m["source_job"], m["sid"])
             if key in seen or not within(ra, dec, ra0, dec0, radius):
                 continue
             seen.add(key)
             attached += 1
-            out.append({**m, "object_job": owner, "aid": aid,
+            out.append({**m, "object_job": owner, "aid": aid, "field": field,
                         "dra": m["dra"] + ra_offset(obj["ra0"], ra0),
                         "ddec": m["ddec"] + (obj["dec0"] - dec0)})
     return kept, out, {"objects_between": len(others), "reconciled": len(targets),
