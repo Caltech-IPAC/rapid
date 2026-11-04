@@ -60,7 +60,7 @@ def connect():
     For tests of the foundation's operations, which commit: the fixture
     empties runs, jobs, job_inputs, official and, by cascade, every product
     table before the test and again after it, and drops the child tables
-    of ``sources``, so each test starts from no rows and no
+    of ``sources`` and ``xsources``, so each test starts from no rows and no
     children and leaves none for the rolled-back ``conn`` tests. Every
     connection it hands out is closed at teardown.
     """
@@ -76,9 +76,9 @@ def connect():
         try:
             with connection, connection.cursor() as cur:
                 cur.execute("TRUNCATE runs, jobs, job_inputs, official CASCADE")
-                # The child tables of sources, one per UT observation date and SCA.
+                # The child tables of sources and xsources, one per UT date and SCA.
                 cur.execute("SELECT inhrelid::regclass::text FROM pg_inherits"
-                            " WHERE inhparent = 'sources'::regclass")
+                            " WHERE inhparent IN ('sources'::regclass, 'xsources'::regclass)")
                 for (child,) in cur.fetchall():
                     cur.execute(f"DROP TABLE {child}")
         finally:

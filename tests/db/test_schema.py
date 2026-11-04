@@ -22,7 +22,7 @@ BOOKKEEPING = ("runs", "jobs", "job_inputs", "official")
 STATIC = ("filters", "scas", "surveys", "fields")
 PRODUCT_TABLES = (
     "exposures", "l2files", "refimages", "refimimages", "refimcatalogs",
-    "diffimages", "psfs", "sources", "objects", "memberships", "packets",
+    "diffimages", "psfs", "sources", "xsources", "objects", "memberships", "packets",
     "forced", "external", "catalogs",
 )
 VIEWS = tuple(f"{t}_official" for t in PRODUCT_TABLES) + ("job_metrics",)

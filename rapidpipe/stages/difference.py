@@ -90,6 +90,12 @@ and ``sources`` (the published differencer's positive PSF-fit catalog through
 as the import caps it; a source in a bright reference source's footprint
 carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
 in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`),
+under ``diff_flavor = "sfft"`` ``xsources`` (`dev`'s, d2657f7d: every source
+of SFFT's positive and negative SExtractor catalogs that its XSources loader
+keeps, uncapped, with the extra columns `dev`'s science pipeline adds to
+those catalogs, both signs scored by RuBR-AT: :func:`xsources_set`,
+:mod:`rapidpipe.science.difference.xsources`; a child of the source set,
+official with it),
 ``objects`` and ``memberships`` (the association, :func:`associate`: the
 plan's amendment of 2026-10-24 moved it here from the retired associate
 stage; the job reads the objects of its run in its sources' fields and
@@ -200,6 +206,7 @@ from rapidpipe.science.difference import (
     sfft,
     statistics,
     uncertainty,
+    xsources,
     zogy,
 )
 from rapidpipe.science.difference.fitsops import scale_image_data
@@ -513,6 +520,7 @@ class _Catalogs:
     bits: int = 0
     pixel_columns_s: float | None = None
     rb: dict[str, Any] | None = None
+    xsources: dict[str, Any] | None = None
 
 
 def _sextractor_catalogs(*, kit: Toolkit, work_dir: Path, settings: dict[str, Any],
@@ -827,7 +835,7 @@ def run(job: JobContext) -> None:
         scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
         refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
         science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
-        rb=rb, **common)
+        rb=rb, with_xsources=flavor == "sfft", **common)
     infobits |= sfft_catalogs.bits
     metrics["pixel_columns_s"] = sfft_catalogs.pixel_columns_s
     if sfft_catalogs.rb is not None:
@@ -889,6 +897,17 @@ def run(job: JobContext) -> None:
     pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
                    job.path / "diffimages.parquet")
     pq.write_table(sources, job.path / "sources.parquet")
+    outputs = [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet")]
+    xsources_record = None
+    if sfft_catalogs.xsources is not None:
+        xsources_rows, xsources_record = xsources_set(sfft_catalogs.xsources, settings, key,
+                                                      inputs.pid, inputs.mjdobs)
+        pq.write_table(xsources_rows, job.path / "xsources.parquet")
+        outputs.append(("xsources", "xsources.parquet"))
+        metrics.update(n_xsources=xsources_rows.num_rows,
+                       n_xsources_read=sum(xsources_record["read"].values()),
+                       n_xsources_fitted=sum(xsources_record["fitted"].values()),
+                       xsources_s=xsources_record["seconds"])
     residual_stars = _quality_metrics(
         metrics, found, thresh=thresh, candidates=candidates, sources=sources,
         catalog=catalog, in_footprint=in_footprint,
@@ -903,9 +922,8 @@ def run(job: JobContext) -> None:
                    n_memberships=association["memberships"],
                    n_sources_out_of_field=association["sources_out_of_field"])
     job.write_manifest(
-        [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet"),
-         ("objects", "objects.parquet"), ("memberships", "memberships.parquet")],
-        empty_ok=("sources",),                  # a difference with nothing above the cut
+        outputs + [("objects", "objects.parquet"), ("memberships", "memberships.parquet")],
+        empty_ok=("sources", "xsources"),       # a difference with nothing above the cut
         reads=reads, catalog=catalog, association=association,
         difference={
             "pid": inputs.pid, "rid": inputs.rid, "rfid": inputs.rfid,
@@ -925,6 +943,7 @@ def run(job: JobContext) -> None:
                                    "photutils": sfft_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
             "rb": sfft_catalogs.rb,
+            "xsources": xsources_record,
             "infobits_science_l2": inputs.infobits_science,
             "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
         metrics=metrics)
@@ -1202,7 +1221,7 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               filename_bkg_subbed_science_image, gainmatched_reference, resampled_cov_map,
               nan_indices, scigainmatch_catalog, refgainmatch_catalog, science_psf,
               reference_psf, reformatted_science_image, gain_times_exptime,
-              thresh, rb=None) -> tuple[dict[str, str], _Catalogs]:
+              thresh, rb=None, with_xsources=False) -> tuple[dict[str, str], _Catalogs]:
     """SFFT's command, then its masking, uncertainty and catalogs; ``(file names, catalogs)``.
 
     A nonzero exit raises :class:`~rapidpipe.science.difference.tools.ToolFailed`
@@ -1218,6 +1237,10 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
     background-subtracted science image, the resampled gain-matched
     reference and the image the catalog was fitted on. The negative
     catalog, a diagnostic no stage reads, is not scored.
+
+    ``with_xsources`` (the published differencer is SFFT) adds `dev`'s
+    extra columns to both SExtractor catalogs, scored as `dev` scores them,
+    the negative too (:func:`_xsources_columns`).
     """
     s = settings["sfft"]
     crossconv_flag = bool(s["crossconv_flag"])
@@ -1295,7 +1318,110 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
                                 w(catalogs.parquet["positive"]),
                                 w(filename_bkg_subbed_science_image), w(gainmatched_reference),
                                 w(diffimage))
+    if with_xsources:
+        catalogs.xsources = _xsources_columns(
+            kit, work_dir, settings, rb,
+            {"positive": (detection.replace(".fits", ".txt"), diffimage),
+             "negative": (detection_negative.replace(".fits", ".txt"), diffimage_negative)},
+            uncertainty_image=diffimage_unc, psf_image=names["diffpsf"],
+            science=filename_bkg_subbed_science_image, reference=gainmatched_reference)
     return names, catalogs
+
+
+def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: dict[str, tuple[str, str]],
+                      *, uncertainty_image: str, psf_image: str, science: str,
+                      reference: str) -> dict[str, Any]:
+    """`dev`'s ``compute_extra_cols_sxtractor`` on both SFFT SExtractor catalogs, and their scores.
+
+    Parameters
+    ----------
+    kit : Toolkit
+        The stage's tools; ``kit.runner`` runs the RuBR-AT sidecar.
+    work_dir : pathlib.Path
+        The job's working directory.
+    settings : dict
+        The ``[difference]`` table.
+    rb : tuple or None
+        ``(model, filter)``, or None to score nothing.
+    signs : dict
+        ``positive`` and ``negative``, each the catalog's file and the image
+        its sources are positive in (the negated difference for the negative).
+    uncertainty_image, psf_image, science, reference : str
+        The difference image's uncertainty and PSF, the background-subtracted
+        science image and the resampled gain-matched reference.
+
+    Returns
+    -------
+    dict
+        ``catalogs`` and ``extra`` by sign (:func:`xsources.extra_columns`,
+        ``rb_score`` and ``rb_label`` added when scored), ``fitted`` and
+        ``scored`` counts by sign, the image's ``naxis`` and the ``seconds``.
+    """
+    start = time.perf_counter()
+    error = fits.getdata(work_dir / uncertainty_image, 0)
+    psf_data = fits.getdata(work_dir / psf_image, 0)
+    out: dict[str, Any] = {"catalogs": {}, "extra": {}, "fitted": {}, "scored": {}}
+    for sign, (catalog_name, image) in signs.items():
+        catalog = xsources.read_catalog(work_dir / catalog_name)
+        data = fits.getdata(work_dir / image, 0)
+        extra, fitted = xsources.extra_columns(catalog, data, error, psf_data, settings)
+        out["fitted"][sign] = fitted
+        if rb is not None and len(catalog):
+            model, filter_name = rb
+            path = work_dir / f"xsources_{sign}_rb.parquet"
+            pq.write_table(xsources.rb_input(extra), path)
+            summary = _score_rb(kit, work_dir, settings["rubrat"], model, filter_name, path,
+                                work_dir / science, work_dir / reference, work_dir / image)
+            scored = pq.read_table(path, columns=["rb_score", "rb_label"])
+            extra["rb_score"] = scored.column("rb_score").to_numpy(zero_copy_only=False).astype(float)
+            extra["rb_label"] = scored.column("rb_label").to_numpy(zero_copy_only=False).astype(float)
+            out["scored"][sign] = summary["scored"]
+            path.unlink()
+        out["catalogs"][sign] = catalog
+        out["extra"][sign] = extra
+        out["naxis"] = (data.shape[1], data.shape[0])
+    out["seconds"] = round(time.perf_counter() - start, 3)
+    return out
+
+
+def xsources_set(found: dict[str, Any], settings: dict[str, Any], key: dict, pid: int,
+                 mjdobs: float) -> tuple[pa.Table, dict[str, Any]]:
+    """`dev`'s XSources loader on the job's two catalogs: the set's ``xsources`` rows and counts.
+
+    Parameters
+    ----------
+    found : dict
+        :func:`_xsources_columns`' result.
+    settings : dict
+        The ``[difference]`` table, whose ``database_prefilter`` holds the cuts.
+    key : dict
+        The set's ``dataset``, ``expid``, ``sca`` and ``fid``.
+    pid : int
+        The difference-image row.
+    mjdobs : float
+        The exposure's MJD-OBS.
+
+    Returns
+    -------
+    tuple
+        The rows, positive first, as the parquet table the publisher loads;
+        and what the manifest records: rows read and kept, fitted and scored,
+        by sign, and the seconds.
+    """
+    f = settings["database_prefilter"]
+    thresholds = {"sumrat": xsources.threshold(f, "sumrat_prefilter_threshold"),
+                  "rb": xsources.threshold(f, "rb_prefilter_threshold"),
+                  "snr": xsources.threshold(f, "snr_prefilter_threshold")}
+    naxis1, naxis2 = found["naxis"]
+    parts, record = [], {"read": {}, "kept": {}, "fitted": found["fitted"],
+                         "scored": found["scored"], "seconds": found["seconds"]}
+    for sign in ("positive", "negative"):
+        rows, read = xsources.xsource_rows(
+            found["catalogs"][sign], found["extra"][sign], isdiffpos=sign == "positive", key=key,
+            pid=pid, mjdobs=mjdobs, naxis1=naxis1, naxis2=naxis2, thresholds=thresholds)
+        parts.append(rows)
+        record["read"][sign], record["kept"][sign] = read, len(rows["num"])
+    return xsources.xsources_table(parts), record
 
 
 def _score_rb(kit, work_dir: Path, rubrat: dict[str, Any], model, filter_name: str,

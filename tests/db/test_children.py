@@ -178,3 +178,36 @@ def test_two_callers_making_one_child_both_get_it(connect):
         first.commit()
         assert waiting.result(timeout=10) == made == "sources_20261104_12"
     assert _children(observer) == ["sources_20261104_12"]
+
+
+def xsource_rows(mjdobs: float, sca: int, n: int = 2) -> list[dict]:
+    """``n`` xsources of one set, every column of ``xsources`` but ``job``."""
+    floats = ("ra", "dec", "x", "y", "fluxap", "fluxap1", "fluxap2", "fluxap3", "fluxap4", "fluxap5",
+              "fluxerrap", "fluxerrap1", "fluxerrap2", "fluxerrap3", "fluxerrap4", "fluxerrap5",
+              "awinworld", "bwinworld", "awinimage", "bwinimage", "fwhmimage", "classstar")
+    return [{"xsid": i, "dataset": DATASET, "expid": 1, "sca": sca, "fid": 1, "pid": 1, "num": i,
+             "isdiffpos": i == 1, **{name: 1.5 for name in floats}, "flags": 0, "field": 1,
+             "hp6": 1, "hp9": 1, "mjdobs": mjdobs, "rb": None, "nneg": 0, "nbad": 0,
+             "sumrat": 0.8, "sharpness": 0.5, "roundness1": 0.0, "roundness2": 0.0,
+             "fluxfit": 10.0, "snrfit": 9.0, "redchi": 1.0, "npixfit": 25, "flagsfit": 0,
+             "cfit": 0.0, "rblabel": -1} for i in range(1, n + 1)]
+
+
+def test_a_sets_xsources_load_into_their_own_child_and_are_official_with_its_sources(connect, tmp_path):
+    conn = connect()
+    run = new_run(conn, live=True)
+    key = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 1}
+    job = new_job(conn, run, expects=[{"product": "sources", "key": key, "binding": None}])
+    publish(conn, job, 1, write_attempt(tmp_path / "attempt", {
+        "sources": source_rows(NOV4 + 0.7, 8), "xsources": xsource_rows(NOV4 + 0.7, 8)}))
+
+    assert _one(conn, "SELECT tableoid::regclass::text, count(*) FROM xsources GROUP BY 1") == [
+        ("xsources_20261104_8", 2)]
+    assert _one(conn, "SELECT count(*) FROM ONLY xsources") == [(0,)]
+    assert _one(conn, "SELECT xsid, isdiffpos, rb, rblabel FROM xsources_official"
+                      " WHERE job = %s ORDER BY xsid", (job,)) == [(1, True, None, -1), (2, False, None, -1)]
+    with conn.cursor() as cur:
+        cur.execute("UPDATE official SET closed_group = 9, closed_by = 't', closed_at = now(),"
+                    " closed_why = 't' WHERE product = 'sources' AND job = %s", (job,))
+    conn.commit()
+    assert _one(conn, "SELECT count(*) FROM xsources_official WHERE job = %s", (job,)) == [(0,)]
