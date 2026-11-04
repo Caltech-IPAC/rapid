@@ -20,6 +20,21 @@ DROP VIEW sources_official;
 
 ALTER TABLE sources RENAME TO sources_unsplit;
 ALTER INDEX IF EXISTS sources_job_sid_key RENAME TO sources_unsplit_job_sid_key;
+-- The old table's other constraints (its foreign key and PostgreSQL 18's
+-- named not-null constraints), renamed out of the way of the names the new
+-- parent takes, so they are named as on a fresh database.
+DO $$
+DECLARE
+    con text;
+BEGIN
+    FOR con IN SELECT k.conname FROM pg_constraint k
+               WHERE k.conrelid = 'sources_unsplit'::regclass
+                 AND k.conname NOT LIKE 'sources\_unsplit\_%' LOOP
+        EXECUTE format('ALTER TABLE sources_unsplit RENAME CONSTRAINT %I TO %I', con,
+                       'unsplit_' || con);
+    END LOOP;
+END
+$$;
 -- Each child reads its rows through this, not by a scan of the whole table.
 CREATE INDEX sources_unsplit_child_idx ON sources_unsplit ((floor(mjdobs)), sca);
 
