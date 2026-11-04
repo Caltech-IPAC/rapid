@@ -354,6 +354,11 @@ CREATE INDEX psfs_job_idx ON psfs (job);
 
 -- One source set per (dataset, expid, sca, fid) and job; a source is
 -- (source set job, sid). The columns the alert provider's Source reads.
+-- Split as dev's sources are, by observation date and SCA: the rows live in
+-- child tables that inherit this one, one per UT day of mjdobs and SCA,
+-- sources_<yyyymmdd>_<sca>, made by create_catalog_child (below) when a set
+-- first needs it and loaded by COPY (rapidpipe.foundation.publish). The parent
+-- holds no rows: sources_holds_no_rows, which its children do not inherit.
 CREATE TABLE sources (
     job bigint NOT NULL REFERENCES jobs (id),        -- the source set's job
     sid bigint NOT NULL,                             -- the source's id within its set
@@ -393,6 +398,8 @@ CREATE TABLE sources (
     rblabel smallint,                                -- only; label 1 real, 0 bogus, -1 not scored; null: not computed
     UNIQUE (job, sid)
 );
+
+ALTER TABLE sources ADD CONSTRAINT sources_holds_no_rows CHECK (false) NO INHERIT;
 
 -- The object catalog, per run and field, append-only (plan amendment
 -- 2026-10-24): an object is founded by the difference job whose unmatched
@@ -507,6 +514,51 @@ CREATE TABLE external (
     pa double precision NOT NULL,
     UNIQUE (job, source_job, sid, catalog_job, catid)
 );
+
+--------------------------------------------------------------------------------
+-- Child tables of the catalog tables: one per UT observation date and SCA
+--------------------------------------------------------------------------------
+
+-- The child of `parent` that holds rows at `mjdobs` on `sca`, made if it does
+-- not exist, as dev's loaders make theirs: a table LIKE the parent with its
+-- defaults and its (job, sid) unique index, then INHERIT, which locks the
+-- parent SHARE UPDATE EXCLUSIVE (loads and reads go on). Its CHECK holds it
+-- to [floor(mjdobs), floor(mjdobs) + 1) and the SCA, so a query on a date or
+-- an SCA skips the other children. MJD days begin at 0h UT, so the name's date
+-- is the UT observation date. No foreign key to jobs, as dev's children have
+-- none: adding one would lock jobs against every publish in flight; the
+-- publisher sets job from the job row it holds. An advisory lock per child
+-- makes two callers agree. SECURITY DEFINER: the pipeline's role holds table
+-- grants only, so the schema's owner makes the tables, and EXECUTE is granted
+-- to that role alone (docs/foundation-smdc-step.md).
+CREATE FUNCTION create_catalog_child(parent text, mjdobs double precision, sca integer)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+    day double precision := floor(mjdobs);
+    child text := parent || '_' || to_char(date '1858-11-17' + day::integer, 'YYYYMMDD') || '_' || sca;
+BEGIN
+    IF parent <> ALL (ARRAY['sources']) THEN
+        RAISE EXCEPTION 'create_catalog_child: % is not a catalog table with children', parent;
+    END IF;
+    IF to_regclass('public.' || quote_ident(child)) IS NOT NULL THEN
+        RETURN child;
+    END IF;
+    PERFORM pg_advisory_xact_lock(hashtext('create_catalog_child'), hashtext(child));
+    -- After the wait, a query of pg_class: its snapshot sees a child another
+    -- caller committed meanwhile, where to_regclass's cached lookup may not.
+    IF NOT EXISTS (SELECT FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'public' AND c.relname = child) THEN
+        EXECUTE format('CREATE TABLE public.%I (LIKE public.%I INCLUDING DEFAULTS INCLUDING INDEXES,'
+                       ' CONSTRAINT %I CHECK (mjdobs >= %s AND mjdobs < %s AND sca = %s))',
+                       child, parent, child || '_date_sca', day, day + 1, sca);
+        EXECUTE format('ALTER TABLE public.%I INHERIT public.%I', child, parent);
+    END IF;
+    RETURN child;
+END
+$$;
+
+REVOKE EXECUTE ON FUNCTION create_catalog_child(text, double precision, integer) FROM PUBLIC;
 
 --------------------------------------------------------------------------------
 -- Official views: plain joins of rows to open bindings, every column plus

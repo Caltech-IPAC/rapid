@@ -101,7 +101,11 @@ is a design question for `foundation.md`, not a test to relax.
 `database/schema.sql` is the whole schema, applied to an empty
 PostgreSQL 18 database with `psql -v ON_ERROR_STOP=1 -f
 database/schema.sql`; it creates the Q3C extension and its indexes when
-Q3C is installed and says so in a NOTICE when it is not. The dated files
+Q3C is installed and says so in a NOTICE when it is not. `sources` keeps
+its rows in child tables that inherit it, one per UT observation date and
+SCA (`sources_<yyyymmdd>_<sca>`), as `dev`'s does; the publisher makes each
+child through `create_catalog_child` and loads it by `COPY`, and the parent
+holds no rows. The dated files
 beside it each brought SMDC's existing database to `schema.sql` once and
 are never applied after a fresh one (the rule: `database/README.md`).
 

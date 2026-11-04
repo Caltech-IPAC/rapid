@@ -15,6 +15,17 @@ the pipeline imports.
 
   It creates the Q3C extension and its indexes when Q3C is installed and
   says so in a NOTICE when it is not, as on a developer's container.
+
+  `sources` is split by UT observation date and SCA, as `dev`'s is: its
+  rows live in child tables that inherit it, one per UT day of `mjdobs`
+  and SCA, `sources_<yyyymmdd>_<sca>` (for example `sources_20261104_8`),
+  and the parent holds none (`sources_holds_no_rows`, a `CHECK (false)`
+  its children do not inherit). Each child's `CHECK` holds it to its date
+  and SCA. The publisher makes a child when a set first needs it, through
+  `create_catalog_child(parent, mjdobs, sca)`, a `SECURITY DEFINER`
+  function owned by the schema's owner, since the pipeline's role holds
+  table grants only, and loads it by bulk `COPY`; its `EXECUTE` is
+  granted to that role alone (`docs/foundation-smdc-step.md`).
 - [`schema.svg`](schema.svg): the schema's entity diagram, every table and
   column with its declared foreign keys (solid) and the references the code
   follows by convention (dashed). `scripts/schema_diagram.py` draws it from
