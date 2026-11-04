@@ -412,6 +412,34 @@ def test_a_nonzero_sfft_exit_fails_the_job_without_falling_back_to_zogy(tmp_path
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
+def test_skip_loading_sources_records_declares_an_empty_set_and_still_loads_xsources(
+        tmp_path, files, fakes):
+    (tmp_path / "loaded").mkdir()
+    (tmp_path / "skipped").mkdir()
+    loaded = manifest(run_difference(tmp_path / "loaded", files))
+    prefix = run_difference(tmp_path / "skipped", files,
+                            body=settings(skip_loading_sources_records=True))
+    recorded = manifest(prefix)
+    assert [o["table"] for o in recorded["outputs"]] == [
+        "diffimages", "sources", "xsources", "objects", "memberships"]
+    assert "sources" in recorded["empty_ok"]
+    assert read(prefix, "sources") == [] and read(prefix, "xsources")
+    assert set(pq.read_schema(prefix / "sources.parquet").names) == schema_columns("sources")
+    assert read(prefix, "objects") == [] and read(prefix, "memberships") == []
+    assert recorded["difference"]["sources_loaded"] is False
+    assert loaded["difference"]["sources_loaded"] is True
+    # The quality metrics are the computed set's either way.
+    for name in ("n_sources", "n_candidates", "core_fraction"):
+        assert recorded["metrics"].get(name) == loaded["metrics"].get(name)
+
+
+@pytest.mark.parametrize("value", ["yes", 1, None])
+def test_skip_loading_sources_records_must_be_a_boolean(value):
+    body = settings(skip_loading_sources_records=value)["difference"]
+    with pytest.raises(ValueError, match="skip_loading_sources_records"):
+        difference.check_settings(body)
+
+
 def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_path, files, fakes):
     runner, _ = fakes
     run_difference(tmp_path, files)

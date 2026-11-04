@@ -211,3 +211,19 @@ def test_a_sets_xsources_load_into_their_own_child_and_are_official_with_its_sou
                     " closed_why = 't' WHERE product = 'sources' AND job = %s", (job,))
     conn.commit()
     assert _one(conn, "SELECT count(*) FROM xsources_official WHERE job = %s", (job,)) == [(0,)]
+
+
+def test_a_set_with_its_sources_skipped_still_binds_and_its_xsources_are_official(connect, tmp_path):
+    """[difference] skip_loading_sources_records: the set declares sources with no rows (empty_ok)."""
+    conn = connect()
+    run = new_run(conn, live=True)
+    key = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 1}
+    job = new_job(conn, run, expects=[{"product": "sources", "key": key, "binding": None}])
+    prefix = write_attempt(tmp_path / "attempt", {"sources": [], "xsources": xsource_rows(NOV4 + 0.7, 8)})
+    manifest = tmp_path / "attempt" / "manifest.json"
+    manifest.write_text(manifest.read_text()[:-1] + ', "empty_ok": ["sources", "xsources"]}')
+    result = publish(conn, job, 1, prefix)
+
+    assert result["refusal"] is None and result["group"] is not None
+    assert _one(conn, "SELECT count(*) FROM sources WHERE job = %s", (job,)) == [(0,)]
+    assert _one(conn, "SELECT count(*) FROM xsources_official WHERE job = %s", (job,)) == [(2,)]

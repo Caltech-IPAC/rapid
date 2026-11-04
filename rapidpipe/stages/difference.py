@@ -90,6 +90,9 @@ and ``sources`` (the published differencer's positive PSF-fit catalog through
 as the import caps it; a source in a bright reference source's footprint
 carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
 in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`),
+``[difference] skip_loading_sources_records = true`` declares the set with no
+rows (its binding still opens; nothing is associated, and the quality metrics
+are still the computed set's), as `dev` can skip its sources loader;
 under ``diff_flavor = "sfft"`` ``xsources`` (`dev`'s, d2657f7d: every source
 of SFFT's positive and negative SExtractor catalogs that its XSources loader
 keeps, uncapped, with the extra columns `dev`'s science pipeline adds to
@@ -306,6 +309,9 @@ def check_settings(settings: dict[str, Any]) -> None:
             "job would publish nothing; there is no fallback to ZOGY")
     _zero_point_override(settings)
     _prefilter_threshold(settings)
+    skip = settings.get("skip_loading_sources_records", False)
+    if not isinstance(skip, bool):
+        raise ValueError(f"[difference] skip_loading_sources_records must be true or false, got {skip!r}")
     cap = settings.get("max_sources", 0)
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
         raise ValueError(f"[difference] max_sources must be a non-negative integer, got {cap!r}")
@@ -896,7 +902,12 @@ def run(job: JobContext) -> None:
                                                   zero_point)
     pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
                    job.path / "diffimages.parquet")
-    pq.write_table(sources, job.path / "sources.parquet")
+    # [difference] skip_loading_sources_records: the set is declared with no rows, so its
+    # binding still opens (xsources are official through it) and nothing is associated; the
+    # quality metrics below are still the computed set's.
+    skip_sources = bool(settings.get("skip_loading_sources_records", False))
+    loaded_sources = sources.slice(0, 0) if skip_sources else sources
+    pq.write_table(loaded_sources, job.path / "sources.parquet")
     outputs = [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet")]
     xsources_record = None
     if sfft_catalogs.xsources is not None:
@@ -916,7 +927,7 @@ def run(job: JobContext) -> None:
         coverage=w(output_resampled_reference_cov_map + ".gz"), reference_xy=reference_xy)
     logger.info("difference: expid %s -> pid %s, %d of %d sources kept", key["expid"],
                 inputs.pid, sources.num_rows, candidates)
-    reads, catalog, association = associate(job, sources, diffimage["field"])
+    reads, catalog, association = associate(job, loaded_sources, diffimage["field"])
     metrics.update(n_objects_read=association["objects_read"],
                    n_objects_founded=association["founded"],
                    n_memberships=association["memberships"],
@@ -942,6 +953,7 @@ def run(job: JobContext) -> None:
             "sfft_source_counts": {"sextractor": sfft_catalogs.sextractor,
                                    "photutils": sfft_catalogs.photutils},
             "sources_before_cap": candidates, "sources_kept": sources.num_rows,
+            "sources_loaded": not skip_sources,
             "rb": sfft_catalogs.rb,
             "xsources": xsources_record,
             "infobits_science_l2": inputs.infobits_science,
