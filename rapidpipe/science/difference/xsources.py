@@ -35,7 +35,11 @@ Three things differ from `dev`:
   (:mod:`.realbogus`).
 - A failure fails the job, where `dev` prints a warning and loads the
   catalog without its extra columns and so without the sumrat cut
-  (rapid_docs ``decisions.md``, xsources).
+  (rapid_docs ``decisions.md``, xsources). A value that cannot be computed
+  is not a failure: it is null, as `dev` loads its ``-999``.
+- The PSF fit masks an uncertainty pixel of 0 or less as it masks a
+  non-finite one, where photutils raises on it for the whole catalog in
+  `dev` (which then loads none of the extra columns).
 """
 
 from __future__ import annotations
@@ -401,7 +405,12 @@ def photutils_columns(data: np.ndarray, error: np.ndarray, psf: np.ndarray, x0, 
     out["x_dao_peak"][index] = xsnap
     out["y_dao_peak"][index] = ysnap
 
-    mask = ~np.isfinite(data) | ~np.isfinite(error)
+    # An uncertainty of 0 or less cannot weight a pixel, and photutils raises for the whole
+    # call on one inside any fit box, where dev's caller then loses every column of the
+    # catalog; masked like a non-finite pixel, it costs only the sources it touches, whose
+    # values are NaN, null in xsources, when nothing is left to fit.
+    with np.errstate(invalid="ignore"):
+        mask = ~np.isfinite(data) | ~(error > 0)
     _FIT_INPUTS = {"data": np.where(mask, 0.0, data), "mask": mask,
                    "error": np.where(mask, 1.0, error), "psf": np.asarray(psf, dtype=np.float64),
                    "fit_shape": tuple(int(s) for s in fit_shape),
