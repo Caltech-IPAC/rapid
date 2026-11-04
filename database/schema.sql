@@ -401,6 +401,70 @@ CREATE TABLE sources (
 
 ALTER TABLE sources ADD CONSTRAINT sources_holds_no_rows CHECK (false) NO INHERIT;
 
+-- A source set's SExtractor sources: dev's xsources, every source of the SFFT
+-- difference image's positive and negative SExtractor catalogs that passes
+-- dev's loader cuts, with the extra columns dev computes on them (rapidpipe.
+-- science.difference.xsources). Written by the difference job beside its
+-- sources, a child of its source set: an xsource is (source set job, xsid), and
+-- it is official when its set is (xsources_official). Split as sources is, into
+-- child tables that inherit this one, xsources_<yyyymmdd>_<sca>, loaded by COPY;
+-- the parent holds no rows.
+CREATE TABLE xsources (
+    job bigint NOT NULL REFERENCES jobs (id),        -- the source set's job
+    xsid bigint NOT NULL,                            -- the xsource's id within its set
+    dataset text NOT NULL,
+    expid integer NOT NULL,
+    sca smallint NOT NULL,
+    fid smallint NOT NULL,
+    pid integer NOT NULL,                            -- the difference-image row it was found on
+    num integer NOT NULL,                            -- NUMBER in its SExtractor catalog (one per sign)
+    isdiffpos boolean DEFAULT true NOT NULL,         -- t: the positive catalog, f: the negative
+    ra double precision NOT NULL,                    -- ALPHAWIN_J2000
+    dec double precision NOT NULL,                   -- DELTAWIN_J2000
+    x real NOT NULL,                                 -- XWIN_IMAGE (one-based)
+    y real NOT NULL,                                 -- YWIN_IMAGE (one-based)
+    fluxap real NOT NULL,                            -- FLUX_APER, FLUX_APER_1 ... FLUX_APER_5
+    fluxap1 real NOT NULL,
+    fluxap2 real NOT NULL,
+    fluxap3 real NOT NULL,
+    fluxap4 real NOT NULL,
+    fluxap5 real NOT NULL,
+    fluxerrap real NOT NULL,                         -- FLUXERR_APER, FLUXERR_APER_1 ... FLUXERR_APER_5
+    fluxerrap1 real NOT NULL,
+    fluxerrap2 real NOT NULL,
+    fluxerrap3 real NOT NULL,
+    fluxerrap4 real NOT NULL,
+    fluxerrap5 real NOT NULL,
+    awinworld real NOT NULL,                         -- AWIN_WORLD
+    bwinworld real NOT NULL,                         -- BWIN_WORLD
+    awinimage real NOT NULL,                         -- AWIN_IMAGE
+    bwinimage real NOT NULL,                         -- BWIN_IMAGE
+    fwhmimage real NOT NULL,                         -- FWHM_IMAGE
+    classstar real NOT NULL,                         -- CLASS_STAR
+    flags smallint NOT NULL,                         -- SExtractor's FLAGS
+    field integer NOT NULL,
+    hp6 integer NOT NULL,
+    hp9 integer NOT NULL,
+    mjdobs double precision NOT NULL,
+    rb real,                                         -- dev's extra columns; null: not computed
+    nneg smallint,
+    nbad smallint,
+    sumrat real,
+    sharpness real,
+    roundness1 real,
+    roundness2 real,
+    fluxfit real,
+    snrfit real,
+    redchi real,
+    npixfit smallint,
+    flagsfit smallint,
+    cfit real,
+    rblabel smallint,
+    UNIQUE (job, xsid)
+);
+
+ALTER TABLE xsources ADD CONSTRAINT xsources_holds_no_rows CHECK (false) NO INHERIT;
+
 -- The object catalog, per run and field, append-only (plan amendment
 -- 2026-10-24): an object is founded by the difference job whose unmatched
 -- source it was; its id is the position hash of that source. The publisher
@@ -521,7 +585,7 @@ CREATE TABLE external (
 
 -- The child of `parent` that holds rows at `mjdobs` on `sca`, made if it does
 -- not exist, as dev's loaders make theirs: a table LIKE the parent with its
--- defaults and its (job, sid) unique index, then INHERIT, which locks the
+-- defaults and its unique index, then INHERIT, which locks the
 -- parent SHARE UPDATE EXCLUSIVE (loads and reads go on). Its CHECK holds it
 -- to [floor(mjdobs), floor(mjdobs) + 1) and the SCA, so a query on a date or
 -- an SCA skips the other children. MJD days begin at 0h UT, so the name's date
@@ -538,7 +602,7 @@ DECLARE
     day double precision := floor(mjdobs);
     child text := parent || '_' || to_char(date '1858-11-17' + day::integer, 'YYYYMMDD') || '_' || sca;
 BEGIN
-    IF parent <> ALL (ARRAY['sources']) THEN
+    IF parent <> ALL (ARRAY['sources', 'xsources']) THEN
         RAISE EXCEPTION 'create_catalog_child: % is not a catalog table with children', parent;
     END IF;
     IF to_regclass('public.' || quote_ident(child)) IS NOT NULL THEN
@@ -615,6 +679,13 @@ JOIN jobs j ON j.id = t.job;
 CREATE VIEW sources_official AS
 SELECT t.*, o.id AS binding, j.run
 FROM sources t
+JOIN official o ON o.closed_at IS NULL AND o.product = 'sources' AND o.job = t.job
+JOIN jobs j ON j.id = t.job;
+
+-- An official xsource: its source set is official.
+CREATE VIEW xsources_official AS
+SELECT t.*, o.id AS binding, j.run
+FROM xsources t
 JOIN official o ON o.closed_at IS NULL AND o.product = 'sources' AND o.job = t.job
 JOIN jobs j ON j.id = t.job;
 

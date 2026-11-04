@@ -224,8 +224,8 @@ def _catalog_row(param: str, x: int, y: int, flux: float) -> str:
     values = {
         "XWIN_IMAGE": x + 1.0, "YWIN_IMAGE": y + 1.0, "X_IMAGE": x + 1.0, "Y_IMAGE": y + 1.0,
         "FLUX_APER": flux, "MAG_APER": -2.5 * np.log10(abs(flux)) if flux else 99.0,
-        "CLASS_STAR": 0.9, "ISOAREAF_IMAGE": 12.0, "AWIN_WORLD": 1.0e-5, "BWIN_WORLD": 1.0e-5,
-        "FWHM_IMAGE": 2.4,
+        "FLUXERR_APER": 1.0, "CLASS_STAR": 0.9, "ISOAREAF_IMAGE": 12.0, "AWIN_WORLD": 1.0e-5,
+        "BWIN_WORLD": 1.0e-5, "FWHM_IMAGE": 2.4,
     }
     return f"{values.get(base, 0.0):.6f}"
 
@@ -314,7 +314,10 @@ class FakeToolRunner:
         detection = images[0]
         data, _ = _read(cwd / detection)
         params = _params(_option(args, "-PARAMETERS_NAME"))
-        lines = [f"#{i + 1:4d} {p}\n" for i, p in enumerate(params)]
+        # SExtractor's ASCII_HEAD: a vector (FLUX_APER(1) ... FLUX_APER(6)) has one header
+        # line, at its first element, under its bare name.
+        lines = [f"#{i + 1:4d} {p.split('(')[0]}\n" for i, p in enumerate(params)
+                 if "(" not in p or p.endswith("(1)")]
         for x, y, flux in _peaks(data):
             lines.append(" ".join(_catalog_row(p, x, y, flux) for p in params) + "\n")
         (cwd / _option(args, "-CATALOG_NAME")).write_text("".join(lines))

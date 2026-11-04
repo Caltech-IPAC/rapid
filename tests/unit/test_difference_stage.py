@@ -199,8 +199,8 @@ def manifest(prefix: Path) -> dict:
 def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, fakes):
     prefix = run_difference(tmp_path, files)
     assert [o["table"] for o in manifest(prefix)["outputs"]] == [
-        "diffimages", "sources", "objects", "memberships"]
-    for table in ("diffimages", "sources", "objects", "memberships"):
+        "diffimages", "sources", "xsources", "objects", "memberships"]
+    for table in ("diffimages", "sources", "xsources", "objects", "memberships"):
         assert set(pq.read_schema(prefix / f"{table}.parquet").names) == schema_columns(table)
     (row,) = read(prefix, "diffimages")
     assert {k: row[k] for k in ("pid", "dataset", "expid", "sca", "fid", "rid", "rfid")} == {
@@ -424,6 +424,8 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
         "sextractor", "sextractor",     # ZOGY positive, negative
         "sextractor", "sextractor",     # SFFT positive, negative
         "rubrat",                       # the real/bogus sidecar on SFFT's positive PSF-fit catalog
+        "rubrat",                       # and on its positive SExtractor sources (xsources); the
+                                        # fake negative SExtractor catalog is empty, so not scored
         "sextractor", "sextractor",     # naive positive, negative
         "sfft",
     ]

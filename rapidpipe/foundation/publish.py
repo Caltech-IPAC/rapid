@@ -31,7 +31,7 @@ the job, as for any refused binding.
 
 The tables of :data:`CHILDREN` keep their rows in child tables that
 inherit them, one per UT observation date and SCA (``schema.sql``), as
-`dev`'s sources do. Before the transaction that loads a set, the publisher
+`dev`'s sources and xsources do. Before the transaction that loads a set, the publisher
 makes each child its rows fall in, by ``create_catalog_child``, in a short
 transaction of its own, so the lock inheriting takes on the parent is never
 held while a set loads; then it loads each child by bulk ``COPY``, as
@@ -63,12 +63,13 @@ from rapidpipe.foundation.prefix import get
 #: The tables a manifest may declare outputs for.
 PRODUCT_TABLES = frozenset({
     "exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "diffimages",
-    "psfs", "sources", "objects", "memberships", "packets", "forced", "external", "catalogs",
+    "psfs", "sources", "xsources", "objects", "memberships", "packets", "forced", "external",
+    "catalogs",
 })
 
 #: The product tables whose rows live in child tables, one per UT observation date
 #: (``mjdobs``) and SCA, loaded by ``COPY``.
-CHILDREN = frozenset({"sources"})
+CHILDREN = frozenset({"sources", "xsources"})
 
 
 class PublishError(Exception):

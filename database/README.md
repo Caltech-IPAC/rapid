@@ -26,6 +26,12 @@ the pipeline imports.
   function owned by the schema's owner, since the pipeline's role holds
   table grants only, and loads it by bulk `COPY`; its `EXECUTE` is
   granted to that role alone (`docs/foundation-smdc-step.md`).
+
+  `xsources`, `dev`'s table of the SFFT difference image's SExtractor
+  sources (positive and negative, with `dev`'s extra columns), is split
+  and loaded the same way, `xsources_<yyyymmdd>_<sca>`. Its rows belong to
+  the difference job's source set and are official when the set is
+  (`xsources_official` joins the set's `sources` binding).
 - [`schema.svg`](schema.svg): the schema's entity diagram, every table and
   column with its declared foreign keys (solid) and the references the code
   follows by convention (dashed). `scripts/schema_diagram.py` draws it from
