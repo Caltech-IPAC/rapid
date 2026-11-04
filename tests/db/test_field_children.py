@@ -15,7 +15,8 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from psycopg2 import errors
+import psycopg2.extensions
+from psycopg2 import errors, sql
 
 from rapidpipe.foundation import publish
 from rapidpipe.foundation.children import FIELD_PARENTS, field_child_name
@@ -271,3 +272,66 @@ def test_the_readers_scan_no_parent(connect, tmp_path):
         cur.execute("SELECT 1")
     conn.commit()
     assert scans()["objects"] > before["objects"]
+
+
+class _Recording(psycopg2.extensions.cursor):
+    """A cursor that records every statement it executes and every COPY it sends, as text."""
+
+    log: list[tuple[str, str]] = []
+
+    def execute(self, query, vars=None):
+        text = query.as_string(self) if isinstance(query, sql.Composable) else query
+        type(self).log.append(("execute", text.decode() if isinstance(text, bytes) else text))
+        return super().execute(query, vars)
+
+    def copy_expert(self, statement, file, size=8192):
+        text = statement.as_string(self) if isinstance(statement, sql.Composable) else statement
+        type(self).log.append(("copy", text))
+        return super().copy_expert(statement, file, size)
+
+
+def test_the_publisher_loads_the_field_children_by_copy_never_insert(connect, tmp_path):
+    """Each of the four tables reaches its children by one COPY per child, named; no INSERT of a
+    row of them is sent, to a child or a parent (dev's loaders COPY, pipeline/loadSECatIntoDB*)."""
+    conn = connect()
+    conn.cursor_factory = _Recording
+    _Recording.log = []
+    _publish_two_fields(conn, tmp_path)
+    copies = sorted(text.split()[1].strip('"') for kind, text in _Recording.log if kind == "copy")
+    assert copies == sorted(f"{p}_{f}" for p in FIELD_PARENTS for f in (7, 9))
+    inserts = [text for kind, text in _Recording.log if kind == "execute"
+               and any(f"INSERT INTO {p}" in text.replace('"', "") for p in FIELD_PARENTS)]
+    assert inserts == []
+
+
+def test_the_readers_need_no_inheritance(connect, tmp_path):
+    """With every field child detached from its parent (ALTER TABLE ... NO INHERIT), the readers
+    return the rows they returned before: they query the fields' children by name, not the parent."""
+    conn = connect()
+    _, diff, pkt = _publish_two_fields(conn, tmp_path)
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO official (product, key, job, opened_group, opened_by, opened_why)"
+                    " VALUES ('sources', '{\"expid\": 1}', %s, 1, 't', 'test')", (diff,))
+    conn.commit()
+    readers = [*(f"SELECT t::text FROM {p}_in(ARRAY[7, 9]) t ORDER BY 1" for p in FIELD_PARENTS),
+               *(f"SELECT t::text FROM {p}_of(ARRAY[{diff}, {pkt}]::bigint[]) t ORDER BY 1"
+                 for p in FIELD_PARENTS),
+               "SELECT t::text FROM objects_official_in(ARRAY[7, 9]) t ORDER BY 1"]
+    before = [_rows(conn, q) for q in readers]
+    assert all(before)
+    children = [(p, f"{p}_{f}") for p in FIELD_PARENTS for f in (7, 9)]
+    try:
+        with conn.cursor() as cur:
+            for parent, child in children:
+                cur.execute(f"ALTER TABLE {child} NO INHERIT {parent}")
+        conn.commit()
+        for parent in FIELD_PARENTS:                          # inheritance is gone: the parents are empty
+            assert _rows(conn, f"SELECT count(*) FROM {parent}") == [(0,)]
+        assert [_rows(conn, q) for q in readers] == before
+    finally:                                                  # inherited again, so the fixture drops them
+        with conn.cursor() as cur:
+            for parent, child in children:
+                cur.execute("SELECT 1 FROM pg_inherits WHERE inhrelid = %s::regclass", (child,))
+                if cur.fetchone() is None:
+                    cur.execute(f"ALTER TABLE {child} INHERIT {parent}")
+        conn.commit()
