@@ -227,3 +227,14 @@ def test_a_set_with_its_sources_skipped_still_binds_and_its_xsources_are_officia
     assert result["refusal"] is None and result["group"] is not None
     assert _one(conn, "SELECT count(*) FROM sources WHERE job = %s", (job,)) == [(0,)]
     assert _one(conn, "SELECT count(*) FROM xsources_official WHERE job = %s", (job,)) == [(2,)]
+
+
+@pytest.mark.parametrize("parent", ["sources", "xsources"])
+@pytest.mark.parametrize("mjdobs", [NOV4, NOV4 + 0.99999, NOV4 + 1.0, 60676.5, 51544.0])
+def test_the_python_child_name_is_the_functions(conn, parent, mjdobs):
+    """rapidpipe.foundation.children.child_name names the child create_catalog_child makes."""
+    from rapidpipe.foundation.children import child_name
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT create_catalog_child(%s, %s, 18)", (parent, mjdobs))
+        assert cur.fetchone()[0] == child_name(parent, mjdobs, 18)

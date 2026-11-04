@@ -32,6 +32,14 @@ the pipeline imports.
   and loaded the same way, `xsources_<yyyymmdd>_<sca>`. Its rows belong to
   the difference job's source set and are official when the set is
   (`xsources_official` joins the set's `sources` binding).
+
+  The pipeline reads the children its task needs, by name, and never the
+  parents: a query on a parent (or its `_official` view) visits every
+  child. A source set's child is named by its difference image's L2
+  `mjdobs` and SCA (`rapidpipe.foundation.children`); the publisher
+  analyses the children it loaded, not the parents. A query by hand on a
+  parent is still correct, and its children's `CHECK` constraints let a
+  filter on `mjdobs` or `sca` skip the others.
 - [`schema.svg`](schema.svg): the schema's entity diagram, every table and
   column with its declared foreign keys (solid) and the references the code
   follows by convention (dashed). `scripts/schema_diagram.py` draws it from

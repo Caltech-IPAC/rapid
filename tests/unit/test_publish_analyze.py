@@ -1,8 +1,8 @@
 """The publisher analyses every table it wrote to, ``official`` included (PR 277's finding).
 
 A parent of child tables (``sources``) is loaded by ``COPY`` into the child
-of its rows' date and SCA, and analysed with the children it loaded, since
-a parent's ``ANALYZE`` leaves each child's own statistics as they were.
+of its rows' date and SCA, and only the children it loaded are analysed:
+a parent's ``ANALYZE`` samples every child.
 
 A fake connection answers the publisher's statements; the loader is
 replaced so no table is needed. The database behaviour itself is
@@ -98,7 +98,7 @@ def test_the_publisher_analyses_every_table_it_wrote_to(tmp_path, monkeypatch, l
 
     result = publisher.publish(_connection(live, analysed, copied), 1, 1, tmp_path.as_uri() + "/")
 
-    written = {"diffimages", "sources", "sources_20261104_8"} | (
+    written = {"diffimages", "sources_20261104_8"} | (
         {"official"} if result["group"] is not None else set())
     assert loaded == ["diffimages"] and copied == ["sources_20261104_8"]
     assert result["published"] and (result["group"] is not None) == live
