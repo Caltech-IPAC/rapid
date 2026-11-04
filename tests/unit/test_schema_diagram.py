@@ -15,6 +15,7 @@ _SPEC.loader.exec_module(schema_diagram)
 
 SCHEMA = (ROOT / "database" / "schema.sql").read_text()
 TABLES = schema_diagram.parse(SCHEMA)
+PARENTS = schema_diagram.child_parents(SCHEMA)
 
 
 def test_every_table_is_read_with_its_columns():
@@ -45,7 +46,7 @@ def test_a_convention_column_the_schema_lacks_is_refused():
 
 def test_the_committed_dot_matches_schema_sql():
     committed = (ROOT / "database" / "schema.dot").read_text()
-    assert committed == schema_diagram.to_dot(TABLES), (
+    assert committed == schema_diagram.to_dot(TABLES, PARENTS), (
         "database/schema.dot is stale: run python scripts/schema_diagram.py and commit "
         "database/schema.dot and database/schema.svg")
 
@@ -53,5 +54,13 @@ def test_the_committed_dot_matches_schema_sql():
 def test_dot_only_writes_the_dot_beside_out(tmp_path):
     out = tmp_path / "schema.svg"
     assert schema_diagram.main(["--out", str(out), "--dot-only"]) == 0
-    assert (tmp_path / "schema.dot").read_text() == schema_diagram.to_dot(TABLES)
+    assert (tmp_path / "schema.dot").read_text() == schema_diagram.to_dot(TABLES, PARENTS)
     assert not out.exists()
+
+
+def test_the_parents_of_child_tables_are_marked_with_their_childrens_names():
+    assert PARENTS == {"sources", "xsources"}
+    dot = schema_diagram.to_dot(TABLES, PARENTS)
+    for parent in PARENTS:
+        assert f"rows in children {parent}_&lt;yyyymmdd&gt;_&lt;sca&gt;" in dot
+    assert dot.count("rows in children") == 2

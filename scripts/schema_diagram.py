@@ -7,7 +7,9 @@ code follows that the schema does not declare (a child row's ``(job, rfid)``,
 a membership's ``(object_job, aid)``); they are listed here by hand, in
 ``CONVENTION``, and the script refuses a listed column the schema lacks. The
 three sets whose child rows ride on one binding are drawn as frames
-(``GROUPS``, from the ``<table>_official`` views). Every product table's
+(``GROUPS``, from the ``<table>_official`` views). A parent of child
+tables (its ``CHECK (false) NO INHERIT``: the parent holds no rows) is
+marked with its children's names. Every product table's
 ``job -> jobs.id`` is declared but not drawn.
 
 Usage::
@@ -103,6 +105,22 @@ def parse(text: str) -> dict[str, list[tuple[str, str, bool, tuple[str, str] | N
     return tables
 
 
+def child_parents(text: str) -> set[str]:
+    """The tables whose rows live in child tables: each with a ``CHECK (false) NO INHERIT``.
+
+    Parameters
+    ----------
+    text : str
+        The schema file's text.
+
+    Returns
+    -------
+    set of str
+        The parents, whose children are ``<parent>_<yyyymmdd>_<sca>`` (``create_catalog_child``).
+    """
+    return set(re.findall(r"ALTER TABLE (\w+) ADD CONSTRAINT \w+ CHECK \(false\) NO INHERIT;", text))
+
+
 def check(tables: dict) -> None:
     """Refuse a layout or convention reference that names a table or column the schema lacks.
 
@@ -126,7 +144,7 @@ def check(tables: dict) -> None:
                 raise ValueError(f"CONVENTION names {table}.{column}, which schema.sql lacks")
 
 
-def label(name: str, cols: list, fill: str) -> str:
+def label(name: str, cols: list, fill: str, parent: bool = False) -> str:
     """Build a Graphviz HTML-like table label with a west and an east port per column.
 
     Parameters
@@ -137,6 +155,8 @@ def label(name: str, cols: list, fill: str) -> str:
         The table's columns as returned by ``parse``.
     fill : str
         Header fill colour.
+    parent : bool, optional
+        True for a parent of child tables, whose header names its children.
 
     Returns
     -------
@@ -144,6 +164,9 @@ def label(name: str, cols: list, fill: str) -> str:
         The label, wrapped in ``<...>``.
     """
     rows = [f'<TR><TD COLSPAN="2" BGCOLOR="{fill}" ALIGN="LEFT"><B>{name}</B></TD></TR>']
+    if parent:
+        rows.append(f'<TR><TD COLSPAN="2" ALIGN="LEFT"><FONT COLOR="#c2410c">rows in children'
+                    f' {name}_&lt;yyyymmdd&gt;_&lt;sca&gt;</FONT></TD></TR>')
     for col, typ, pk, _ in cols:
         c = f"<B>{html.escape(col)}</B>" if pk else html.escape(col)
         mark = '<FONT COLOR="#c2410c"> PK</FONT>' if pk else ""
@@ -153,13 +176,15 @@ def label(name: str, cols: list, fill: str) -> str:
             + "".join(rows) + "</TABLE>>")
 
 
-def to_dot(tables: dict) -> str:
+def to_dot(tables: dict, parents: set[str] = frozenset()) -> str:
     """Write the schema's entity diagram as DOT text.
 
     Parameters
     ----------
     tables : dict
         The schema as returned by ``parse``.
+    parents : set of str, optional
+        The parents of child tables, as :func:`child_parents` reads them.
 
     Returns
     -------
@@ -180,7 +205,7 @@ def to_dot(tables: dict) -> str:
     ]
 
     def node(t: str, fill: str) -> None:
-        lines.append(f"    {t} [label={label(t, tables[t], fill)}];")
+        lines.append(f"    {t} [label={label(t, tables[t], fill, t in parents)}];")
 
     lines.append('  subgraph cluster_bookkeeping { label="bookkeeping"; style=rounded; color="#9aa8b8";')
     for t in BOOKKEEPING:
@@ -236,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        dot_text = to_dot(parse(args.schema.read_text()))
+        text = args.schema.read_text()
+        dot_text = to_dot(parse(text), child_parents(text))
     except ValueError as exc:
         print(f"schema_diagram: {exc}", file=sys.stderr)
         return ExitCode.INPUT_REJECTED
