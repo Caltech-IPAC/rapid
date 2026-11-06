@@ -45,7 +45,7 @@ file predates them) and no ``program_id``. Its
 L2 row's ``limmag`` is measured with the science PSF (``kind``
 ``science``) of the ``psfs`` set the job names as an input. ``sources`` holds the
 ``max_sources`` brightest rows of the difference job's PSF-fit catalog by
-``flux_fit / flux_err`` (0 keeps every row), inside `dev`'s fit-position
+``flux_fit / flux_err`` (-1 is no cap, keeping every row), inside `dev`'s fit-position
 bounds, mapped as :func:`rapidpipe.science.load.catalogs.source_set` maps
 them, as the difference stage does. ``reference`` writes
 ``refimages`` and ``refimcatalogs`` (the mosaic SExtractor catalog, type

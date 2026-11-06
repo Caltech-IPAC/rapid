@@ -8,8 +8,9 @@
 
 [import]
 # The brightest sources kept per difference image, by fluxfit / fluxerr;
-# 0 keeps every source, as dev, which caps nothing (Russ Laher, 2026-11-06).
-max_sources = 0
+# -1 is no cap, keeping every source, as dev, which caps nothing; 0 keeps
+# none (Russ Laher, 2026-11-06).
+max_sources = -1
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
 xy_fit_max_offset = 0.5
@@ -489,10 +490,11 @@ sextractor_interp_type = "ALL"
 # kept as the strings its configuration holds.
 [difference]
 # The brightest sources kept per difference image and sign, by fluxfit /
-# fluxerr; 0 keeps every source, as dev, which caps nothing (Russ Laher,
-# 2026-11-06). Both signs load: the positive and the negative SFFT
-# PSF-fit catalogs, as dev's loadPSFCatIntoDBSourcesTable.py.
-max_sources = 0
+# fluxerr; -1 is no cap, keeping every source, as dev, which caps
+# nothing; 0 keeps none (Russ Laher, 2026-11-06). Both signs load: the
+# positive and the negative SFFT PSF-fit catalogs, as dev's
+# loadPSFCatIntoDBSourcesTable.py.
+max_sources = -1
 # true: the difference job loads no sources records. Its source set is still
 # declared, with no rows, so the set's binding opens and its xsources, which
 # are always loaded, are official through it; with no sources nothing is
