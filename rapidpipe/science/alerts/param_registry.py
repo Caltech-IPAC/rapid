@@ -578,7 +578,7 @@ _REF_SRC = ("computed at assembly from the reference-image mosaic SExtractor "
 
 REF_MATCH_PARAMS = (
     Param("sourceId",      "string",           "SExtractor NUMBER of the reference source, unique within "
-                                               "this field's mosaic catalog",
+                                               "this field's mosaic catalog", #TODO: change to refCatID
                         IMPLEMENTED, _REF_SRC, attr="source_id"),
     Param("ra",            "double",           "Right ascension of the reference source; ICRS [deg]",
                         IMPLEMENTED, _REF_SRC),

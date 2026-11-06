@@ -1,5 +1,12 @@
-# ported-from: alerts/forced_phot.py @ 54fd7ea8
+# ported-from: alerts/forced_phot.py @ 01f89299
 """Forced PSF photometry at fixed sky positions, ported from `dev`'s ``alerts/forced_phot.py``.
+
+`dev` 01f89299 (the science PSF from the psfs table per window image, a
+``_normalized`` copy in the job directory, the science product skipped
+on an image with no row) is carried by the packet stage, not here: each
+window image's PSF is the row its difference job named
+(``rapidpipe.stages.packet.science_psfs``), :func:`load_psf` normalizes
+in memory, and ``measure_forced`` skips the science product.
 
 `origin/dev`'s ``alerts/forced_phot.py`` (Emily Everetts, 09/2026), the
 sections the packet stage needs, copied unchanged: the records

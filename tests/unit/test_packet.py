@@ -40,8 +40,8 @@ from rapidpipe.foundation import prefix
 from rapidpipe.science.catalogs.readers import catalog_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
-    CatalogInput, Read, WindowImage, _plain, _separation, covering, neighbour, reliability,
-    window_reach, write_set)
+    CatalogInput, Read, WindowImage, _plain, _separation, covering, measure_forced, neighbour,
+    reliability, window_reach, write_set)
 from tests.support.catalogs import ra_offset, write_gaia_store, write_hp6_store, write_lvs_store
 
 N = 100                       # image side, pixels
@@ -273,6 +273,23 @@ def test_forced_rows_a_predecessor_holds_are_reused_not_measured(tmp_path):
     carried = {f["midpointMjd"]: f["psfFlux"] for f in records[1]["prvDiaForcedSources"]}
     # the record's psfFlux is an Avro float
     assert carried == {MJD[1]: 12345.0, MJD[2]: pytest.approx(forced[(7, 202)]["psf_flux"], rel=1e-6)}
+
+
+def test_an_image_without_a_science_psf_is_measured_on_its_difference_only(tmp_path):
+    """dev 01f89299: no psfs row for the image's filter and SCA skips the science product; the
+    difference is still measured and the row is kept, its science fluxes null."""
+    write_epoch(tmp_path / "e1", [(50, 50, 400.0)])
+    ra, dec = (float(v[0]) for v in wcs().all_pix2world([50.0], [50.0], 1))
+    image = WindowImage(pid=101, rid=201, expid=1, sca=8, fid=8, band="W146", mjdobs=MJD[1],
+                        corners=corners(), diff=tmp_path / "e1" / "zogy_diffimage_masked.fits",
+                        diff_psf=tmp_path / "e1" / "diffpsf.fits",
+                        diff_uncert=tmp_path / "e1" / "zogy_diffimage_uncert_masked.fits",
+                        sci=tmp_path / "e1" / "bkg_subbed_science_image.fits", sci_psf=None)
+    rows, measured = measure_forced([image], [fp.Position(7, ra, dec)], {}, 61000.0)
+    (row,) = rows
+    assert measured == 1 and row["rid"] == 201 and abs(row["psf_flux"] - 400.0) < 50.0
+    assert row["science_flux"] is None and row["science_fluxerr"] is None
+    assert row["x"] == pytest.approx(50.0, abs=1e-6) and row["flags"] == 0   # dev's one-based x
 
 
 def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):

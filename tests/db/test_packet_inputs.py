@@ -251,3 +251,60 @@ def test_a_packet_job_reads_its_sources_from_child_tables_never_the_parent(conne
     assert [s for s in statements if PARENT_READ.search(s)] == []
     children = [s for s in statements if re.search(r'FROM "sources_\d{8}_8" s', s)]
     assert len(children) == 2                                     # the set's own, its members'
+
+
+def earlier_epoch(conn, live, tmp_path, route: str) -> tuple[int, int | None]:
+    """An official difference image of SCA 9 on the trigger's footprint a day before it, its
+    science PSF reached by ``route``: ``"input"`` (its job named a psf job's row), ``"official"``
+    (its job published and bound the row itself; it named none) or ``"none"`` (no row anywhere).
+    Returns the image's job and the psf job."""
+    write_epoch(tmp_path / "e2", [(50, 50, 300.0)])
+    rows = image_rows(tmp_path / "e2")
+    psf_key = {"dataset": DATASET, "fid": 8, "sca": 9, "kind": "science"}
+    psf_row = {"psfid": 702, **psf_key, "checksum": "0" * 32,
+               "filename": (tmp_path / "e2" / "diffpsf.fits").as_uri()}
+    psf_job = None
+    inputs, expects, tables = [], [], {}
+    if route == "input":
+        psf_job = create_job(conn, live, "psf", {}, expects=[{"product": "psfs", "key": psf_key,
+                                                             "binding": None}])
+        publish(conn, psf_job, 1, write_attempt(tmp_path / "psf9", {"psfs": [psf_row]}))
+        inputs = [{"product": "psfs", "key": psf_key, "source_job": psf_job}]
+    elif route == "official":
+        expects = [{"product": "psfs", "key": psf_key, "binding": None}]
+        tables["psfs"] = [psf_row]
+    image_key = {"dataset": DATASET, "expid": 2, "sca": 9, "fid": 8}
+    expects += [{"product": p, "key": image_key, "binding": None} for p in ("l2files", "diffimages")]
+    tables["l2files"] = [{**rows["l2files"][0], "expid": 2, "sca": 9, "rid": 502, "mjdobs": MJD[1] - 1.0}]
+    tables["diffimages"] = [{**rows["diffimages"][0], "expid": 2, "sca": 9, "pid": 602, "rid": 502}]
+    image_job = create_job(conn, live, "import", {}, inputs=inputs, expects=expects)
+    publish(conn, image_job, 1, write_attempt(tmp_path / "import2", tables))
+    return image_job, psf_job
+
+
+@pytest.mark.parametrize("route", ["input", "official", "none"])
+def test_each_window_image_is_measured_with_its_own_science_psf(connect, tmp_path, route):
+    """dev 01f89299, by the rebuild's record: a window image of another SCA takes the psfs row its
+    own job named, else the official one of its key, each read recorded; with no row its science
+    fluxes are null and the set still publishes."""
+    conn = connect()
+    job, founder, _, _, _, _ = packet_job(conn, tmp_path)
+    live = query(conn, "SELECT run FROM jobs WHERE id = %s", (job,))[0][0]
+    image_job, psf_job = earlier_epoch(conn, live, tmp_path, route)
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+
+    forced = {pid: (sci, diff) for pid, sci, diff in query(
+        conn, "SELECT pid, science_flux, psf_flux FROM forced WHERE job = %s", (job,))}
+    assert set(forced) == {601, 602}                        # the trigger's image and the earlier one
+    assert forced[601][0] is not None and forced[601][1] is not None
+    assert forced[602][1] is not None
+    assert (forced[602][0] is not None) == (route != "none")
+    recorded = query(conn, "SELECT product, key, source_job FROM job_inputs WHERE job = %s"
+                           " AND kind = 'input' AND product = 'psfs'", (job,))
+    psf_reads = {(k["sca"], j) for _, k, j in recorded}
+    expected_read = {"input": {(9, psf_job)}, "official": {(9, image_job)}, "none": set()}[route]
+    assert psf_reads == {(8, founder)} | expected_read         # the named input, and the one read
+    ((without,),) = query(conn, "SELECT (manifest -> 'packet' ->> 'window_without_science_psf')::int"
+                                " FROM jobs WHERE id = %s", (job,))
+    assert without == (1 if route == "none" else 0)
