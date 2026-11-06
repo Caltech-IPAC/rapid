@@ -299,14 +299,14 @@ if __name__ == "__main__":
 
     #Example recommended usage:
     #    For rimtimsim: no background masking, mask saturated stars based on SExtractor catalogs, no psf cross-convolution \n
-    #    >>> python sfft_rapid_rimtimsim.py bkg_subbed_science_image.fits awaicgen_output_mosaic_image_resampled_gainmatched.fits  --scicat bkg_subbed_science_image_scigainmatchsexcat.txt --refcat awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt --satvalue 1750. --satmaskradius 30,45 --npixseg2 4000.
+    #    >>> python sfft_rapid_crowded.py bkg_subbed_science_image.fits awaicgen_output_mosaic_image_resampled_gainmatched.fits  --scicat bkg_subbed_science_image_scigainmatchsexcat.txt --refcat awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt --satvalue 1750. --satmaskradius 30,45 --npixseg2 4000.
     #
     #    For OpenUniverse: background masking with segmentation images, psf cross-convolution, mask bright stars based on SExtractor catalogs
-    #    >>> python sfft_rapid_rimtimsim.py bkg_subbed_science_image.fits awaicgen_output_mosaic_image_resampled_gainmatched.fits --scisegm sfftscisegm.fits --refsegm sfftrefsegm.fits --scicat bkg_subbed_science_image_scigainmatchsexcat.txt --refcat awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt --crossconv --scipsf WFI_SCA08_F158_PSF_DET_DIST_normalized.fits --refpsf refimage_psf_fid2.fits --bsmaskvalue 50. --bsmaskradius 100.
+    #    >>> python sfft_rapid_crowded.py bkg_subbed_science_image.fits awaicgen_output_mosaic_image_resampled_gainmatched.fits --scisegm sfftscisegm.fits --refsegm sfftrefsegm.fits --scicat bkg_subbed_science_image_scigainmatchsexcat.txt --refcat awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt --crossconv --scipsf WFI_SCA08_F158_PSF_DET_DIST_normalized.fits --refpsf refimage_psf_fid2.fits --bsmaskvalue 50. --bsmaskradius 100.
     #
     #Example usage for OpenUniverse to match 20250927 run:
     #    Background masking with segmentation images, psf cross-convolution, mask bright stars based on image pixel values
-    #    >>> python sfft_rapid_rimtimsim.py bkg_subbed_science_image.fits awaicgen_output_mosaic_image_resampled_gainmatched.fits --scisegm sfftscisegm.fits --refsegm sfftrefsegm.fits --crossconv --scipsf WFI_SCA08_F158_PSF_DET_DIST_normalized.fits --refpsf refimage_psf_fid2.fits --bsmaskvalue 50. --bsmaskradius 100.
+    #    >>> python sfft_rapid_crowded.py bkg_subbed_science_image.fits awaicgen_output_mosaic_image_resampled_gainmatched.fits --scisegm sfftscisegm.fits --refsegm sfftrefsegm.fits --crossconv --scipsf WFI_SCA08_F158_PSF_DET_DIST_normalized.fits --refpsf refimage_psf_fid2.fits --bsmaskvalue 50. --bsmaskradius 100.
     #
 
     parser.add_argument('scifile', help='path to input science image file. Input to SFFT.')
