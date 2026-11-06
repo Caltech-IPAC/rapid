@@ -621,7 +621,7 @@ sfft_bsmask_value = "50.0"
 sfft_bsmask_radius = "100.0"
 sfft_use_gainmatch_catalogs = true
 sfft_use_segmentation = true
-sfft_code = "/code/modules/sfft/sfft_rapid_rimtimsim.py"
+sfft_code = "/code/modules/sfft/sfft_rapid_crowded.py"
 # The interpreter that runs sfft_code; empty means the interpreter
 # running this stage (the pipeline image's main conda environment, where
 # sfft is installed), as [paths] python means for ZOGY. `dev` hard-codes

@@ -3,7 +3,8 @@
 
 `dev`: ``build_sfft_command_args`` (``pipeline/sfftCommandSubs.py``) and
 the SFFT block inline in ``awsBatchSubmitJobs_runSingleSciencePipeline.py``.
-SFFT's science (``modules/sfft/sfft_rapid_rimtimsim.py``) is not ported:
+SFFT's science (``modules/sfft/sfft_rapid_crowded.py``, `dev`'s
+``sfft_rapid_rimtimsim.py`` renamed) is not ported:
 the stage builds `dev`'s command and handles its output files as `dev`
 does. A non-zero exit is SFFT failing, which is not fatal (`dev` exits 4,
 which Batch counts as success; the rebuild notes it in the execution
