@@ -92,7 +92,7 @@ and ``sources`` (SFFT's positive and negative PSF-fit catalogs, as
 ``isdiffpos``, the negatives' ``sid`` numbered after the positive
 catalog's ids, through `dev`'s database prefilter first
 (``[difference.database_prefilter]``), then, per sign, capped at
-``max_sources``, shipped 0, no cap, as `dev`; the quality metrics are the
+``max_sources``, shipped -1, no cap, as `dev`; the quality metrics are the
 positive sources', with ``n_sources_negative`` and
 ``n_candidates_negative`` beside them; a source in a bright reference source's footprint
 carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
@@ -343,9 +343,10 @@ def check_settings(settings: dict[str, Any]) -> None:
     skip = settings.get("skip_loading_sources_records", False)
     if not isinstance(skip, bool):
         raise ValueError(f"[difference] skip_loading_sources_records must be true or false, got {skip!r}")
-    cap = settings.get("max_sources", 0)
-    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
-        raise ValueError(f"[difference] max_sources must be a non-negative integer, got {cap!r}")
+    cap = settings.get("max_sources", -1)
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < -1:
+        raise ValueError(f"[difference] max_sources must be -1 (no cap) or a non-negative integer, "
+                         f"got {cap!r}")
 
 
 def _prefilter_threshold(settings: dict[str, Any]) -> float | None:

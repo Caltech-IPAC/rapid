@@ -8,6 +8,7 @@ import math
 
 import healpy as hp
 import numpy as np
+import pytest
 
 from database.modules.utils.roman_tessellation_db import RomanTessellationClosedForm
 from astropy.io import ascii
@@ -160,8 +161,13 @@ def test_source_set_keeps_the_brightest_inside_the_bounds_and_zero_keeps_all():
     assert candidates == 3
     assert table.column("sid").to_pylist() == [2, 3]
     assert set(table.column("pid").to_pylist()) == {7}
-    everything, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
-    assert sorted(everything.column("sid").to_pylist()) == [1, 2, 3]
+    everything, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=-1)
+    assert sorted(everything.column("sid").to_pylist()) == [1, 2, 3]   # -1: no cap
+    none, kept = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
+    assert none.num_rows == 0 and kept == 3                            # 0 keeps none
+    for bad in (-2, 1.5, True):
+        with pytest.raises(ValueError, match="max_sources"):
+            source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=bad)
 
 
 def test_source_set_carries_the_pixel_columns_null_where_the_catalog_has_none():
@@ -175,10 +181,10 @@ def test_source_set_carries_the_pixel_columns_null_where_the_catalog_has_none():
                 flux_fit=[50.0, 10.0], flux_err=[1.0, 1.0])
     key = {"dataset": "D", "expid": 1, "sca": 2, "fid": 3}
     measured = pa.table({**rows, "sumrat": [0.8, np.nan], "nneg": [3.0, np.nan], "nbad": [0.0, np.nan]})
-    table, _ = source_set(measured, key, 7, 60000.0, 10, 10, max_sources=0)
+    table, _ = source_set(measured, key, 7, 60000.0, 10, 10, max_sources=-1)
     assert [table.column(c).to_pylist() for c in ("sid", "sumrat", "nneg", "nbad")] == [
         [1, 2], [0.8, None], [3, None], [0, None]]
-    older, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
+    older, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=-1)
     assert [older.column(c).null_count for c in ("sumrat", "nneg", "nbad")] == [2, 2, 2]
 
 
@@ -193,10 +199,10 @@ def test_source_set_loads_the_score_as_rb_and_the_label_as_rblabel_null_where_un
     key = {"dataset": "D", "expid": 1, "sca": 2, "fid": 3}
     scored = pa.table({**rows, "rb_score": [0.75, np.nan],
                        "rb_label": pa.array([1, -1], pa.int16())})
-    table, _ = source_set(scored, key, 7, 60000.0, 10, 10, max_sources=0)
+    table, _ = source_set(scored, key, 7, 60000.0, 10, 10, max_sources=-1)
     assert [table.column(c).to_pylist() for c in ("sid", "rb", "rblabel")] == [
         [1, 2], [0.75, None], [1, -1]]
-    zogy, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
+    zogy, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=-1)
     assert [zogy.column(c).null_count for c in ("rb", "rblabel")] == [2, 2]
 
 
@@ -215,7 +221,7 @@ KEY = {"dataset": "D", "expid": 1, "sca": 2, "fid": 3}
 
 def test_the_prefilter_keeps_sumrat_above_the_threshold_and_drops_at_or_below_or_null():
     rows = _prefilter_rows([5.0] * 4, [0.41, 0.4, None, 0.1], [40.0, 30.0, 20.0, 10.0])
-    table, candidates = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=0,
+    table, candidates = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=-1,
                                             sumrat_prefilter_threshold=0.4)
     assert table.column("sid").to_pylist() == [1] and candidates == 1
 
@@ -223,7 +229,7 @@ def test_the_prefilter_keeps_sumrat_above_the_threshold_and_drops_at_or_below_or
 def test_the_prefilter_drops_a_source_within_2_px_of_the_edge():
     # zero-based, 10 pixels: nearest pixels 1, 2, 7 and 8; 2 and 7 are the last kept
     rows = _prefilter_rows([1.4, 1.6, 7.4, 7.6], [0.9] * 4, [40.0, 30.0, 20.0, 10.0])
-    table, _ = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=0,
+    table, _ = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=-1,
                                    sumrat_prefilter_threshold=0.4)
     assert table.column("sid").to_pylist() == [2, 3]
 

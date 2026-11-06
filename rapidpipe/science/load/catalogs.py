@@ -238,8 +238,8 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     naxis1, naxis2 : int
         The difference image's size, pixels.
     max_sources : int or None
-        Keep the brightest this many by ``flux_fit / flux_err``; 0 or
-        ``None`` keeps every source.
+        Keep the brightest this many by ``flux_fit / flux_err``; -1 (or
+        ``None``) is no cap, keeping every source, and 0 keeps none.
     xy_fit_min, xy_fit_max_offset : float
         `dev`'s fit-position bounds: a row is kept when its fit position is
         within ``[xy_fit_min, naxis - xy_fit_max_offset]``.
@@ -263,6 +263,11 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     candidates : int
         The sources inside the bounds with a finite S/N that pass the
         prefilter, before the cap.
+
+    Raises
+    ------
+    ValueError
+        ``max_sources`` is neither -1, ``None`` nor a non-negative integer.
     """
     import pyarrow as pa
 
@@ -276,8 +281,14 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
             & (y <= naxis2 - xy_fit_max_offset) & np.isfinite(snr))
     if sumrat_prefilter_threshold is not None:
         keep &= prefilter(catalog, naxis1, naxis2, sumrat_prefilter_threshold)
+    if max_sources is None or max_sources == -1:
+        limit = None                    # no cap
+    elif isinstance(max_sources, int) and not isinstance(max_sources, bool) and max_sources >= 0:
+        limit = max_sources
+    else:
+        raise ValueError(f"max_sources must be -1 (no cap) or a non-negative integer, got {max_sources!r}")
     candidates = np.flatnonzero(keep)
-    chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:max_sources or None]
+    chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:limit]
 
     columns = {db: column(name)[chosen] for name, db in CATALOG_COLUMNS if db != "npix"}
     ra, dec = columns["ra"].astype(float), columns["dec"].astype(float)
