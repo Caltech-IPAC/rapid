@@ -1,7 +1,8 @@
 """Unit tests for rapidpipe.db.connection: psycopg2 mocked, no network, no database.
 
 Covers the explicit endpoint/credentials interface, environment fallback,
-the Secrets Manager resolver, bounded retry with backoff, and that
+the Secrets Manager resolver, retry with backoff inside a time budget, the
+maintenance lock named once on a refused connect, and that
 application_name/connect_timeout/keepalive parameters reach the driver.
 """
 
@@ -164,95 +165,113 @@ def test_credentials_repr_never_prints_the_password():
 
 
 # ======================================================================
-# retry on OperationalError, bounded, backoff sequence
+# retry on OperationalError, bounded by a time budget, backoff sequence
 # ======================================================================
 
-def test_retry_happens_on_operational_error_and_succeeds_within_the_limit(monkeypatch):
-    _clear_pg_env(monkeypatch)
-    calls = []
-    sleeps = []
-    connect_fn = _recording_connect_fn(calls, fail_times=2)
+class _Clock:
+    """A monotonic clock that only moves when the retry loop sleeps."""
 
-    with conn_mod.connect(
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class _FakeSsm:
+    def __init__(self, value=None, error_code=None):
+        self.value, self.error_code, self.names = value, error_code, []
+
+    def get_parameter(self, Name):
+        self.names.append(Name)
+        if self.error_code:
+            exc = RuntimeError(self.error_code)
+            exc.response = {"Error": {"Code": self.error_code}}
+            raise exc
+        return {"Parameter": {"Value": self.value}}
+
+
+def _connect_with(connect_fn, clock, **kwargs):
+    kwargs.setdefault("ssm_client", _FakeSsm(error_code="ParameterNotFound"))
+    return conn_mod.connect(
         endpoint=conn_mod.Endpoint("h", "5432", "d"),
         credentials=conn_mod.Credentials("u", "p"),
-        tries=5,
-        backoff_initial=1.0,
-        backoff_multiplier=2.0,
-        backoff_cap=100.0,
-        connect_fn=connect_fn,
-        sleep=sleeps.append,
-    ):
+        connect_fn=connect_fn, sleep=clock.sleep, clock=clock, **kwargs)
+
+
+def test_retry_happens_on_operational_error_and_succeeds_within_the_budget(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    calls, clock = [], _Clock()
+
+    with _connect_with(_recording_connect_fn(calls, fail_times=2), clock,
+                       backoff_initial=1.0, backoff_multiplier=2.0, backoff_cap=100.0):
         pass
 
     assert len(calls) == 3  # two failures, then success
-    assert sleeps == [1.0, 2.0]
+    assert clock.sleeps == [1.0, 2.0]
 
 
-def test_retry_stops_at_the_limit_and_raises_the_last_error(monkeypatch):
+def test_retry_stops_at_the_budget_and_raises_the_last_error(monkeypatch):
     _clear_pg_env(monkeypatch)
-    calls = []
-    connect_fn = _recording_connect_fn(calls, fail_times=10)  # always fails
+    calls, clock = [], _Clock()
 
     with pytest.raises(conn_mod.ConnectionUnavailable) as excinfo:
-        with conn_mod.connect(
-            endpoint=conn_mod.Endpoint("h", "5432", "d"),
-            credentials=conn_mod.Credentials("u", "p"),
-            tries=3,
-            backoff_initial=0.1,
-            backoff_cap=1.0,
-            connect_fn=connect_fn,
-            sleep=lambda _s: None,
-        ):
+        with _connect_with(_recording_connect_fn(calls, fail_times=1000), clock,
+                           retry_seconds=20.0, backoff_initial=4.0, backoff_cap=4.0):
             pass
 
-    assert len(calls) == 3  # bounded at `tries`, never a fourth try
-    assert "simulated failure 3" in str(excinfo.value)
+    # waits of 4 s while the next keeps the total within 20 s: 5 waits, 6 tries
+    assert clock.sleeps == [4.0] * 5
+    assert len(calls) == 6
+    assert "simulated failure 6" in str(excinfo.value)
     assert excinfo.value.__cause__ is not None
+
+
+def test_the_default_budget_outlasts_the_measured_database_reboot(monkeypatch):
+    # The reboot branch closed the database to logins for at most 178.1 s
+    # (fence marker to reopen, three windows): a connect refused from the
+    # first second keeps retrying past it.
+    _clear_pg_env(monkeypatch)
+    clock = _Clock()
+
+    def _refused_until_reopen(**kwargs):
+        if clock.now < 178.1:
+            raise conn_mod.psycopg2.OperationalError("connection refused")
+        return _FakeConnection(**kwargs)
+
+    with _connect_with(_refused_until_reopen, clock):
+        pass
+
+    assert clock.now >= 178.1
 
 
 def test_backoff_is_bounded_by_the_cap(monkeypatch):
     _clear_pg_env(monkeypatch)
-    calls = []
-    sleeps = []
-    connect_fn = _recording_connect_fn(calls, fail_times=5)
+    calls, clock = [], _Clock()
 
-    with conn_mod.connect(
-        endpoint=conn_mod.Endpoint("h", "5432", "d"),
-        credentials=conn_mod.Credentials("u", "p"),
-        tries=6,
-        backoff_initial=1.0,
-        backoff_multiplier=3.0,
-        backoff_cap=5.0,
-        connect_fn=connect_fn,
-        sleep=sleeps.append,
-    ):
+    with _connect_with(_recording_connect_fn(calls, fail_times=5), clock,
+                       backoff_initial=1.0, backoff_multiplier=3.0, backoff_cap=5.0):
         pass
 
     # 1.0, 3.0, 5.0 (capped from 9.0), 5.0 (capped), 5.0 (capped)
-    assert sleeps == [1.0, 3.0, 5.0, 5.0, 5.0]
-    assert max(sleeps) <= 5.0
+    assert clock.sleeps == [1.0, 3.0, 5.0, 5.0, 5.0]
 
 
 def test_jitter_true_samples_within_zero_and_delay(monkeypatch):
     _clear_pg_env(monkeypatch)
-    calls = []
-    sleeps = []
-    connect_fn = _recording_connect_fn(calls, fail_times=1)
+    clock = _Clock()
 
-    with conn_mod.connect(
-        endpoint=conn_mod.Endpoint("h", "5432", "d"),
-        credentials=conn_mod.Credentials("u", "p"),
-        tries=2,
-        backoff_initial=4.0,
-        jitter=True,
-        connect_fn=connect_fn,
-        sleep=sleeps.append,
-        random_func=lambda lo, hi: lo + hi,  # deterministic stand-in: lo + hi
-    ):
+    with _connect_with(_recording_connect_fn([], fail_times=1), clock,
+                       backoff_initial=4.0, jitter=True,
+                       random_func=lambda lo, hi: lo + hi):  # deterministic stand-in: lo + hi
         pass
 
-    assert sleeps == [0 + 4.0]
+    assert clock.sleeps == [0 + 4.0]
 
 
 def test_non_operational_error_is_not_retried(monkeypatch):
@@ -264,29 +283,53 @@ def test_non_operational_error_is_not_retried(monkeypatch):
         raise conn_mod.psycopg2.ProgrammingError("bad query")
 
     with pytest.raises(conn_mod.psycopg2.ProgrammingError):
-        with conn_mod.connect(
-            endpoint=conn_mod.Endpoint("h", "5432", "d"),
-            credentials=conn_mod.Credentials("u", "p"),
-            tries=5,
-            connect_fn=_connect,
-            sleep=lambda _s: None,
-        ):
+        with _connect_with(_connect, _Clock()):
             pass
 
     assert len(calls) == 1  # never retried
 
 
-def test_tries_less_than_one_is_rejected(monkeypatch):
+def test_a_negative_budget_is_rejected(monkeypatch):
     _clear_pg_env(monkeypatch)
     with pytest.raises(ValueError):
-        with conn_mod.connect(
-            endpoint=conn_mod.Endpoint("h", "5432", "d"),
-            credentials=conn_mod.Credentials("u", "p"),
-            tries=0,
-            connect_fn=_recording_connect_fn([]),
-            sleep=lambda _s: None,
-        ):
+        with _connect_with(_recording_connect_fn([]), _Clock(), retry_seconds=-1):
             pass
+
+
+def test_a_refused_connect_logs_the_maintenance_lock_run_id_once(monkeypatch, caplog):
+    _clear_pg_env(monkeypatch)
+    monkeypatch.delenv("RAPID_MAINTENANCE_SSM_ROOT", raising=False)
+    ssm = _FakeSsm(value="5c03b987-run held 2026-11-05T19:01:38Z db rapid-db")
+
+    with caplog.at_level("WARNING", logger=conn_mod.logger.name):
+        with _connect_with(_recording_connect_fn([], fail_times=4), _Clock(), ssm_client=ssm):
+            pass
+
+    named = [r.getMessage() for r in caplog.records if "maintenance lock" in r.getMessage()]
+    assert len(named) == 1
+    assert "held by run 5c03b987-run" in named[0]
+    assert ssm.names == ["/rapid/maintenance/lock"]
+
+
+def test_an_unreadable_lock_never_stops_the_retry(monkeypatch, caplog):
+    _clear_pg_env(monkeypatch)
+    calls = []
+
+    with caplog.at_level("WARNING", logger=conn_mod.logger.name):
+        with _connect_with(_recording_connect_fn(calls, fail_times=2), _Clock(),
+                           ssm_client=_FakeSsm(error_code="AccessDeniedException")):
+            pass
+
+    assert len(calls) == 3
+    assert any("maintenance lock unreadable (AccessDeniedException)" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_a_free_lock_reads_free_under_its_named_root(monkeypatch):
+    monkeypatch.setenv("RAPID_MAINTENANCE_SSM_ROOT", "/rehearsal/")
+    ssm = _FakeSsm(error_code="ParameterNotFound")
+    assert conn_mod.maintenance_lock_holder(ssm) == "free"
+    assert ssm.names == ["/rehearsal/lock"]
 
 
 # ======================================================================
