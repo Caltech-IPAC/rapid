@@ -88,6 +88,7 @@ EXPTIME = 140.0
 ZPTMAG = 17.0
 STARS = ((20.0, 22.0, 4000.0), (40.0, 18.0, 2500.0), (30.0, 44.0, 6000.0), (50.0, 50.0, 3000.0))
 TRANSIENT = (12.0, 40.0, 3500.0)   # in the science image only
+VANISHED = (46.0, 30.0, 3500.0)    # write_epoch(vanished=True): in the reference only, a negative
 
 
 def _gaussian(n: int, x0: float, y0: float, sigma: float = 1.2) -> np.ndarray:
@@ -135,8 +136,28 @@ EPOCH_FILES = {
 }
 
 
-def write_epoch(directory: Path, *, seed: int = 20260922, magzp: float | None = 17.0) -> dict[str, Path]:
-    """Write one synthetic epoch's input files under ``directory``; return them by role."""
+def write_epoch(directory: Path, *, seed: int = 20260922, magzp: float | None = 17.0,
+                vanished: bool = False) -> dict[str, Path]:
+    """Write one synthetic epoch's input files under ``directory``.
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        Where the files are written, as :data:`EPOCH_FILES` names them.
+    seed : int
+        The noise generator's seed.
+    magzp : float or None
+        The reference's ``MAGZP`` header card; ``None`` writes none.
+    vanished : bool
+        Add :data:`VANISHED` to the reference image only, a source the
+        negative difference image detects.
+
+    Returns
+    -------
+    dict of str to pathlib.Path
+        The files by role: ``science``, ``reference``, ``coverage``,
+        ``uncertainty``, ``catalog`` and ``science_psf``.
+    """
     import gzip
 
     rng = np.random.default_rng(seed)
@@ -160,7 +181,8 @@ def write_epoch(directory: Path, *, seed: int = 20260922, magzp: float | None = 
     # Reference bundle on the 65x65 grid the reformatted science image has,
     # DN/s, the science stars without the transient.
     n = NAXIS + 1
-    ref = _sky(n, tuple((x, y, f / EXPTIME) for x, y, f in STARS), rng, background=0.0, noise=0.02)
+    ref_stars = STARS + ((VANISHED,) if vanished else ())
+    ref = _sky(n, tuple((x, y, f / EXPTIME) for x, y, f in ref_stars), rng, background=0.0, noise=0.02)
     ref_header = wcs_header(n, sip=False)
     if magzp is not None:
         ref_header["MAGZP"] = magzp

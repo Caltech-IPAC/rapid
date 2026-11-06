@@ -71,8 +71,8 @@ packet stage and a person read, and nothing else (:func:`trim`, Ben's
 ruling of 2026-10-22): SFFT's positive difference image,
 its uncertainty, its mask (the resampled reference coverage map it is masked with), the
 positive and negative PSF-fit catalogs of SFFT and of ZOGY
-(``*_psfcat[_negative].parquet``, uncapped; all but SFFT's positive
-one are diagnostics, read by no stage; SFFT's two carry `dev`'s ``sumrat``,
+(``*_psfcat[_negative].parquet``, uncapped; all but SFFT's two are
+diagnostics, read by no stage; SFFT's two carry `dev`'s ``sumrat``,
 ``nneg`` and ``nbad`` on every source, :mod:`rapidpipe.science.difference.columns`,
 each catalog measured on the image its sources are positive in), and the packet
 stage's other reads beside the difference image, SFFT's difference PSF (forced photometry), the background-subtracted science
@@ -86,11 +86,15 @@ rerunning the job. Declared tables: ``diffimages`` (one
 row, SFFT's positive difference image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
 table's identity sequence so the sources can carry it; ``infobitssci`` is
 `dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
-and ``sources`` (SFFT's positive PSF-fit catalog through
-:func:`rapidpipe.science.load.catalogs.source_set`, through `dev`'s
-database prefilter first
-(``[difference.database_prefilter]``), then capped at ``max_sources``
-as the import caps it; a source in a bright reference source's footprint
+and ``sources`` (SFFT's positive and negative PSF-fit catalogs, as
+`dev`'s loader loads them, each through
+:func:`rapidpipe.science.load.catalogs.source_set` with its sign as
+``isdiffpos``, the negatives' ``sid`` numbered after the positive
+catalog's ids, through `dev`'s database prefilter first
+(``[difference.database_prefilter]``), then, per sign, capped at
+``max_sources``, shipped 0, no cap, as `dev`; the quality metrics are the
+positive sources', with ``n_sources_negative`` and
+``n_candidates_negative`` beside them; a source in a bright reference source's footprint
 carries :data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`
 in ``flags``, informational, nothing dropped: :func:`flag_bright_footprint`),
 ``[difference] skip_loading_sources_records = true`` declares the set with no
@@ -553,6 +557,7 @@ class _Catalogs:
     bits: int = 0
     pixel_columns_s: float | None = None
     rb: dict[str, Any] | None = None
+    rb_negative: dict[str, Any] | None = None
     xsources: dict[str, Any] | None = None
 
 
@@ -879,6 +884,10 @@ def run(job: JobContext) -> None:
         sfft_catalogs.rb.update(model=rb_model.prefix, version=rb_model.version)
         metrics["rb_s"] = sfft_catalogs.rb["call_seconds"]
         metrics["n_rb_scored"] = sfft_catalogs.rb["scored"]
+    if sfft_catalogs.rb_negative is not None:
+        sfft_catalogs.rb_negative.update(model=rb_model.prefix, version=rb_model.version)
+        metrics["n_rb_scored_negative"] = sfft_catalogs.rb_negative["scored"]
+        metrics["rb_s"] = metrics.get("rb_s", 0.0) + sfft_catalogs.rb_negative["call_seconds"]
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         _run_naive(**common)
 
@@ -895,6 +904,11 @@ def run(job: JobContext) -> None:
     if parquet is None:
         logger.warning("no SFFT PSF-fit catalog: the source set is empty")
     catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
+    # dev loads the negative difference image's PSF-fit catalog too, isdiffpos false.
+    negative_parquet = published_catalogs.parquet["negative"]
+    if negative_parquet is None:
+        logger.warning("no SFFT negative PSF-fit catalog: the set has no negative sources")
+    negative_catalog = pq.read_table(w(negative_parquet)) if negative_parquet else _EMPTY_CATALOG
 
     diagnostics = [p for c in (sfft_catalogs, zogy_catalogs) for p in c.parquet.values() if p]
     published = trim(work_dir, images=[
@@ -918,21 +932,32 @@ def run(job: JobContext) -> None:
         "filename": job.prefix + w(filename_diffimage_published).relative_to(job.path).as_posix(),
         "checksum": _md5_of_file(w(filename_diffimage_published)), "status": STATUS_GOOD,
     }
+    set_options = dict(max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
+                       xy_fit_max_offset=settings["xy_fit_max_offset"],
+                       sumrat_prefilter_threshold=_prefilter_threshold(settings))
     sources, candidates = source_set(
-        catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
-        max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
-        xy_fit_max_offset=settings["xy_fit_max_offset"],
-        sumrat_prefilter_threshold=_prefilter_threshold(settings))
+        catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"], **set_options)
+    # A negative source's sid follows the positive catalog's ids, so the two number apart.
+    offset = int(max(catalog.column("id").to_pylist(), default=0))
+    negative_sources, negative_candidates = source_set(
+        negative_catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
+        isdiffpos=False, sid_offset=offset, **set_options)
     reference_xy, reference_sky_rows = _reference_on_grid(reference_sky, header)
     sources, in_footprint = flag_bright_footprint(sources, reference_xy, reference_sky_rows,
                                                   zero_point)
+    negative_sources, _ = flag_bright_footprint(negative_sources, reference_xy, reference_sky_rows,
+                                                zero_point)
     pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
                    job.path / "diffimages.parquet")
     # [difference] skip_loading_sources_records: the set is declared with no rows, so its
     # binding still opens (xsources are official through it) and nothing is associated; the
     # quality metrics below are still the computed set's.
     skip_sources = bool(settings.get("skip_loading_sources_records", False))
-    loaded_sources = sources.slice(0, 0) if skip_sources else sources
+    # A sign with no catalog maps from the all-float empty catalog: take the other's types.
+    schema = negative_sources.schema if negative_sources.num_rows and not sources.num_rows \
+        else sources.schema
+    both = pa.concat_tables([sources.cast(schema), negative_sources.cast(schema)])
+    loaded_sources = both.slice(0, 0) if skip_sources else both
     pq.write_table(loaded_sources, job.path / "sources.parquet")
     outputs = [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet")]
     xsources_record = None
@@ -951,8 +976,11 @@ def run(job: JobContext) -> None:
         gainmatched_reference=w(output_resampled_gainmatched_reference_image + ".gz"),
         difference=w(filename_diffimage_published),
         coverage=w(output_resampled_reference_cov_map + ".gz"), reference_xy=reference_xy)
-    logger.info("difference: expid %s -> pid %s, %d of %d sources kept", key["expid"],
-                inputs.pid, sources.num_rows, candidates)
+    metrics.update(n_candidates_negative=int(negative_candidates),
+                   n_sources_negative=negative_sources.num_rows)
+    logger.info("difference: expid %s -> pid %s, %d of %d positive and %d of %d negative sources kept",
+                key["expid"], inputs.pid, sources.num_rows, candidates, negative_sources.num_rows,
+                negative_candidates)
     reads, catalog, association = associate(job, loaded_sources, diffimage["field"])
     metrics.update(n_objects_read=association["objects_read"],
                    n_objects_founded=association["founded"],
@@ -988,9 +1016,10 @@ def run(job: JobContext) -> None:
                                    "photutils": zogy_catalogs.photutils} if run_zogy else None,
             "sfft_source_counts": {"sextractor": sfft_catalogs.sextractor,
                                    "photutils": sfft_catalogs.photutils},
-            "sources_before_cap": candidates, "sources_kept": sources.num_rows,
+            "sources_before_cap": {"positive": candidates, "negative": negative_candidates},
+            "sources_kept": {"positive": sources.num_rows, "negative": negative_sources.num_rows},
             "sources_loaded": not skip_sources,
-            "rb": sfft_catalogs.rb,
+            "rb": sfft_catalogs.rb, "rb_negative": sfft_catalogs.rb_negative,
             "xsources": xsources_record,
             "infobits_science_l2": inputs.infobits_science,
             "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
@@ -1318,25 +1347,60 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               nan_indices, scigainmatch_catalog, refgainmatch_catalog, science_psf,
               reference_psf, reformatted_science_image, gain_times_exptime,
               thresh, rb=None, with_xsources=False) -> tuple[dict[str, str], _Catalogs]:
-    """SFFT's command, then its masking, uncertainty and catalogs; ``(file names, catalogs)``.
+    """Run SFFT as `dev` does, then mask its difference and make both signs' catalogs.
 
     A nonzero exit raises :class:`~rapidpipe.science.difference.tools.ToolFailed`
     (`dev` logs it and goes on with ZOGY; here SFFT is the published differencer).
 
-    Empty ``[sfft] python_cmd`` means the stage's own interpreter, the
-    same convention ``[paths] python`` uses for ZOGY; empty
-    ``activate_cmd`` means no activation (see ``sfft.shell_command``).
+    Parameters
+    ----------
+    kit : Toolkit
+        The tool runner and the stand-ins tests replace.
+    work_dir : pathlib.Path
+        The job's working directory; every file name below is in it.
+    settings : dict
+        The run's ``[difference]`` table. Empty ``[sfft] python_cmd`` means
+        the stage's own interpreter, as ``[paths] python`` does for ZOGY;
+        empty ``activate_cmd`` means no activation (``sfft.shell_command``).
+    seed : int
+        The clipped statistics' seed.
+    science_image_filename : str
+        The L2 science image, whose name selects the RimTimSim exceptions.
+    filename_bkg_subbed_science_image, gainmatched_reference : str
+        SFFT's two inputs: the background-subtracted science image and the
+        resampled, gain-matched reference.
+    resampled_cov_map : str
+        The resampled reference coverage map the difference is masked with.
+    nan_indices : tuple
+        The science and reference NaN positions zeroed before SFFT, restored after.
+    scigainmatch_catalog, refgainmatch_catalog : str
+        The gain-match SExtractor catalogs SFFT may select its stars from.
+    science_psf, reference_psf : str
+        The two images' PSFs.
+    reformatted_science_image : str
+        The image whose WCS gives the catalogs' sky positions.
+    gain_times_exptime : float
+        The SCA gain times the exposure time, for the uncertainty image.
+    thresh : float
+        The coverage threshold below which the difference is masked.
+    rb : tuple or None
+        ``(model, filter)``: `dev`'s real/bogus columns are added to both
+        PSF-fit catalogs (:func:`_score_rb`) from the background-subtracted
+        science image, the gain-matched reference and the image each catalog
+        was fitted on, the negated difference for the negative one, as
+        `dev`'s ``compute_extra_cols_photutils``; an empty catalog is not
+        scored. ``None`` scores nothing.
+    with_xsources : bool
+        Add `dev`'s extra columns to both SExtractor catalogs, scored as `dev`
+        scores them (:func:`_xsources_columns`).
 
-    ``rb``, ``(model, filter)`` or ``None``, adds `dev`'s real/bogus
-    columns to the positive catalog after the pixel columns
-    (:func:`_score_rb`), from the images `dev` scores: the
-    background-subtracted science image, the resampled gain-matched
-    reference and the image the catalog was fitted on. The negative
-    catalog, a diagnostic no stage reads, is not scored.
-
-    ``with_xsources`` (the published differencer is SFFT) adds `dev`'s
-    extra columns to both SExtractor catalogs, scored as `dev` scores them,
-    the negative too (:func:`_xsources_columns`).
+    Returns
+    -------
+    names : dict of str
+        SFFT's file names (``diffimage``, ``diffimage_unc``, ``diffpsf``, ...).
+    catalogs : _Catalogs
+        Both signs' catalog outcomes: counts, parquet files, outcome bits,
+        the real/bogus summaries (``rb``, ``rb_negative``) and the xsources.
     """
     s = settings["sfft"]
     crossconv_flag = bool(s["crossconv_flag"])
@@ -1408,12 +1472,15 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         if catalogs.parquet[sign]:
             columns.add_pixel_columns(w(catalogs.parquet[sign]), w(image), settings)
     catalogs.pixel_columns_s = round(time.perf_counter() - start, 3)
-    if rb is not None and catalogs.parquet["positive"]:
+    if rb is not None:
         model, filter_name = rb
-        catalogs.rb = _score_rb(kit, work_dir, settings["rubrat"], model, filter_name,
-                                w(catalogs.parquet["positive"]),
-                                w(filename_bkg_subbed_science_image), w(gainmatched_reference),
-                                w(diffimage))
+        for sign, image in (("positive", diffimage), ("negative", diffimage_negative)):
+            # An empty catalog is not scored, as the xsources' is not.
+            if catalogs.parquet[sign] and pq.read_metadata(w(catalogs.parquet[sign])).num_rows:
+                summary = _score_rb(kit, work_dir, settings["rubrat"], model, filter_name,
+                                    w(catalogs.parquet[sign]), w(filename_bkg_subbed_science_image),
+                                    w(gainmatched_reference), w(image))
+                setattr(catalogs, "rb" if sign == "positive" else "rb_negative", summary)
     if with_xsources:
         catalogs.xsources = _xsources_columns(
             kit, work_dir, settings, rb,
