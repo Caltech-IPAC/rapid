@@ -221,7 +221,8 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     ``sumrat_prefilter_threshold`` is a number (``sumrat`` above it, finite,
     and the nearest pixel at least :data:`EDGE_MARGIN` from the edge;
     ``None`` applies none of it), then the brightest ``max_sources`` by
-    ``flux_fit / flux_err`` (0 or ``None`` keeps every source), mapped as
+    ``flux_fit / flux_err`` (-1 or ``None`` keeps every source; 0 keeps
+    none), mapped as
     :data:`CATALOG_COLUMNS` maps them. ``key`` is the set's ``{dataset,
     expid, sca, fid}``; every source is positive (``isdiffpos``), as the
     positive catalog is the one read. Returns ``(table, candidates)``, the
@@ -244,7 +245,8 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
     if sumrat_prefilter_threshold is not None:
         keep &= prefilter(catalog, naxis1, naxis2, sumrat_prefilter_threshold)
     candidates = np.flatnonzero(keep)
-    chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:max_sources or None]
+    cap = None if max_sources is None or max_sources < 0 else max_sources
+    chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:cap]
 
     columns = {db: column(name)[chosen] for name, db in CATALOG_COLUMNS if db != "npix"}
     ra, dec = columns["ra"].astype(float), columns["dec"].astype(float)

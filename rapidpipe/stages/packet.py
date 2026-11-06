@@ -340,6 +340,22 @@ class Read:
     catalogs: dict[str, CatalogInput]            # by name, the ones the job names
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
+    capped: int = 0                              # triggers dropped by [packet] max_alerts
+
+
+def cap_triggers(triggers: list[Source], max_alerts: int) -> tuple[list[Source], int]:
+    """`dev`'s ``_cut_to_max_sources``: the ``max_alerts`` triggers of highest |S/N|, in their
+    order, and how many were dropped; -1 keeps every trigger (`dev`'s 0), 0 keeps none.
+
+    `dev` ranks by signed S/N with a missing one last; here the absolute
+    value, so a negative source (``isdiffpos`` false, once the source set
+    carries them) ranks by its strength. A missing S/N still ranks last.
+    """
+    if max_alerts < 0 or len(triggers) <= max_alerts:
+        return triggers, 0
+    ranked = sorted(triggers, key=lambda s: (s.snr is None, -abs(s.snr or 0.0)))
+    kept = {s.sid for s in ranked[:max_alerts]}
+    return [s for s in triggers if s.sid in kept], len(triggers) - max_alerts
 
 
 def _one(inputs: list[dict], product: str, job: int) -> dict:
@@ -417,6 +433,9 @@ def _read(job: JobContext) -> Read:
         raise ValueError(f"job {job.job}: [packet] switches on {switched_on} but the job names {names}")
     ref_in = _one(inputs, "refimages", job.job)
     window_days = float(job.settings["packet"]["forced_window_days"])
+    max_alerts = job.settings["packet"]["max_alerts"]
+    if not isinstance(max_alerts, int) or isinstance(max_alerts, bool) or max_alerts < -1:
+        raise ValueError(f"[packet] max_alerts must be an integer, -1 for no cap, got {max_alerts!r}")
     reads: list[dict] = []
 
     with job.connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -437,6 +456,11 @@ def _read(job: JobContext) -> Read:
                 object_job[r["aid"]] = r["object_job"]
                 field_of[r["aid"]] = r["field"]
         triggers = [s for s in alertable if s.sid in aid_of]
+        triggers, capped = cap_triggers(triggers, max_alerts)
+        if capped:
+            logger.info("job %s: keeping the %d highest-|S/N| of %d triggers; %d dropped"
+                        " ([packet] max_alerts, dev's temporary stand-in for a real/bogus cut)",
+                        job.job, len(triggers), len(triggers) + capped, capped)
         aids = sorted({aid_of[s.sid] for s in triggers})
         fields = sorted({field_of[a] for a in aids})
         cur.execute(ORIGINS_SQL, (fields, [object_job[a] for a in aids], aids))
@@ -548,7 +572,7 @@ def _read(job: JobContext) -> Read:
     if len(trigger_image) != 1:
         raise ValueError(f"job {job.job}: the trigger's difference image is not in its window")
     return Read(key=key, source_job=source_job, object_job=object_job, field_of=field_of,
-                flags_zero=len(alertable), triggers=triggers,
+                flags_zero=len(alertable), triggers=triggers, capped=capped,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
                 catalogs={name: _open_catalog(name, catalog_job, location)
@@ -977,6 +1001,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), path / filename)
     return {"avro": f"packets/{name}", "avro_bytes": avro.stat().st_size,
             "flags_zero": read.flags_zero, "packets": len(order),
+            "triggers_dropped_by_cap": read.capped,
             "packets_snr_gt20": sum(1 for source, _ in order
                                     if source.fluxerr and source.fluxfit / source.fluxerr > 20),
             "packets_bright_footprint": sum(1 for source, _ in order

@@ -92,11 +92,17 @@ def image_rows(directory) -> dict[str, list[dict]]:
     }
 
 
-def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_id: int = -1):
-    """A live run's packet job over one imported epoch, and the import, stray and exposure jobs."""
-    live = create_run(conn, "tester", "live", "abc123", RUN_SETTINGS, SURVEY, DATASET)
+def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_id: int = -1,
+               max_alerts: int | None = None, second_source: bool = False):
+    """A live run's packet job over one imported epoch, and the import, stray and exposure jobs.
+
+    ``max_alerts`` overrides the run's ``[packet] max_alerts``; ``second_source`` adds a weaker
+    source (sid 2, S/N 4) in its own object 101 beside the S/N 40 one."""
+    settings = RUN_SETTINGS if max_alerts is None else {
+        **RUN_SETTINGS, "packet": {**RUN_SETTINGS["packet"], "max_alerts": max_alerts}}
+    live = create_run(conn, "tester", "live", "abc123", settings, SURVEY, DATASET)
     other = create_run(conn, "tester", "a recipe that is not live", "def456",
-                       RUN_SETTINGS, SURVEY, DATASET)
+                       settings, SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": live}}], "tester", "live")
     write_epoch(tmp_path / "e1", [(50, 50, 400.0)])
     gaia = tmp_path / "gaia"  # an empty Gaia mirror: no matches, not the contract here
@@ -130,6 +136,12 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
     tables["memberships"] = [{"object_job": imported, "aid": 100, "field": FIELD,
                               "source_job": imported, "sid": 1,
                               "dra": 0.0, "ddec": 0.0, "flux": 400.0}]
+    if second_source:
+        ra2, dec2 = (float(v[0]) for v in wcs().all_pix2world([20.0], [80.0], 1))
+        tables["sources"].append({**tables["sources"][0], "sid": 2, "id": 2, "xfit": 19.0,
+                                  "yfit": 79.0, "ra": ra2, "dec": dec2, "fluxfit": 40.0})
+        tables["objects"].append({**tables["objects"][0], "aid": 101})
+        tables["memberships"].append({**tables["memberships"][0], "aid": 101, "sid": 2, "flux": 40.0})
     publish(conn, imported, 1, write_attempt(tmp_path / "import", tables))
     # The exposure, published by its own job, as intake publishes it apart from the source set.
     exposure = create_job(conn, live, "intake", {}, expects=[
@@ -251,6 +263,25 @@ def test_a_packet_job_reads_its_sources_from_child_tables_never_the_parent(conne
     assert [s for s in statements if PARENT_READ.search(s)] == []
     children = [s for s in statements if re.search(r'FROM "sources_\d{8}_8" s', s)]
     assert len(children) == 2                                     # the set's own, its members'
+
+
+@pytest.mark.parametrize("max_alerts, kept", [(1, [100]), (-1, [100, 101])])
+def test_the_cap_drops_the_weaker_triggers_before_anything_is_measured(connect, tmp_path,
+                                                                       max_alerts, kept):
+    """[packet] max_alerts 1 of two triggers: one packet, forced rows for its object only, the
+    drop counted in the manifest; -1 keeps both."""
+    conn = connect()
+    job, *_ = packet_job(conn, tmp_path, max_alerts=max_alerts, second_source=True)
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+    assert [a for (a,) in query(conn, "SELECT aid FROM packets_official WHERE job = %s ORDER BY aid",
+                                (job,))] == kept
+    assert [a for (a,) in query(conn, "SELECT DISTINCT aid FROM forced WHERE job = %s ORDER BY aid",
+                                (job,))] == kept
+    ((dropped, packets),) = query(
+        conn, "SELECT (manifest -> 'packet' ->> 'triggers_dropped_by_cap')::int,"
+              " (manifest -> 'packet' ->> 'packets')::int FROM jobs WHERE id = %s", (job,))
+    assert (dropped, packets) == (2 - len(kept), len(kept))
 
 
 def earlier_epoch(conn, live, tmp_path, route: str) -> tuple[int, int | None]:

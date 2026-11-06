@@ -7,7 +7,8 @@
 # is RAPIDPIPE_OUTPUTS_ROOT.
 
 [import]
-# The brightest sources kept per difference image, by fluxfit / fluxerr.
+# The brightest sources kept per difference image, by fluxfit / fluxerr;
+# -1 keeps every source, 0 none.
 max_sources = 500
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
@@ -119,6 +120,14 @@ stamp_half_width = 64
 # Days before the trigger (dev PRV_WINDOW_DAYS, FORCED_WINDOW_DAYS).
 prv_window_days = 365.25
 forced_window_days = 30.0
+# dev's MAX_SOURCES_PER_CHIP (providers._cut_to_max_sources): the triggers
+# kept per source set, the highest |fluxfit / fluxerr| first, so everything
+# after it (history, matches, forced photometry, the packets) sees only the
+# survivors; -1 keeps every trigger (dev's 0), 0 none. dev marks it a
+# temporary stand-in for a real/bogus cut. The absolute value is new, not
+# dev's: a negative source, once the source set carries them, ranks by its
+# strength, not last.
+max_alerts = 2000
 # The three catalog matches, each on by default (dev [ALERTS] ned_match and
 # siblings): a switched-on catalog must be official for the loop to plan a
 # packet job, and a match that cannot run at execution ships its field null
@@ -488,8 +497,10 @@ sextractor_interp_type = "ALL"
 # kept as the strings its configuration holds.
 [difference]
 # The brightest sources kept per difference image, by fluxfit / fluxerr,
-# as [import] max_sources; 0 keeps every source.
-max_sources = 500
+# as [import] max_sources; -1 keeps every source, 0 none (shipped: the
+# source set is uncapped, and the packet stage's [packet] max_alerts is the
+# one cap, dev's MAX_SOURCES_PER_CHIP; Emily, 2026-11-06).
+max_sources = -1
 # true: the difference job loads no sources records. Its source set is still
 # declared, with no rows, so the set's binding opens and its xsources, which
 # are always loaded, are official through it; with no sources nothing is

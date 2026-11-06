@@ -339,9 +339,9 @@ def check_settings(settings: dict[str, Any]) -> None:
     skip = settings.get("skip_loading_sources_records", False)
     if not isinstance(skip, bool):
         raise ValueError(f"[difference] skip_loading_sources_records must be true or false, got {skip!r}")
-    cap = settings.get("max_sources", 0)
-    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
-        raise ValueError(f"[difference] max_sources must be a non-negative integer, got {cap!r}")
+    cap = settings.get("max_sources", -1)
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < -1:
+        raise ValueError(f"[difference] max_sources must be an integer, -1 for no cap, got {cap!r}")
 
 
 def _prefilter_threshold(settings: dict[str, Any]) -> float | None:
