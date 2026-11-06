@@ -68,10 +68,28 @@ _REQUIRED_VARS = ("PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD")
 # stage contract and the specification state the shape (timeout, bounded
 # retry, backoff) but not the numbers.
 DEFAULT_CONNECT_TIMEOUT_S = 10
-DEFAULT_CONNECT_TRIES = 5
 DEFAULT_BACKOFF_INITIAL_S = 0.5
 DEFAULT_BACKOFF_MULTIPLIER = 2.0
 DEFAULT_BACKOFF_CAP_S = 8.0
+
+# The connect retry budget: how long one connect() keeps retrying before it
+# raises ConnectionUnavailable (exit 75). Set from the Thursday database
+# window's reboot branch, the longest the database is closed to new logins
+# in a routine week: PAUSE to the first login the restarted pooler accepted
+# took 177.7, 178.1 and 177.8 s on 2026-10-22, 10-29 and 11-05 (the window's
+# fence marker to its reopen check). 300 s is that plus 120 s of headroom.
+# Under PAUSE a login hangs and each attempt spends the 10 s connect timeout;
+# once the pooler is down each is refused at once and the backoff paces it.
+# The budget it replaced, five tries, gave up after 57.5 s under PAUSE and
+# 7.5 s refused (the canary dry run, 2026-10-27), so Batch's three attempts,
+# placed seconds apart, could all fall inside one reboot.
+DEFAULT_CONNECT_RETRY_S = 300.0
+
+# The maintenance lock a refused connect names in its log, once per connect():
+# an SSM String parameter, `<run_id> <state> <expires> <step> <target>`,
+# absent when no window holds it. RAPID_MAINTENANCE_SSM_ROOT names its tree,
+# as the window's own on-host read does.
+MAINTENANCE_SSM_ROOT = "/rapid/maintenance"
 
 # TCP keepalives. The incident this closes (condensed from the smdc
 # branch's pooler_client_idle_timeout.rst / rapid_db_connect.py
@@ -364,13 +382,42 @@ def _resolve_credentials(
     return _credentials_from_environment()
 
 
+def maintenance_lock_holder(ssm_client: Any = None) -> str:
+    """The maintenance lock as one phrase for a log line, never raising.
+
+    ``held by run <run_id> (<state>, step <step>, target <target>, expires
+    <expires>)``, ``free`` when the parameter does not exist, or
+    ``unreadable (<reason>)``: the read only explains a refusal and never
+    stands between a connect and its retry.
+    """
+    name = os.environ.get("RAPID_MAINTENANCE_SSM_ROOT", MAINTENANCE_SSM_ROOT).rstrip("/") + "/lock"
+    try:
+        if ssm_client is None:
+            import boto3
+            from botocore.config import Config
+
+            ssm_client = boto3.client("ssm", config=Config(
+                connect_timeout=2, read_timeout=2, retries={"mode": "standard", "max_attempts": 2}))
+        value = ssm_client.get_parameter(Name=name)["Parameter"]["Value"]
+    except Exception as exc:  # noqa: BLE001 - a log line's input, never a failure
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+        if code == "ParameterNotFound":
+            return "free"
+        return f"unreadable ({code or type(exc).__name__})"
+    fields = value.split()
+    if len(fields) != 5:
+        return f"held ({value!r})"
+    run_id, state, expires, step, target = fields
+    return f"held by run {run_id} ({state}, step {step}, target {target}, expires {expires})"
+
+
 def _connect_with_retry(
     *,
     endpoint: Endpoint,
     credentials: Credentials,
     application_name: str,
     connect_timeout: int,
-    tries: int,
+    retry_seconds: float,
     backoff_initial: float,
     backoff_multiplier: float,
     backoff_cap: float,
@@ -381,11 +428,13 @@ def _connect_with_retry(
     tcp_user_timeout: int,
     jitter: bool,
     sleep,
+    clock,
     connect_fn,
     random_func,
+    ssm_client,
 ) -> psycopg2.extensions.connection:
-    if tries < 1:
-        raise ValueError(f"tries must be >= 1; got {tries}")
+    if retry_seconds < 0:
+        raise ValueError(f"retry_seconds must be >= 0; got {retry_seconds}")
 
     # PostgreSQL truncates application_name at NAMEDATALEN-1 (63 bytes)
     # and would silently lose the tail of a long component name; trimmed
@@ -394,8 +443,10 @@ def _connect_with_retry(
     composed_name = application_name[:63]
 
     delay = backoff_initial
-    last_exc: Exception | None = None
-    for attempt in range(1, tries + 1):
+    start = clock()
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             return connect_fn(
                 host=endpoint.host,
@@ -413,19 +464,22 @@ def _connect_with_retry(
             )
         except psycopg2.OperationalError as exc:
             last_exc = exc
-            if attempt == tries:
-                break
+            if attempt == 1:
+                logger.warning("database connect refused (%s); maintenance lock %s",
+                               str(exc).strip(), maintenance_lock_holder(ssm_client))
             wait = random_func(0, delay) if jitter else delay
+            elapsed = clock() - start
+            if elapsed + wait > retry_seconds:
+                break
             logger.warning(
-                "database connect attempt %d/%d failed (%s); retrying in %.1fs",
-                attempt, tries, exc, wait)
+                "database connect attempt %d failed (%s); retrying in %.1fs, %.0fs of %.0fs spent",
+                attempt, exc, wait, elapsed, retry_seconds)
             sleep(wait)
             delay = min(delay * backoff_multiplier, backoff_cap)
-            continue
 
     raise ConnectionUnavailable(
         f"could not connect to {endpoint.host}:{endpoint.port}/{endpoint.dbname} "
-        f"as {credentials.user} after {tries} attempt(s): {last_exc}"
+        f"as {credentials.user} after {attempt} attempt(s) over {elapsed:.0f}s: {last_exc}"
     ) from last_exc
 
 
@@ -436,7 +490,7 @@ def connect(
     credentials: Credentials | None = None,
     application_name: str = "rapidpipe",
     connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_S,
-    tries: int = DEFAULT_CONNECT_TRIES,
+    retry_seconds: float = DEFAULT_CONNECT_RETRY_S,
     backoff_initial: float = DEFAULT_BACKOFF_INITIAL_S,
     backoff_multiplier: float = DEFAULT_BACKOFF_MULTIPLIER,
     backoff_cap: float = DEFAULT_BACKOFF_CAP_S,
@@ -447,6 +501,7 @@ def connect(
     tcp_user_timeout: int = TCP_USER_TIMEOUT_MS,
     jitter: bool = False,
     sleep=time.sleep,
+    clock=time.monotonic,
     connect_fn=None,
     random_func=random.uniform,
     ssm_client=None,
@@ -487,19 +542,24 @@ def connect(
 
     This is a boundary read, not an in-process transport: nothing in
     this module writes the environment for a downstream reader.
-    ``ssm_client`` is a test injection point (:func:`credentials_from_secret`
-    already covers Secrets Manager); nothing in production passes it.
+    ``ssm_client`` is a test injection point for the tree and the
+    maintenance lock (:func:`credentials_from_secret` already covers
+    Secrets Manager); nothing in production passes it.
 
-    Connecting retries up to ``tries`` times (default
-    :data:`DEFAULT_CONNECT_TRIES`) on ``psycopg2.OperationalError``,
-    with exponential backoff from ``backoff_initial`` up to
-    ``backoff_cap``, doubling by ``backoff_multiplier`` each time.
+    Connecting retries on ``psycopg2.OperationalError`` for up to
+    ``retry_seconds`` (default :data:`DEFAULT_CONNECT_RETRY_S`, the
+    measured database reboot plus headroom): no attempt starts once the
+    next wait would take it past the budget. The waits back off
+    exponentially from ``backoff_initial`` up to ``backoff_cap``,
+    growing by ``backoff_multiplier`` each time. The first refusal of a
+    call logs the maintenance lock once (:func:`maintenance_lock_holder`),
+    so a job's log names the window run that closed the database.
     ``jitter=True`` applies full jitter (a random duration in
     ``[0, delay]`` in place of ``delay`` itself) so many callers retrying
     off the same event do not stay synchronized. All of these are
     ordinary keyword arguments a caller overrides the same way it
-    overrides ``connect_timeout``. ``sleep``, ``connect_fn`` and
-    ``random_func`` are injection points for tests; nothing in
+    overrides ``connect_timeout``. ``sleep``, ``clock``, ``connect_fn``
+    and ``random_func`` are injection points for tests; nothing in
     production passes them.
 
     ``keepalives``/``keepalives_idle``/``keepalives_interval``/
@@ -520,7 +580,7 @@ def connect(
         credentials=resolved_credentials,
         application_name=application_name,
         connect_timeout=connect_timeout,
-        tries=tries,
+        retry_seconds=retry_seconds,
         backoff_initial=backoff_initial,
         backoff_multiplier=backoff_multiplier,
         backoff_cap=backoff_cap,
@@ -531,8 +591,10 @@ def connect(
         tcp_user_timeout=tcp_user_timeout,
         jitter=jitter,
         sleep=sleep,
+        clock=clock,
         connect_fn=connect_fn or psycopg2.connect,
         random_func=random_func,
+        ssm_client=ssm_client,
     )
     try:
         conn.autocommit = False
