@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from rapidpipe.science.alerts import assemble, crossmatch, cutouts
+from rapidpipe.science.alerts import assemble, crossmatch, cutouts, gen_schema
 from rapidpipe.science.alerts.param_registry import ALERT_PARAMS, NOT_USED, VERSION
 from rapidpipe.science.alerts.records import Cutouts, ObjectRecord, Source
 
@@ -69,6 +69,56 @@ def test_schema_problems_names_a_drifted_file(tmp_path):
     assert any("alert.avsc" in p for p in assemble.schema_problems(root))
     with pytest.raises(RuntimeError, match="out of sync"):
         assemble.load_schema(schema_root=root)
+
+
+def _copy_packaged_schema(root):
+    for path in assemble.schema_paths():
+        target = root / path.relative_to(assemble.SCHEMA_ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(path.read_text())
+
+
+def test_gen_schema_reproduces_the_packaged_files_byte_for_byte(tmp_path):
+    """The checked-in 00.07 files are exactly what the writer makes from the registry."""
+    assert gen_schema.generate(schema_root=tmp_path, out=io.StringIO()) is True
+    for path in assemble.schema_paths():
+        written = tmp_path / path.relative_to(assemble.SCHEMA_ROOT)
+        assert written.read_text() == path.read_text(), path.name
+
+
+def test_gen_schema_check_flags_a_type_change(tmp_path):
+    """A field whose type drifts is a problem, which the names-only check missed."""
+    root = tmp_path / "schema"
+    _copy_packaged_schema(root)
+    assert gen_schema.main(["--check", "--schema-root", str(root)]) == 0
+    source = root / "00" / "07" / "rapid.v00_07.diaSource.avsc"
+    data = json.loads(source.read_text())
+    field = next(f for f in data["fields"] if f["name"] == "ra")
+    field["type"] = "float"
+    source.write_text(json.dumps(data))
+    assert assemble.schema_problems(root) == ["rapid.v00_07.diaSource.avsc differs from the registry"]
+    out = io.StringIO()
+    assert gen_schema.generate(schema_root=root, check=True, out=out) is False
+    assert "DIFFERS  rapid.v00_07.diaSource.avsc" in out.getvalue()
+    assert '-      "type": "float"' in out.getvalue()
+    assert gen_schema.main(["--check", "--schema-root", str(root)]) == 1
+
+
+def test_gen_schema_writes_a_new_version_that_loads(tmp_path):
+    assert gen_schema.main(["01.02", "--schema-root", str(tmp_path)]) == 0
+    paths = assemble.schema_paths("01.02", tmp_path)
+    assert all(p.exists() for p in paths)
+    assert json.loads(paths[0].read_text())["namespace"] == "rapid.v01_02"
+    assert not (tmp_path / "latest.txt").exists()
+    schema = assemble.load_schema("01.02", tmp_path)
+    assert schema["name"] == "rapid.v01_02.alert"
+
+
+def test_gen_schema_rejects_a_malformed_version(capsys):
+    with pytest.raises(SystemExit) as exc:
+        gen_schema.main(["7"])
+    assert exc.value.code == 64
+    assert "must be <major>.<minor>" in capsys.readouterr().err
 
 
 def test_extract_stamp_is_devs_geometry_with_shifted_crpix():

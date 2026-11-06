@@ -12,8 +12,8 @@ functions over plain records instead of methods over a live provider:
   in as ``reliability``, stamped only on a scored trigger (``source.rb``
   not null), where `dev` stamps every trigger;
 - :func:`load_schema`: the packaged ``schema/<major>/<minor>/*.avsc``,
-  checked against the registry first (:func:`schema_problems`, standing in
-  for `dev`'s unported ``gen_schema.schema_problems``);
+  checked against the registry first (:func:`schema_problems`, `dev`'s
+  ``gen_schema.schema_problems``);
 - :func:`serialize_alert` and :class:`BatchStats`, unchanged apart from the
   flagged-source tally below;
 - :class:`AlertContainer`: `dev`'s ``open_alert_archive`` (a fastavro
@@ -61,7 +61,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import io
-import json
 import logging
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Sequence
@@ -71,6 +70,7 @@ import fastavro.schema
 import fastavro.write
 from astropy.time import Time
 
+from rapidpipe.science.alerts import gen_schema
 from rapidpipe.science.alerts.crossmatch import associate_ss
 from rapidpipe.science.alerts.cutouts import STAMP_HALF_WIDTH, extract_stamp
 from rapidpipe.science.alerts.param_registry import (
@@ -317,30 +317,12 @@ def schema_paths(version: str = SCHEMA_VERSION, schema_root: str | Path = SCHEMA
 def schema_problems(schema_root: str | Path = SCHEMA_ROOT) -> list[str]:
     """Where the packaged ``.avsc`` files and the registry disagree; empty when they agree.
 
-    Checks what `dev`'s generator writes from the registry: each record's
-    file exists, carries this version and namespace, and lists exactly the
-    registry's non-NOT_USED params in order, nullable ones defaulting to null.
+    `dev`'s comparison (``gen_schema.schema_problems``): each record's file
+    must equal, as parsed JSON, what the generator writes from the registry,
+    so a type, doc, order, namespace or version difference is a problem.
+    ``python -m rapidpipe.science.alerts.gen_schema --check`` prints the diff.
     """
-    problems = []
-    major, minor = SCHEMA_VERSION.split(".")
-    for record, path in zip(RECORDS, schema_paths(SCHEMA_VERSION, schema_root)):
-        if not path.exists():
-            problems.append(f"{path.name}: missing")
-            continue
-        schema = json.loads(path.read_text())
-        if schema.get("namespace") != f"rapid.v{major}_{minor}" or schema.get("name") != record.name:
-            problems.append(f"{path.name}: namespace/name {schema.get('namespace')}.{schema.get('name')}")
-        if schema.get("version") != SCHEMA_VERSION:
-            problems.append(f"{path.name}: version {schema.get('version')!r}")
-        want = [p for p in record.params if p.status is not NOT_USED]
-        got = schema.get("fields", [])
-        if [f["name"] for f in got] != [p.name for p in want]:
-            problems.append(f"{path.name}: field names differ from the registry")
-            continue
-        for p, f in zip(want, got):
-            if is_nullable(p.avro) and ("default" not in f or f["default"] is not None):
-                problems.append(f"{path.name}: {p.name} is nullable but has no null default")
-    return problems
+    return gen_schema.schema_problems(SCHEMA_VERSION, schema_root)
 
 
 def load_schema(version: str = SCHEMA_VERSION, schema_root: str | Path = SCHEMA_ROOT):
