@@ -5,10 +5,11 @@ Contracts: a job naming one ``l2files``, one ``refimages`` and one
 ``objects`` and ``memberships`` with exactly their tables' columns from
 ``database/schema.sql``, sharing the ``pid`` drawn for the job; it
 associates its sources with the catalog it read, recording the read and
-the catalog key in the manifest; the published difference image and source set are SFFT's (`dev`'s
-``diff_flavor = sfft``), and the packet stage's cutout and forced
+the catalog key in the manifest; the published difference image and source set are SFFT's, the only
+ones registered (`dev` ab097bce), and the packet stage's cutout and forced
 photometry reads resolve beside it to SFFT's PSF and uncertainty;
-``run_sfft = false`` fails the settings check and a nonzero SFFT exit
+``run_sfft = false`` and the retired ``diff_flavor`` naming any other
+differencer fail the settings check, and a nonzero SFFT exit
 fails the job, never a fallback to ZOGY;
 the work subdirectory publishes exactly the kept set (the SFFT
 image, its uncertainty, mask and PSF, both differencers' PSF-fit catalogs,
@@ -85,7 +86,6 @@ SOCSIMS_SFFT = {"crossconv_flag": False, "sfft_bsmask_value": "20000.0", "sfft_b
 
 def settings(**tables) -> dict:
     body = copy.deepcopy(THIN["difference"])
-    body["diff_flavor"] = "sfft"   # the SFFT-asserting tests below; the default is tested on its own
     body["sfft"].update(SOCSIMS_SFFT)   # the file names below are this block's; the shipped one is tested on its own
     body["paths"]["cfg_path"] = str(cdf_dir())
     body["statistics"]["clip_correction_seed"] = 1
@@ -345,25 +345,12 @@ def test_the_packet_stage_reads_resolve_to_sffts_files_beside_the_published_imag
 
 def test_the_shipped_default_publishes_sffts_cross_convolved_block(tmp_path, files, fakes):
     """The shipped SFFT block is dev's OpenUniverse one: its decorrelated image is the published one."""
-    assert THIN["difference"]["diff_flavor"] == "sfft"
     body = settings()
-    body["difference"]["diff_flavor"] = THIN["difference"]["diff_flavor"]
     body["difference"]["sfft"] = copy.deepcopy(THIN["difference"]["sfft"])
     prefix = run_difference(tmp_path, files, body=body)
     assert manifest(prefix)["difference"]["differencer"] == "sfft"
     (row,) = read(prefix, "diffimages")
     assert row["filename"].endswith("/diff/sfftdiffimage_dconv_masked.fits.gz")
-
-
-def test_zogy_selected_publishes_zogy(tmp_path, files, fakes):
-    body = settings(); body["difference"]["diff_flavor"] = "zogy"
-    prefix = run_difference(tmp_path, files, body=body)
-    m = manifest(prefix)["difference"]
-    assert m["differencer"] == "zogy"
-    work = prefix / "diff"
-    assert (work / "zogy_diffimage_masked.fits.gz").exists()
-    assert not (work / "sfftdiffimage_masked.fits.gz").exists()
-    assert (work / "sfftdiffimage_masked_psfcat.parquet").exists()   # SFFT still runs; its catalog is a diagnostic
 
 
 def test_under_sfft_every_candidate_is_scored_and_each_source_carries_its_score(tmp_path, files,
@@ -383,35 +370,12 @@ def test_under_sfft_every_candidate_is_scored_and_each_source_carries_its_score(
     assert sources and all((s["rb"], s["rblabel"]) == pytest.approx(by_id[s["sid"]]) for s in sources)
 
 
-def test_under_zogy_nothing_is_scored_and_no_model_is_fetched(tmp_path, files, fakes, monkeypatch):
-    kit = difference.toolkit()
-
-    def no_model(rubrat):
-        raise AssertionError("the model was fetched under zogy")
-
-    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
-        runner=kit.runner, sip_to_pv=kit.sip_to_pv, psf_catalog=kit.psf_catalog,
-        reference_psf=kit.reference_psf, rb_model=no_model))
-    body = settings(); body["difference"]["diff_flavor"] = "zogy"
-    prefix = run_difference(tmp_path, files, body=body)
-    assert manifest(prefix)["difference"]["rb"] is None
-    sources = read(prefix, "sources")
-    assert sources and all(s["rb"] is None and s["rblabel"] is None for s in sources)
-
-
 def _unprefiltered(prefix: Path, catalog: str) -> list[int]:
     """The source ids the code before dev-prefilter kept: bounds, finite ratio, the cap."""
     header = fits.getheader(next((prefix / "diff").glob("*diffimage_masked.fits.gz")))
     table, _ = source_set(pq.read_table(prefix / "diff" / catalog), KEY, PID, MJDOBS,
                           header["NAXIS1"], header["NAXIS2"], max_sources=THIN["difference"]["max_sources"])
     return table.column("sid").to_pylist()
-
-
-def test_under_zogy_the_source_set_is_not_prefiltered(tmp_path, files, fakes):
-    body = settings(); body["difference"]["diff_flavor"] = "zogy"   # the prefilter left at 0.4
-    prefix = run_difference(tmp_path, files, body=body)
-    expected = _unprefiltered(prefix, "zogy_diffimage_masked_psfcat.parquet")
-    assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
 
 
 def test_sfft_with_the_prefilter_disabled_keeps_the_set_before_it(tmp_path, files, fakes,
@@ -424,16 +388,53 @@ def test_sfft_with_the_prefilter_disabled_keeps_the_set_before_it(tmp_path, file
     assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
 
 
-def test_an_unknown_diff_flavor_fails_the_settings_check(tmp_path, files, fakes):
-    body = settings(); body["difference"]["diff_flavor"] = "naive"
-    with pytest.raises(ValueError, match="diff_flavor"):
+@pytest.mark.parametrize("flavor", ["zogy", "naive"])
+def test_a_run_body_whose_retired_diff_flavor_is_not_sfft_fails_the_settings_check(
+        tmp_path, files, fakes, flavor):
+    body = settings(); body["difference"]["diff_flavor"] = flavor
+    with pytest.raises(ValueError, match="diff_flavor = .*retired"):
         run_difference(tmp_path, files, body=body)
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_a_run_body_from_before_diff_flavor_retired_publishes_sfft(tmp_path, files, fakes):
+    body = settings(); body["difference"]["diff_flavor"] = "sfft"
+    prefix = run_difference(tmp_path, files, body=body)
+    (row,) = read(prefix, "diffimages")
+    assert row["filename"].endswith("/diff/sfftdiffimage_masked.fits.gz")
 
 
 def test_run_sfft_false_fails_the_settings_check(tmp_path, files, fakes):
     with pytest.raises(ValueError, match="run_sfft = false"):
         run_difference(tmp_path, files, body=settings(sfft={"run_sfft": False}))
     assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_run_zogy_false_skips_zogy_and_publishes_the_same_sfft_rows(tmp_path, files, fakes):
+    """dev's [ZOGY] run_zogy = False (f8cda2ee): no ZOGY command, file or catalog, no ZOGY bit
+    even where its catalogs would fail, and SFFT's rows as with ZOGY run."""
+    runner, catalog = fakes
+    zogy_labels = ("positive zogy difference image", "negative zogy difference image")
+    catalog.fail = zogy_labels
+    (tmp_path / "with").mkdir()
+    (tmp_path / "without").mkdir()
+    with_zogy = run_difference(tmp_path / "with", files)
+    assert "zogy" in runner.tools_called()
+    runner.calls.clear(); runner.shell_calls.clear(); catalog.calls.clear()
+    prefix = run_difference(tmp_path / "without", files, body=settings(zogy={"run_zogy": False}))
+    assert "zogy" not in runner.tools_called() and "sfft" in runner.tools_called()
+    assert not [c for c in catalog.calls if c["label"] in zogy_labels]
+    assert not [p.name for p in prefix.rglob("*") if "zogy" in p.name or "scorr" in p.name]
+    m = manifest(prefix)["difference"]
+    assert m["differencer"] == "sfft" and m["zogy_source_counts"] is None
+    (row,) = read(prefix, "diffimages")
+    zogy_bits = catalog_outcome_bit("zogy", "positive") | catalog_outcome_bit("zogy", "negative")
+    (with_row,) = read(with_zogy, "diffimages")
+    assert with_row["infobitssci"] & zogy_bits == zogy_bits and row["infobitssci"] & zogy_bits == 0
+    assert row["filename"].endswith("/diff/sfftdiffimage_masked.fits.gz")
+    for table in ("sources", "xsources", "objects", "memberships", "xobjects", "xmemberships"):
+        assert read(prefix, table) == read(with_zogy, table), table
+    assert read(prefix, "sources")
 
 
 def test_a_nonzero_sfft_exit_fails_the_job_without_falling_back_to_zogy(tmp_path, files, fakes):

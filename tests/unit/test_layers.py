@@ -140,9 +140,11 @@ def test_every_dataset_overlay_resolves_and_holds_only_keys_that_differ_from_the
     differing(overlay, base)
 
 
-def test_a_run_set_or_an_overlay_selects_zogy_over_the_shipped_sfft(tmp_path):
-    assert resolve(SHIPPED)[0]["difference"]["diff_flavor"] == "sfft"
-    body, _ = resolve(SHIPPED, HLWAS, ['difference.diff_flavor="zogy"'])
-    assert body["difference"]["diff_flavor"] == "zogy"
+def test_the_retired_diff_flavor_cannot_select_zogy(tmp_path):
+    """Only SFFT's difference image is registered: no run or overlay names a differencer."""
+    assert "diff_flavor" not in resolve(SHIPPED)[0]["difference"]
+    with pytest.raises(LayerError, match="'difference.diff_flavor'"):
+        resolve(SHIPPED, HLWAS, ['difference.diff_flavor="zogy"'])
     overlay = _toml(tmp_path, "ds.toml", '[difference]\ndiff_flavor = "zogy"\n')
-    assert resolve(SHIPPED, overlay)[0]["difference"]["diff_flavor"] == "zogy"
+    with pytest.raises(LayerError, match="diff_flavor"):
+        resolve(SHIPPED, overlay)

@@ -498,20 +498,6 @@ max_sources = 500
 # loader (loadPSFCatIntoDBSourcesTable.py) is a step a run can skip; this is
 # that choice (Russ Laher, 2026-11-04).
 skip_loading_sources_records = false
-# The published differencer, dev's [ALERTS] diff_flavor: "sfft" or "zogy".
-# The published rows are this differencer's image, uncertainty, PSF and
-# positive PSF-fit catalog; the other still runs and its PSF-fit catalogs stay
-# under the prefix as diagnostics. sfft, as dev (b725007d, 2026-04-20; dev PR
-# 478, 2026-10-26, registers SFFT's image only) and the team (Ben,
-# 2026-10-26), with dev's prefilter ([difference.database_prefilter]); a run
-# or an overlay selects zogy (--set difference.diff_flavor="zogy"). The
-# measured trade, HLWAS 001_0001 SCA 8 F146 under the OpenUniverse
-# [difference.sfft] block (runs 145, 146 against ZOGY's 144, 127): injected
-# passes 4 to 6, detected 533 of 600 against 546, the loss at AB 26 to 26.5;
-# false positives per epoch 102.7 against 213.3; null-epoch packets 86
-# against 181. The other datasets follow this default unmeasured, under the
-# gate. The history is rapid_docs decisions.md (2026-10-26).
-diff_flavor = "sfft"
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
 xy_fit_max_offset = 0.5
@@ -580,7 +566,10 @@ saturation_level = 100000.0
 zprefimg = ""
 
 [difference.zogy]
-# [ZOGY]. Gain matching's fallback x/y RMS when too few sources match.
+# [ZOGY]. false skips ZOGY: no ZOGY difference image, S_corr image or
+# catalogs, and their two outcome bits are never set (dev f8cda2ee).
+run_zogy = true
+# Gain matching's fallback x/y RMS when too few sources match.
 astrometric_uncert_x = 0.05
 astrometric_uncert_y = 0.05
 # ZOGY's astrometric-uncertainty inputs (dx = dy), registered as
@@ -615,6 +604,14 @@ zogy_output_scorrimage_file = "scorrimage.fits"
 # The catalog path alone (sfft_use_gainmatch_catalogs = true at 20000)
 # selects nothing and reproduces the socsims block to the digit. Moved here
 # from the HLWAS overlay (sfft-block-base), which carried it since sfft-core.
+# Must be true, as dev's (ab097bce): SFFT's positive difference image is
+# the only one registered in diffimages, so false fails the settings check.
+# The published rows are its image, uncertainty, PSF and positive PSF-fit
+# catalog; ZOGY's PSF-fit catalogs stay under the prefix as diagnostics.
+# SFFT has been the published differencer since dev b725007d (2026-04-20)
+# and the team's ruling (Ben, 2026-10-26); the measured trade against ZOGY
+# is in rapid_docs decisions.md (2026-10-26). [difference] diff_flavor,
+# which let a run publish ZOGY's image, is retired (Russ Laher, 2026-11-06).
 run_sfft = true
 crossconv_flag = true
 sfft_bsmask_value = "50.0"
@@ -632,8 +629,7 @@ python_cmd = ""
 # deactivation -- run python_cmd directly. `dev` hard-codes
 # "source /sfft_env/bin/activate" for its own venv image. New default.
 activate_cmd = ""
-# SFFT runs as `dev` runs it; under diff_flavor = "zogy" its files stay
-# under the job's prefix and are not published as rows.
+# SFFT runs as `dev` runs it.
 
 [difference.naive_diffimage]
 # [NAIVE_DIFFIMAGE]. The naive subtraction runs as `dev` runs it and is
@@ -710,7 +706,7 @@ lower_median = false
 # [DATABASE_PREFILTER]: dev's prefilter of the sources it loads
 # (loadPSFCatIntoDBSourcesTable.py, rapid_pipeline_subs.py
 # prefilter_database_records at c931b001), applied by source_set to SFFT's
-# catalog under diff_flavor = "sfft" before the max_sources cap; ZOGY's
+# catalog before the max_sources cap; ZOGY's
 # catalog carries no sumrat and is not prefiltered. A source is kept when its
 # sumrat is above this, finite (a null sumrat is rejected, where dev passes
 # it), and its nearest pixel is at least 2 px from the image edge (dev's
@@ -764,8 +760,8 @@ photutils_cols_prefilter_only = true
 # [RUBRAT]: the RuBR-AT real/bogus classifier (modules/rubrat, dev's
 # compute_rb; rapidpipe.science.difference.realbogus) scores every source of
 # SFFT's positive PSF-fit catalog, rb_score and rb_label, a column of the
-# catalog and of `sources` (rb, rblabel), under diff_flavor = "sfft" only:
-# the model is SFFT-trained, so under "zogy" nothing is scored. The model is
+# catalog and of `sources` (rb, rblabel); the model is SFFT-trained, and
+# ZOGY's catalogs are not scored. The model is
 # a prefix holding SHA256SUMS and the three files below, each verified. New,
 # not dev's (dev: s3_prefix): model_prefix, a full s3:// or file:// prefix,
 # set by --set for a run; "" (shipped) reads the bucket from the SSM
