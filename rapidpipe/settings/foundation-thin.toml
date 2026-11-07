@@ -756,7 +756,7 @@ sumrat_prefilter_threshold = 0.4
 # that pass the sumrat and S/N cuts (extra_catalog_cols
 # photutils_cols_prefilter_only). "" is no such cut.
 rb_prefilter_threshold = 0.0
-snr_prefilter_threshold = 5.0
+snr_prefilter_threshold = ""
 
 [difference.extra_catalog_cols]
 # [EXTRA_CATALOG_COLS]: nneg and nbad, the negative and the non-finite
