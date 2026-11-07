@@ -77,7 +77,10 @@ the pipeline imports.
   whole. A dated file is the one granted statement that brought SMDC's
   existing database to it, applied once and recorded in its runbook step
   (`docs/foundation-smdc-step.md`). A dated file is never applied after a
-  fresh `schema.sql`; it fails there.
+  fresh `schema.sql`; it fails there. The 2026-11-04 files apply in this
+  order, which is not their names' order: `2026-11-04-a-retire-runs-1-68.sql`,
+  `2026-11-04-sources-children.sql`, `2026-11-04-xsources.sql`,
+  `2026-11-04-field-children.sql`, `2026-11-04-xobjects.sql`.
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven
   statements: packet history three ways, lineage up and down) and the
