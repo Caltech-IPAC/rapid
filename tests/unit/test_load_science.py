@@ -239,3 +239,15 @@ def test_the_prefilter_runs_before_the_cap():
     table, _ = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=1,
                                    sumrat_prefilter_threshold=0.4)
     assert table.column("sid").to_pylist() == [2]
+
+
+def test_the_sources_prefilter_threshold_is_its_own_table_or_an_older_bodys_shared_one():
+    assert catalogs.sources_prefilter_threshold(
+        {"sources_prefilter": {"sumrat_prefilter_threshold": 0.3},
+         "database_prefilter": {"sumrat_prefilter_threshold": 0.7}}) == 0.3
+    assert catalogs.sources_prefilter_threshold(
+        {"database_prefilter": {"sumrat_prefilter_threshold": 0.7}}) == 0.7   # before the split
+    assert catalogs.sources_prefilter_threshold(
+        {"sources_prefilter": {"sumrat_prefilter_threshold": ""}}) is None
+    with pytest.raises(ValueError, match="sources_prefilter"):
+        catalogs.sources_prefilter_threshold({"sources_prefilter": {"sumrat_prefilter_threshold": "0.4"}})

@@ -91,7 +91,8 @@ and ``sources`` (SFFT's positive and negative PSF-fit catalogs, as
 :func:`rapidpipe.science.load.catalogs.source_set` with its sign as
 ``isdiffpos``, the negatives' ``sid`` numbered after the positive
 catalog's ids, through `dev`'s database prefilter first
-(``[difference.database_prefilter]``), then, per sign, capped at
+(``[difference.sources_prefilter]``, apart from the xsources'
+``[difference.database_prefilter]``), then, per sign, capped at
 ``max_sources``, shipped -1, no cap, as `dev`; the quality metrics are the
 positive sources', with ``n_sources_negative`` and
 ``n_candidates_negative`` beside them; a source in a bright reference source's footprint
@@ -226,7 +227,7 @@ from rapidpipe.science.difference import (
 from rapidpipe.science.difference.fitsops import scale_image_data
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.intake import gzip_file
-from rapidpipe.science.load.catalogs import source_set
+from rapidpipe.science.load.catalogs import source_set, sources_prefilter_threshold
 from rapidpipe.science.spatial import field_neighbours, image_centre_and_corners, tessellation_field
 
 logger = logging.getLogger(__name__)
@@ -345,7 +346,7 @@ def check_settings(settings: dict[str, Any]) -> None:
             "[difference.sfft] run_sfft = false: SFFT's difference image is the only one "
             "registered, so the job would publish nothing; there is no fallback to ZOGY")
     _zero_point_override(settings)
-    _prefilter_threshold(settings)
+    sources_prefilter_threshold(settings)
     skip = settings.get("skip_loading_sources_records", False)
     if not isinstance(skip, bool):
         raise ValueError(f"[difference] skip_loading_sources_records must be true or false, got {skip!r}")
@@ -353,19 +354,6 @@ def check_settings(settings: dict[str, Any]) -> None:
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < -1:
         raise ValueError(f"[difference] max_sources must be -1 (no cap) or a non-negative integer, "
                          f"got {cap!r}")
-
-
-def _prefilter_threshold(settings: dict[str, Any]) -> float | None:
-    """``[difference.database_prefilter] sumrat_prefilter_threshold``: empty
-    means no prefilter at all (`dev`: the section missing), otherwise the
-    number. Applied to SFFT's catalog only, the one that carries sumrat."""
-    value = settings.get("database_prefilter", {}).get("sumrat_prefilter_threshold", "")
-    if value == "":
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("[difference.database_prefilter] sumrat_prefilter_threshold must be "
-                         f"empty or a number, got {value!r}")
-    return float(value)
 
 
 def _seed(settings: dict[str, Any]) -> int | None:
@@ -943,7 +931,7 @@ def run(job: JobContext) -> None:
     }
     set_options = dict(max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
                        xy_fit_max_offset=settings["xy_fit_max_offset"],
-                       sumrat_prefilter_threshold=_prefilter_threshold(settings))
+                       sumrat_prefilter_threshold=sources_prefilter_threshold(settings))
     sources, candidates = source_set(
         catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"], **set_options)
     # A negative source's sid follows the positive catalog's ids, so the two number apart.

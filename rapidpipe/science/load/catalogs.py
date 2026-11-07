@@ -211,6 +211,40 @@ def prefilter(catalog, naxis1: int, naxis2: int, sumrat_prefilter_threshold: flo
                 & (ynear >= EDGE_MARGIN) & (ynear <= naxis2 - 1 - EDGE_MARGIN))
 
 
+def sources_prefilter_threshold(settings: dict) -> float | None:
+    """The run's sumrat threshold for ``sources``, or None for no prefilter at all.
+
+    ``[difference.sources_prefilter] sumrat_prefilter_threshold``, kept apart
+    from ``[difference.database_prefilter]``, the xsources' thresholds; a run
+    body stored before the split has no ``sources_prefilter`` and takes the
+    latter's sumrat threshold, as it did (rapid_docs decisions.md,
+    sources-prefilter).
+
+    Parameters
+    ----------
+    settings : dict
+        The run's ``[difference]`` table.
+
+    Returns
+    -------
+    float or None
+        The threshold; None when it is ``""`` (`dev`: the section missing).
+
+    Raises
+    ------
+    ValueError
+        The value is neither ``""`` nor a number.
+    """
+    table = "sources_prefilter" if "sources_prefilter" in settings else "database_prefilter"
+    value = settings.get(table, {}).get("sumrat_prefilter_threshold", "")
+    if value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"[difference.{table}] sumrat_prefilter_threshold must be "
+                         f"empty or a number, got {value!r}")
+    return float(value)
+
+
 def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2: int, *,
                max_sources: int | None, xy_fit_min: float = XY_FIT_MIN,
                xy_fit_max_offset: float = XY_FIT_MAX_OFFSET,

@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -36,7 +37,8 @@ REPO = Path(__file__).resolve().parents[2]
 RA, DEC = 267.96138, -28.72761
 SETTINGS = {"import": {"max_sources": 3, "xy_fit_min": -0.5, "xy_fit_max_offset": 0.5,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10},
-            "difference": {"database_prefilter": {"sumrat_prefilter_threshold": 0.4,
+            "difference": {"sources_prefilter": {"sumrat_prefilter_threshold": 0.4},
+                           "database_prefilter": {"sumrat_prefilter_threshold": 0.4,
                                                   "rb_prefilter_threshold": 0.0,
                                                   "snr_prefilter_threshold": 5.0}}}
 EPOCHS = [{"expid": 101, "rid": 7001, "pid": 9001, "rfid": 55, "l2": "l2/one.fits",
@@ -69,8 +71,9 @@ def image(path: Path, n: int = 64, **cards) -> None:
     fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(data, header)]).writeto(path)
 
 
-def catalog(path: Path) -> None:
-    """Eight sources: S/N 1..8 at x = 10..17, the brightest outside the bounds, one with zero error."""
+def catalog(path: Path, sumrat=None) -> None:
+    """Eight sources: S/N 1..8 at x = 10..17, the brightest outside the bounds, one with zero error;
+    sumrat 0.9 each unless given."""
     n = 8
     snr = np.arange(1.0, n + 1)
     flux_err = np.full(n, 10.0)
@@ -84,7 +87,8 @@ def catalog(path: Path) -> None:
         "id": np.arange(1, n + 1), "ra": RA + np.arange(n) * 1e-4, "dec": np.full(n, DEC),
         "x_fit": x, "y_fit": np.full(n, 20.0), "flux_fit": snr * 10.0, "flux_err": flux_err,
         "n_pixels_fit": np.full(n, 25), "flags": np.zeros(n, dtype=np.int64),
-        "n_pixels": np.full(n, 9), **floats}), path)
+        "n_pixels": np.full(n, 9), "sumrat": np.full(n, 0.9) if sumrat is None else sumrat,
+        **floats}), path)
 
 
 #: dev's SExtractor columns the XSources loader reads, then the extra columns its pipeline
@@ -449,3 +453,28 @@ def test_one_sextractor_catalog_without_the_other_is_rejected_65(tmp_path, sourc
         run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "half")
     assert caught.value.code == 65
     assert "sfftdiffimage_masked_negative.txt" in str(caught.value)
+
+
+def test_both_signs_sources_pass_the_runs_sources_prefilter(tmp_path, source):
+    difference = source / "jid1"
+    low = np.full(8, 0.9)
+    low[6] = 0.4                    # S/N 7 at the threshold: cut, so 6, 5 and 4 are kept
+    catalog(difference / import_products.DIFFERENCE_CATALOG, sumrat=low)
+    catalog(difference / import_products.DIFFERENCE_CATALOG_NEGATIVE, sumrat=low)
+    rows = read(run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "cut"), "sources")
+    assert sorted((r["isdiffpos"], r["sid"]) for r in rows) == [
+        (False, 12), (False, 13), (False, 14), (True, 4), (True, 5), (True, 6)]
+
+
+def test_the_sources_prefilter_is_the_sources_table_not_the_xsources(tmp_path, source, monkeypatch):
+    names = import_products.XSOURCES_CATALOGS
+    sextractor_catalog(source / "jid1" / names["positive"], XSOURCES_POSITIVE)
+    sextractor_catalog(source / "jid1" / names["negative"], XSOURCES_NEGATIVE)
+    catalog(source / "jid1" / import_products.DIFFERENCE_CATALOG, sumrat=np.full(8, np.nan))
+    body = {**SETTINGS, "difference": {**SETTINGS["difference"],
+                                       "sources_prefilter": {"sumrat_prefilter_threshold": ""}}}
+    monkeypatch.setattr(sys.modules[__name__], "SETTINGS", body)
+    prefix = run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "apart")
+    # No sources cut, so null sumrat passes; the xsources keep their cuts.
+    assert sorted(r["sid"] for r in read(prefix, "sources")) == [5, 6, 7]
+    assert len(read(prefix, "xsources")) == 3

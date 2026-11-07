@@ -46,7 +46,8 @@ L2 row's ``limmag`` is measured with the science PSF (``kind``
 ``science``) of the ``psfs`` set the job names as an input. ``sources`` holds,
 for each of the difference job's two PSF-fit catalogs, the ``max_sources``
 brightest rows by ``flux_fit / flux_err`` (-1 is no cap, keeping every row),
-inside `dev`'s fit-position bounds, mapped as
+inside `dev`'s fit-position bounds and through the run's
+``[difference.sources_prefilter]``, mapped as
 :func:`rapidpipe.science.load.catalogs.source_set` maps them, as the
 difference stage does: the negative catalog's rows ``isdiffpos`` false, each
 ``sid`` its catalog ``id`` plus the positive catalog's largest. A directory
@@ -97,7 +98,7 @@ from rapidpipe.science.difference import xsources
 from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.science.intake import exposure_identifiers
 from rapidpipe.science.limmag import image_hdu_index, limiting_magnitude
-from rapidpipe.science.load.catalogs import source_set
+from rapidpipe.science.load.catalogs import source_set, sources_prefilter_threshold
 from rapidpipe.science.spatial import (
     healpix_indexes, image_centre_and_corners, overlapping_fields, tessellation_field)
 
@@ -305,7 +306,8 @@ def _epoch(job: JobContext, settings: dict, source: Path, epoch: dict) -> tuple[
         "status": STATUS_GOOD,
     }
     naxis = (diff_header["NAXIS1"], diff_header["NAXIS2"])
-    sources, kept = _sources(settings, difference, key, epoch["pid"], mjdobs, *naxis)
+    sources, kept = _sources(settings, sources_prefilter_threshold(job.settings["difference"]),
+                             difference, key, epoch["pid"], mjdobs, *naxis)
     xsources_rows, xsources_record = _xsources(job.settings["difference"]["database_prefilter"],
                                                difference, key, epoch["pid"], mjdobs, *naxis)
     tables = {"exposures": [{"dataset": job.dataset, "expid": epoch["expid"], "dateobs": dateobs,
@@ -321,14 +323,18 @@ def _fid(filter_name: str) -> int:
     return names.index(rapid_filter_name(filter_name)) + 1
 
 
-def _sources(settings: dict, difference: Path, key: dict, pid: int, mjdobs: float,
-             naxis1: int, naxis2: int) -> tuple[pa.Table, dict]:
-    """Both PSF-fit catalogs' capped source sets: dev's position bounds, then the brightest by flux_fit / flux_err.
+def _sources(settings: dict, sumrat_threshold: float | None, difference: Path, key: dict, pid: int,
+             mjdobs: float, naxis1: int, naxis2: int) -> tuple[pa.Table, dict]:
+    """Both PSF-fit catalogs' capped source sets: dev's position bounds and prefilter, then the brightest by flux_fit / flux_err.
 
     Parameters
     ----------
     settings : dict
         The ``[import]`` table: ``max_sources``, ``xy_fit_min`` and ``xy_fit_max_offset``.
+    sumrat_threshold : float or None
+        The run's sources prefilter
+        (:func:`rapidpipe.science.load.catalogs.sources_prefilter_threshold`),
+        None for none.
     difference : pathlib.Path
         The difference job's directory, holding :data:`DIFFERENCE_CATALOG`
         and, when `dev` made one, :data:`DIFFERENCE_CATALOG_NEGATIVE`.
@@ -348,7 +354,8 @@ def _sources(settings: dict, difference: Path, key: dict, pid: int, mjdobs: floa
         ``negative`` null when the directory has no negative catalog.
     """
     options = dict(max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
-                   xy_fit_max_offset=settings["xy_fit_max_offset"])
+                   xy_fit_max_offset=settings["xy_fit_max_offset"],
+                   sumrat_prefilter_threshold=sumrat_threshold)
     catalog = pq.read_table(difference / DIFFERENCE_CATALOG)
     sources, _ = source_set(catalog, key, pid, mjdobs, naxis1, naxis2, **options)
     negative_path = difference / DIFFERENCE_CATALOG_NEGATIVE

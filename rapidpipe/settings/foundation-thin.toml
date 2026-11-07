@@ -717,18 +717,25 @@ filter_size = 3
 # about -0.32 (dev babd5d16).
 lower_median = false
 
-[difference.database_prefilter]
-# [DATABASE_PREFILTER]: dev's prefilter of the sources it loads
+[difference.sources_prefilter]
+# The sources' share of dev's [DATABASE_PREFILTER]
 # (loadPSFCatIntoDBSourcesTable.py, rapid_pipeline_subs.py
-# prefilter_database_records at c931b001), applied by source_set to SFFT's
-# catalog before the max_sources cap; ZOGY's
-# catalog carries no sumrat and is not prefiltered. A source is kept when its
-# sumrat is above this, finite (a null sumrat is rejected, where dev passes
-# it), and its nearest pixel is at least 2 px from the image edge (dev's
-# XSources loader, 57559572, a module constant). "" applies none of it (dev:
-# the section missing). dev's rb_prefilter_threshold (0.0: a scored source
-# with rb <= 0 is not loaded) is not here: nothing is cut on the score
-# (rapid_docs decisions.md, rb-port).
+# prefilter_database_records at c931b001), applied by source_set to both of
+# SFFT's PSF-fit catalogs before the max_sources cap, in the difference job
+# and the import; ZOGY's catalog carries no sumrat and is not prefiltered. A
+# source is kept when its sumrat is above this, finite (a null sumrat is
+# rejected, where dev passes it), and its nearest pixel is at least 2 px from
+# the image edge (dev's XSources loader, 57559572, a module constant). ""
+# applies none of it (dev: the section missing). dev's rb_prefilter_threshold
+# (0.0: a scored source with rb <= 0 is not loaded) is not here: nothing is
+# cut on the score (rapid_docs decisions.md, rb-port). Kept apart from the
+# xsources' thresholds below, where dev reads one section for both, so
+# either can change without the other; the value is dev's (rapid_docs
+# decisions.md, sources-prefilter, Russ Laher, 2026-11-07).
+sumrat_prefilter_threshold = 0.4
+
+[difference.database_prefilter]
+# [DATABASE_PREFILTER], the xsources' cuts.
 sumrat_prefilter_threshold = 0.4
 # xsources (rapidpipe.science.difference.xsources), as dev's XSources loader
 # (loadSECatIntoDBSourcesTable.py, d2657f7d) cuts them: a source is dropped

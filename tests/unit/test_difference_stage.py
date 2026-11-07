@@ -326,7 +326,7 @@ def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fak
     expected, _ = source_set(
         sfft_catalog, KEY, PID, MJDOBS, header["NAXIS1"], header["NAXIS2"],
         max_sources=THIN["difference"]["max_sources"],
-        sumrat_prefilter_threshold=THIN["difference"]["database_prefilter"]["sumrat_prefilter_threshold"])
+        sumrat_prefilter_threshold=THIN["difference"]["sources_prefilter"]["sumrat_prefilter_threshold"])
     sources = read(prefix, "sources")
     assert [(s["sid"], s["xfit"], s["yfit"]) for s in sources] == [
         (s["sid"], s["xfit"], s["yfit"]) for s in expected.to_pylist()]
@@ -389,7 +389,7 @@ def test_sfft_with_the_prefilter_disabled_keeps_the_set_before_it(tmp_path, file
     """No sumrat on any source, so the prefilter would drop every one; "" bypasses all of it."""
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
     prefix = run_difference(tmp_path, files,
-                            body=settings(database_prefilter={"sumrat_prefilter_threshold": ""}))
+                            body=settings(sources_prefilter={"sumrat_prefilter_threshold": ""}))
     expected = _unprefiltered(prefix, "sfftdiffimage_masked_psfcat.parquet")
     assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
 
@@ -616,7 +616,8 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
     published image's pixels; the SFFT catalogs and the source set gain sumrat, nneg and nbad."""
     (tmp_path / "with").mkdir()
     (tmp_path / "without").mkdir()
-    unfiltered = settings(database_prefilter={"sumrat_prefilter_threshold": ""})  # no sumrat, no cut
+    unfiltered = settings(sources_prefilter={"sumrat_prefilter_threshold": ""},  # no sumrat, no cut
+                          database_prefilter={"sumrat_prefilter_threshold": ""})
     after = run_difference(tmp_path / "with", files, body=unfiltered)
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
     before = run_difference(tmp_path / "without", files, body=unfiltered)
@@ -818,3 +819,18 @@ def test_reference_psf_science_takes_the_metrics_stars_from_the_reference_catalo
     assert recorded["n_residual_stars"] == 3
     assert recorded["n_sources_ring_snr_gt20"] == 1                 # 10 px from the star at (50, 60)
     assert {"core_fraction", "ring_fraction", "registration_dy_px"} <= set(recorded)
+
+
+def test_the_sources_and_the_xsources_prefilters_are_set_apart(tmp_path, files, fakes):
+    """sources_prefilter cuts the source set alone, database_prefilter the xsources alone."""
+    def run(name, **tables):
+        (tmp_path / name).mkdir()
+        prefix = run_difference(tmp_path / name, files, body=settings(**tables))
+        return ([(s["isdiffpos"], s["sid"]) for s in read(prefix, "sources")],
+                [(x["isdiffpos"], x["num"]) for x in read(prefix, "xsources")])
+
+    sources, xsources_rows = run("shipped")
+    assert sources and xsources_rows
+    shut = {"sumrat_prefilter_threshold": 1e9}   # every finite sumrat is at or below it
+    assert run("x", database_prefilter=shut) == (sources, [])
+    assert run("s", sources_prefilter=shut) == ([], xsources_rows)
