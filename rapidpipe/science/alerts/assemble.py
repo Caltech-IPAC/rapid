@@ -1,4 +1,4 @@
-# ported-from: alerts/produce.py, alerts/providers.py @ 883e3876
+# ported-from: alerts/produce.py, alerts/providers.py @ 82bbca68
 """Alert assembly and the Avro container, ported from `dev`'s ``alerts/produce.py``.
 
 `origin/dev`'s ``alerts/produce.py`` (Emily Everetts, 07/26), as pure

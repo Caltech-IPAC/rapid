@@ -1,4 +1,4 @@
-# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 883e3876
+# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 82bbca68
 """``packet``: one difference image's alert packets, schema 00.07, from named inputs.
 
 Foundation plan v5, Part 2: a new port of `dev`'s ``alerts/`` package. It

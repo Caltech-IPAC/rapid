@@ -1,4 +1,4 @@
-# ported-from: alerts/forced_phot.py @ 01f89299
+# ported-from: alerts/forced_phot.py @ 82bbca68
 """Forced PSF photometry at fixed sky positions, ported from `dev`'s ``alerts/forced_phot.py``.
 
 `dev` 01f89299 (the science PSF from the psfs table per window image, a
@@ -6,7 +6,13 @@
 on an image with no row) is carried by the packet stage, not here: each
 window image's PSF is the row its difference job named
 (``rapidpipe.stages.packet.science_psfs``), :func:`load_psf` normalizes
-in memory, and ``measure_forced`` skips the science product.
+in memory, and ``measure_forced`` skips the science product. `dev`
+0496532d (a per-object parquet store in S3 by field, object and month,
+ETag-guarded, a pooled S3 client) and 82bbca68 (the psfs file itself as
+the science PSF, staged once per distinct file) are covered the same
+way: the ``forced`` table, by field and object, is the store, a packet
+job copies the rows an official set holds, and each distinct PSF is
+fetched once. Nothing of either is ported here.
 
 `origin/dev`'s ``alerts/forced_phot.py`` (Emily Everetts, 09/2026), the
 sections the packet stage needs, copied unchanged: the records
