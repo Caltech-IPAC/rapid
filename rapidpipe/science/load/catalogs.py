@@ -197,8 +197,8 @@ def prefilter(catalog, naxis1: int, naxis2: int, sumrat_prefilter_threshold: flo
     rejected, and the nearest pixel ``floor(x + 0.5)`` of the zero-based fit
     position at least :data:`EDGE_MARGIN` from every edge (57559572, `dev`'s
     XSources loader). Both differ from `dev`'s PSF path, which passes a
-    missing sumrat and has no edge cut (decisions.md, dev-prefilter). `dev`'s
-    ``rb > 0`` is not applied: nothing is cut on the score (decisions.md, rb-port).
+    missing sumrat and has no edge cut (decisions.md, dev-prefilter). The rb
+    and S/N cuts are :func:`source_set`'s own (decisions.md, sources-prefilter).
     """
     n = catalog.num_rows
     sumrat = (catalog.column("sumrat").to_numpy().astype(float)
@@ -211,10 +211,57 @@ def prefilter(catalog, naxis1: int, naxis2: int, sumrat_prefilter_threshold: flo
                 & (ynear >= EDGE_MARGIN) & (ynear <= naxis2 - 1 - EDGE_MARGIN))
 
 
+#: The thresholds of ``[difference.sources_database_prefilter]``, as :func:`source_set` takes them.
+SOURCES_PREFILTER_KEYS = ("sumrat_prefilter_threshold", "rb_prefilter_threshold",
+                          "snr_prefilter_threshold")
+
+
+def sources_prefilter(settings: dict) -> dict[str, float | None]:
+    """The run's prefilter thresholds for ``sources``, as :func:`source_set`'s keyword arguments.
+
+    ``[difference.sources_database_prefilter]``, kept apart from
+    ``[difference.xsources_database_prefilter]``, the xsources' thresholds. A run
+    body stored before the split has neither: it takes its shared
+    ``[difference.database_prefilter]``'s sumrat threshold and no rb or S/N
+    cut, as it did (rapid_docs decisions.md, sources-prefilter).
+
+    Parameters
+    ----------
+    settings : dict
+        The run's ``[difference]`` table.
+
+    Returns
+    -------
+    dict of str to float or None
+        Each of :data:`SOURCES_PREFILTER_KEYS`; None where the value is
+        ``""`` or absent, meaning no such cut.
+
+    Raises
+    ------
+    ValueError
+        A value is neither ``""`` nor a number.
+    """
+    if "sources_database_prefilter" in settings:
+        table, keys = "sources_database_prefilter", SOURCES_PREFILTER_KEYS
+    else:
+        table, keys = "database_prefilter", SOURCES_PREFILTER_KEYS[:1]   # a body before the split
+    out = dict.fromkeys(SOURCES_PREFILTER_KEYS)
+    for name in keys:
+        value = settings.get(table, {}).get(name, "")
+        if value == "":
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"[difference.{table}] {name} must be empty or a number, got {value!r}")
+        out[name] = float(value)
+    return out
+
+
 def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2: int, *,
                max_sources: int | None, xy_fit_min: float = XY_FIT_MIN,
                xy_fit_max_offset: float = XY_FIT_MAX_OFFSET,
-               sumrat_prefilter_threshold: float | None = None, isdiffpos: bool = True,
+               sumrat_prefilter_threshold: float | None = None,
+               rb_prefilter_threshold: float | None = None,
+               snr_prefilter_threshold: float | None = None, isdiffpos: bool = True,
                sid_offset: int = 0):
     """Map one sign's joined PSF-fit catalog onto ``sources`` rows.
 
@@ -247,6 +294,12 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
         `dev`'s database prefilter: ``sumrat`` finite and above this, and the
         nearest pixel at least :data:`EDGE_MARGIN` from the edge; ``None``
         applies none of it.
+    rb_prefilter_threshold : float or None
+        A row with a finite ``rb_score`` at or below this is dropped, an
+        unscored one kept, as `dev`'s loader cuts; ``None`` for no such cut.
+    snr_prefilter_threshold : float or None
+        A row whose ``flux_fit / flux_err`` is at or below this is dropped
+        (`dev` makes no S/N cut on its sources); ``None`` for no such cut.
     isdiffpos : bool
         The catalog's sign, on every row: true for the positive difference
         image, false for the negative.
@@ -281,6 +334,13 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
             & (y <= naxis2 - xy_fit_max_offset) & np.isfinite(snr))
     if sumrat_prefilter_threshold is not None:
         keep &= prefilter(catalog, naxis1, naxis2, sumrat_prefilter_threshold)
+    if rb_prefilter_threshold is not None and "rb_score" in catalog.column_names:
+        rb = column("rb_score").astype(float)
+        with np.errstate(invalid="ignore"):
+            keep &= ~(np.isfinite(rb) & (rb <= rb_prefilter_threshold))
+    if snr_prefilter_threshold is not None:
+        with np.errstate(invalid="ignore"):
+            keep &= snr > snr_prefilter_threshold
     if max_sources is None or max_sources == -1:
         limit = None                    # no cap
     elif isinstance(max_sources, int) and not isinstance(max_sources, bool) and max_sources >= 0:

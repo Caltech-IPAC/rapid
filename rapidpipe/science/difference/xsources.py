@@ -486,7 +486,7 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
         That image, its uncertainty image and its PSF.
     settings : dict
         The stage's ``[difference]`` table: ``sumrat``, ``extra_catalog_cols``,
-        ``psfcat_diffimage`` and ``database_prefilter``.
+        ``psfcat_diffimage`` and ``xsources_database_prefilter`` (:func:`prefilter_table`).
 
     Returns
     -------
@@ -500,7 +500,7 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
     out = dict(columns.pixel_columns(data, x0, y0, settings))
     e = settings["extra_catalog_cols"]
     p = settings["psfcat_diffimage"]
-    f = settings["database_prefilter"]
+    f = prefilter_table(settings)
     if e["photutils_cols_prefilter_only"]:
         ny, nx = np.shape(data)
         index = fit_selection(catalog, out, nx, ny,
@@ -521,8 +521,28 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
     return out, len(index)
 
 
+def prefilter_table(settings: dict[str, Any]) -> dict[str, Any]:
+    """The run's xsources prefilter thresholds, ``[difference.xsources_database_prefilter]``.
+
+    Parameters
+    ----------
+    settings : dict
+        The run's ``[difference]`` table.
+
+    Returns
+    -------
+    dict
+        The table; a run body stored before the split has the shared
+        ``[difference.database_prefilter]`` instead, which this returns
+        (rapid_docs decisions.md, sources-prefilter).
+    """
+    if "xsources_database_prefilter" in settings:
+        return settings["xsources_database_prefilter"]
+    return settings["database_prefilter"]
+
+
 def threshold(table: dict[str, Any], key: str) -> float | None:
-    """A ``[difference.database_prefilter]`` threshold; ``""`` is none."""
+    """A ``[difference.xsources_database_prefilter]`` threshold; ``""`` is none."""
     value = table.get(key, "")
     return None if value == "" else float(value)
 
@@ -678,6 +698,6 @@ def xsources_table(parts: Sequence[dict[str, np.ndarray]]):
 __all__: Sequence[str] = (
     "CATALOG_FILL_VALUE", "EDGE_MARGIN", "EXTRA_COLUMNS", "PHOTUTILS_COLUMNS", "SEXTRACTOR_COLUMNS", "aperture_snr",
     "catalog_extra_columns", "daofind_columns", "extra_columns", "fit_selection", "photutils_columns",
-    "positions_within_image", "prefilter", "rb_input", "read_catalog", "snap_to_daofind_peak", "threshold",
+    "positions_within_image", "prefilter", "prefilter_table", "rb_input", "read_catalog", "snap_to_daofind_peak", "threshold",
     "xsource_rows", "xsources_table",
 )
