@@ -87,7 +87,7 @@ CRVAL = (269.4521, -28.7710)
 EXPTIME = 140.0
 ZPTMAG = 17.0
 STARS = ((20.0, 22.0, 4000.0), (40.0, 18.0, 2500.0), (30.0, 44.0, 6000.0), (50.0, 50.0, 3000.0))
-TRANSIENT = (12.0, 40.0, 7000.0)   # in the science image only; PSF-fit S/N above the shipped 5
+TRANSIENT = (12.0, 40.0, 7000.0)   # in the science image only; PSF-fit S/N well above a 5.0 S/N cut
 VANISHED = (46.0, 30.0, 7000.0)    # write_epoch(vanished=True): in the reference only, a negative
 
 

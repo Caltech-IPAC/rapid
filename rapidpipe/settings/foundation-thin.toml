@@ -735,9 +735,11 @@ sumrat_prefilter_threshold = 0.4
 # one kept, as dev's loader cuts; "" is no such cut.
 rb_prefilter_threshold = 0.0
 # A source whose PSF-fit S/N, flux_fit / flux_err (the S/N max_sources ranks
-# by), is at or below this is dropped; dev makes no S/N cut on its sources,
-# and its xsources' S/N is the 3 px aperture's. "" is no such cut.
-snr_prefilter_threshold = 5.0
+# by), is at or below this is dropped; "" is no such cut. Shipped off: dev
+# makes no S/N cut on its sources (its xsources' S/N is the 3 px aperture's),
+# and what a cut costs in recovered transients is unmeasured; a value is set
+# once a run has measured it (Ben Rusholme, 2026-11-07).
+snr_prefilter_threshold = ""
 
 [difference.xsources_database_prefilter]
 # [DATABASE_PREFILTER], the xsources' cuts. A run body stored before the
