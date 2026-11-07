@@ -7,9 +7,10 @@
 # is RAPIDPIPE_OUTPUTS_ROOT.
 
 [import]
-# The brightest sources kept per difference image, by fluxfit / fluxerr;
-# -1 is no cap, keeping every source, as dev, which caps nothing; 0 keeps
-# none (Russ Laher, 2026-11-06).
+# The brightest sources kept from each of a difference image's two PSF-fit
+# catalogs, by fluxfit / fluxerr; -1 is no cap, keeping every source, as
+# dev, which caps nothing; 0 keeps none (Russ Laher, 2026-11-06). The
+# import's xsources are never capped, as the difference job's are not.
 max_sources = -1
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5

@@ -211,3 +211,17 @@ def test_a_value_that_cannot_be_computed_is_null_and_nothing_fails(damage):
         assert table[4]["sumrat"] is not None                        # the bright source, untouched
     if damage in ("nan_patch", "zero_uncertainty"):
         assert table[4]["fluxfit"] == pytest.approx(500.0, rel=0.15)
+
+
+def test_devs_extra_columns_read_back_from_its_catalog_with_its_fill_value_null(tmp_path):
+    lines = ["#   1 NUMBER                 x", "#   2 FLAGS                  x",
+             "#   3 SUMRAT                 x", "#   4 FLAGS_FIT              x",
+             "#   5 RB_SCORE               x", "1 2 0.5 4 -999.0", "2 0 -999.0 -999.0 0.75"]
+    path = tmp_path / "cat.txt"
+    path.write_text("\n".join(lines) + "\n")
+    extra = xsources.catalog_extra_columns(xsources.read_catalog(path))
+    assert set(extra) == {name for name, _, _ in xsources.EXTRA_COLUMNS}
+    np.testing.assert_array_equal(extra["sumrat"], [0.5, np.nan])
+    np.testing.assert_array_equal(extra["flags"], [4.0, np.nan])   # FLAGS_FIT, not SExtractor's FLAGS
+    np.testing.assert_array_equal(extra["rb_score"], [np.nan, 0.75])
+    assert np.isnan(extra["cfit"]).all() and len(extra["cfit"]) == 2

@@ -6,7 +6,9 @@ Contracts: each output Parquet file has exactly its table's columns from
 source set is the ``max_sources`` brightest by flux over flux error inside
 the fit-position bounds; overlapping fields and sky indices are computed
 from the image's WCS; the manifest declares every table and the
-provenance line; a PSF imports under its declared kind, which `dev`'s
+provenance line; both signs' PSF-fit catalogs load into ``sources`` and
+both SExtractor catalogs into ``xsources``, with the extra columns `dev`
+wrote into them, as `dev`'s loaders read them; a PSF imports under its declared kind, which `dev`'s
 ``PSFKIND`` keyword must not contradict; an import supplies no identity
 column but the source system's ids the plan keeps.
 """
@@ -33,7 +35,10 @@ from tests.support.catalogs import write_gaia_store
 REPO = Path(__file__).resolve().parents[2]
 RA, DEC = 267.96138, -28.72761
 SETTINGS = {"import": {"max_sources": 3, "xy_fit_min": -0.5, "xy_fit_max_offset": 0.5,
-                       "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10}}
+                       "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10},
+            "difference": {"database_prefilter": {"sumrat_prefilter_threshold": 0.4,
+                                                  "rb_prefilter_threshold": 0.0,
+                                                  "snr_prefilter_threshold": 5.0}}}
 EPOCHS = [{"expid": 101, "rid": 7001, "pid": 9001, "rfid": 55, "l2": "l2/one.fits",
            "difference": "jid1", "mjd": 61685.3},
           {"expid": 102, "rid": 7002, "pid": 9002, "rfid": 55, "l2": "l2/two.fits",
@@ -80,6 +85,51 @@ def catalog(path: Path) -> None:
         "x_fit": x, "y_fit": np.full(n, 20.0), "flux_fit": snr * 10.0, "flux_err": flux_err,
         "n_pixels_fit": np.full(n, 25), "flags": np.zeros(n, dtype=np.int64),
         "n_pixels": np.full(n, 9), **floats}), path)
+
+
+#: dev's SExtractor columns the XSources loader reads, then the extra columns its pipeline
+#: appends (compute_extra_cols_sxtractor), each vector with one header line at its first element.
+SEXTRACTOR = ("NUMBER", "FLAGS", "XWIN_IMAGE", "YWIN_IMAGE", "ALPHAWIN_J2000", "DELTAWIN_J2000",
+              "AWIN_WORLD", "BWIN_WORLD", "AWIN_IMAGE", "BWIN_IMAGE", "FWHM_IMAGE")
+EXTRA = ("RB_SCORE", "NNEG", "NBAD", "SUMRAT", "SHARPNESS", "ROUNDNESS1", "ROUNDNESS2", "FLUX_FIT",
+         "SNR_FIT", "REDUCED_CHI2", "N_PIXELS_FIT", "FLAGS_FIT", "CFIT", "RB_LABEL")
+
+
+def sextractor_catalog(path: Path, rows: list[dict], extra: bool = True) -> None:
+    """A SExtractor ASCII_HEAD catalog; each row gives x, y, snr and any extra column by name (else 0.5)."""
+    header, n = [], 1
+    for name in SEXTRACTOR:
+        header.append(f"#{n:4d} {name:<22s} x")
+        n += 1
+    for name in ("FLUX_APER", "FLUXERR_APER"):
+        header.append(f"#{n:4d} {name:<22s} x")
+        n += 6
+    header.append(f"#{n:4d} {'CLASS_STAR':<22s} x")   # a vector's width is read from the next line
+    n += 1
+    if extra:
+        for name in EXTRA:
+            header.append(f"#{n:4d} {name:<22s} x")
+            n += 1
+    lines = []
+    for i, row in enumerate(rows, start=1):
+        values = [i, 0, row["x"], row["y"], RA + i * 1e-4, DEC, 1e-4, 1e-4, 2.0, 2.0, 2.5]
+        values += [100.0] * 6 + [100.0 / row["snr"]] * 6 + [0.9]
+        if extra:
+            values += [row.get(name, 0.5) for name in EXTRA]
+        lines.append(" ".join(f"{v:.6f}" if isinstance(v, float) else str(v) for v in values))
+    path.write_text("\n".join(header + lines) + "\n")
+
+
+#: dev's loader's cuts on a 65-pixel image: kept, at the edge, sumrat <= 0.4, rb missing
+#: (-999, never cut), rb <= 0, aperture S/N <= 5.
+XSOURCES_POSITIVE = [{"x": 10.0, "y": 20.0, "snr": 20.0, "SUMRAT": 0.9, "RB_SCORE": 0.8, "RB_LABEL": 1},
+                     {"x": 1.5, "y": 20.0, "snr": 20.0, "SUMRAT": 0.9},
+                     {"x": 12.0, "y": 20.0, "snr": 20.0, "SUMRAT": 0.2},
+                     {"x": 14.0, "y": 20.0, "snr": 20.0, "SUMRAT": 0.9, "RB_SCORE": -999.0,
+                      "RB_LABEL": -1, "FLUX_FIT": -999.0},
+                     {"x": 16.0, "y": 20.0, "snr": 20.0, "SUMRAT": 0.9, "RB_SCORE": 0.0},
+                     {"x": 18.0, "y": 20.0, "snr": 3.0, "SUMRAT": 0.9}]
+XSOURCES_NEGATIVE = [{"x": 30.0, "y": 30.0, "snr": 9.0, "SUMRAT": 0.7, "RB_SCORE": 0.6, "FLAGS_FIT": 4}]
 
 
 @pytest.fixture()
@@ -336,3 +386,66 @@ def test_an_import_supplies_no_identity_column_but_the_kept_source_ids(tmp_path,
                 and column in pq.read_schema(prefix / f"{table}.parquet").names}
     assert {table for table, _ in identity_columns()} & tables, "the import writes no identity table"
     assert supplied <= KEPT_SOURCE_IDS
+
+
+def test_the_negative_psf_fit_catalog_loads_numbered_after_the_positive_and_capped_by_sign(
+        tmp_path, source):
+    catalog(source / "jid1" / import_products.DIFFERENCE_CATALOG_NEGATIVE)
+    prefix = run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "both")
+    rows = read(prefix, "sources")
+    # The same eight in each sign: 7, 6, 5 kept by the cap of 3, the negatives' sid after id 8.
+    assert sorted((r["isdiffpos"], r["sid"]) for r in rows) == [
+        (False, 13), (False, 14), (False, 15), (True, 5), (True, 6), (True, 7)]
+    assert set(pq.read_schema(prefix / "sources.parquet").names) == schema_columns("sources")
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["sources_kept"] == {"positive": 3, "negative": 3}
+    assert manifest["xsources"] is None
+
+
+def test_without_the_negative_catalog_the_set_holds_the_positive_sources_only(tmp_path, source):
+    prefix = run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "positive")
+    assert {r["isdiffpos"] for r in read(prefix, "sources")} == {True}
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["sources_kept"] == {"positive": 3, "negative": None}
+
+
+def test_xsources_are_devs_loaders_rows_with_the_extra_columns_dev_wrote(tmp_path, source):
+    names = import_products.XSOURCES_CATALOGS
+    sextractor_catalog(source / "jid1" / names["positive"], XSOURCES_POSITIVE)
+    sextractor_catalog(source / "jid1" / names["negative"], XSOURCES_NEGATIVE)
+    prefix = run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "x")
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert "xsources" in {o["table"] for o in manifest["outputs"]}
+    assert manifest["xsources"] == {"read": {"positive": 6, "negative": 1},
+                                    "kept": {"positive": 2, "negative": 1}}
+    assert set(pq.read_schema(prefix / "xsources.parquet").names) == schema_columns("xsources")
+    rows = read(prefix, "xsources")
+    assert [(r["xsid"], r["num"], r["isdiffpos"]) for r in rows] == [
+        (1, 1, True), (2, 4, True), (3, 1, False)]
+    assert (rows[0]["rb"], rows[0]["rblabel"], rows[0]["sumrat"]) == (0.8, 1, 0.9)
+    assert rows[1]["rb"] is None and rows[1]["fluxfit"] is None and rows[1]["rblabel"] == -1
+    assert (rows[2]["rb"], rows[2]["flagsfit"], rows[2]["fluxap1"]) == (0.6, 4, 100.0)
+    assert {(r["pid"], r["expid"]) for r in rows} == {(EPOCHS[0]["pid"], EPOCHS[0]["expid"])}
+    for row in rows:
+        assert row["field"] == tessellation_field(row["ra"], row["dec"])
+
+
+def test_a_catalog_without_devs_extra_columns_loads_them_null_and_is_not_cut_on_them(
+        tmp_path, source):
+    names = import_products.XSOURCES_CATALOGS
+    sextractor_catalog(source / "jid1" / names["positive"], XSOURCES_POSITIVE, extra=False)
+    sextractor_catalog(source / "jid1" / names["negative"], [], extra=False)
+    prefix = run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "bare")
+    rows = read(prefix, "xsources")
+    # Only the edge and the aperture S/N cut: rows 1, 3, 4 and 5 stay.
+    assert [r["num"] for r in rows] == [1, 3, 4, 5]
+    assert all(r["sumrat"] is None and r["rb"] is None for r in rows)
+
+
+def test_one_sextractor_catalog_without_the_other_is_rejected_65(tmp_path, source):
+    sextractor_catalog(source / "jid1" / import_products.XSOURCES_CATALOGS["positive"],
+                       XSOURCES_POSITIVE)
+    with pytest.raises(CommandExit) as caught:
+        run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "half")
+    assert caught.value.code == 65
+    assert "sfftdiffimage_masked_negative.txt" in str(caught.value)

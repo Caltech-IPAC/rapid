@@ -23,7 +23,9 @@
   (:func:`prefilter`: sumrat, rb and the 3 px aperture's S/N, each cut
   only where its value is finite). It maps the source onto the
   ``xsources`` columns (:func:`xsource_rows`) with a tessellation field and
-  HEALPix indices of its own.
+  HEALPix indices of its own. An imported epoch's extra columns are the
+  ones `dev` wrote into its catalogs, read back as the loader reads them
+  (:func:`catalog_extra_columns`).
 
 Three things differ from `dev`:
 
@@ -89,6 +91,11 @@ EXTRA_COLUMNS = (
     ("reduced_chi2", "redchi", False), ("n_pixels_fit", "npixfit", True),
     ("flags", "flagsfit", True), ("cfit", "cfit", False), ("rb_label", "rblabel", True),
 )
+
+
+#: `dev`'s fill value for an extra column it could not compute (its ini's four
+#: ``fill_value`` keys, all -999.0), which its XSources loader loads as null.
+CATALOG_FILL_VALUE = -999.0
 
 
 def read_catalog(path: Path):
@@ -547,6 +554,34 @@ def rb_input(extra: dict[str, np.ndarray]):
     return pa.table(table)
 
 
+def catalog_extra_columns(catalog) -> dict[str, np.ndarray]:
+    """The extra columns `dev`'s pipeline wrote into a SExtractor catalog, as its XSources loader reads them.
+
+    Parameters
+    ----------
+    catalog : astropy.table.Table
+        A catalog as :func:`read_catalog` gives it, with the upper-case extra
+        columns ``compute_extra_cols_sxtractor`` appends (``FLAGS_FIT`` for
+        the fit's ``flags``), or without them where `dev` could not add them.
+
+    Returns
+    -------
+    dict of str to numpy.ndarray
+        Each of :data:`EXTRA_COLUMNS`' computed names, one float per row, NaN
+        where the column is absent, holds :data:`CATALOG_FILL_VALUE` or is not finite.
+    """
+    out = {}
+    for name, _, _ in EXTRA_COLUMNS:
+        source = "FLAGS_FIT" if name == "flags" else name.upper()
+        if source not in catalog.colnames:
+            out[name] = np.full(len(catalog), np.nan)
+            continue
+        values = np.ma.filled(np.ma.asarray(catalog[source], dtype=np.float64), np.nan)
+        values[(values == CATALOG_FILL_VALUE) | ~np.isfinite(values)] = np.nan
+        out[name] = values
+    return out
+
+
 def xsource_rows(catalog, extra: dict[str, np.ndarray], *, isdiffpos: bool, key: dict, pid: int,
                  mjdobs: float, naxis1: int, naxis2: int,
                  thresholds: dict[str, float | None]) -> tuple[dict[str, np.ndarray], int]:
@@ -641,8 +676,8 @@ def xsources_table(parts: Sequence[dict[str, np.ndarray]]):
 
 
 __all__: Sequence[str] = (
-    "EDGE_MARGIN", "EXTRA_COLUMNS", "PHOTUTILS_COLUMNS", "SEXTRACTOR_COLUMNS", "aperture_snr",
-    "daofind_columns", "extra_columns", "fit_selection", "photutils_columns",
+    "CATALOG_FILL_VALUE", "EDGE_MARGIN", "EXTRA_COLUMNS", "PHOTUTILS_COLUMNS", "SEXTRACTOR_COLUMNS", "aperture_snr",
+    "catalog_extra_columns", "daofind_columns", "extra_columns", "fit_selection", "photutils_columns",
     "positions_within_image", "prefilter", "rb_input", "read_catalog", "snap_to_daofind_peak", "threshold",
     "xsource_rows", "xsources_table",
 )
