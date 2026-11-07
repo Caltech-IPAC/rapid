@@ -46,6 +46,7 @@ OPTIONAL_BY_REQUIREMENT = {
     "romancal": "romancal.assign_wcs.assign_wcs",
     "gwcs": "gwcs",
     "sympy": "sympy",
+    "sip_tpv": "sip_tpv",
     "photutils": "photutils.psf",
     "galsim": "galsim.roman",
     "requests": "requests",

@@ -33,7 +33,6 @@
 #                            -- py_zogy.py and sfft_rapid*.py, run as
 #                               scripts from /code/modules/... (settings
 #                               `zogy_code`, `sfft_code`).
-#   modules/sip_tpv          -- imported by science/difference/resample.py.
 #   modules/rubrat           -- the real/bogus classifier, run by
 #                               science/difference/realbogus.py in the
 #                               sidecar environment (the Containerfile).
@@ -149,7 +148,6 @@ INCLUDE_PATHS=(
   cdf
   modules/zogy
   modules/sfft
-  modules/sip_tpv
   modules/rubrat
   database/modules/utils/roman_tessellation.py
   database/modules/utils/roman_tessellation_db.py

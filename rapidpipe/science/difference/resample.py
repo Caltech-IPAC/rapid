@@ -58,9 +58,9 @@ def build_swarp_command_line_args(swarp_dict: Mapping[str, str], executable: str
 
 
 def _default_sip_to_pv(header) -> None:
-    # Imported here, not at module scope: the vendored converter pulls in
-    # sympy, which only the stage's own run needs.
-    from modules.sip_tpv.sip_tpv.sip_to_pv import sip_to_pv
+    # Imported here, not at module scope: the converter pulls in sympy,
+    # which only the stage's own run needs.
+    from sip_tpv import sip_to_pv
 
     sip_to_pv(header)
 
