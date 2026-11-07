@@ -37,7 +37,9 @@ REPO = Path(__file__).resolve().parents[2]
 RA, DEC = 267.96138, -28.72761
 SETTINGS = {"import": {"max_sources": 3, "xy_fit_min": -0.5, "xy_fit_max_offset": 0.5,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10},
-            "difference": {"sources_prefilter": {"sumrat_prefilter_threshold": 0.4},
+            "difference": {"sources_prefilter": {"sumrat_prefilter_threshold": 0.4,
+                                                 "rb_prefilter_threshold": 0.0,
+                                                 "snr_prefilter_threshold": 5.0},
                            "database_prefilter": {"sumrat_prefilter_threshold": 0.4,
                                                   "rb_prefilter_threshold": 0.0,
                                                   "snr_prefilter_threshold": 5.0}}}
@@ -71,11 +73,11 @@ def image(path: Path, n: int = 64, **cards) -> None:
     fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(data, header)]).writeto(path)
 
 
-def catalog(path: Path, sumrat=None) -> None:
-    """Eight sources: S/N 1..8 at x = 10..17, the brightest outside the bounds, one with zero error;
-    sumrat 0.9 each unless given."""
+def catalog(path: Path, sumrat=None, rb=None, snr=None) -> None:
+    """Eight sources: S/N 10..80 at x = 10..17, the brightest outside the bounds, one with zero error;
+    sumrat 0.9 each and no rb_score column unless given."""
     n = 8
-    snr = np.arange(1.0, n + 1)
+    snr = np.arange(10.0, 10.0 * n + 1, 10.0) if snr is None else np.asarray(snr, dtype=float)
     flux_err = np.full(n, 10.0)
     flux_err[2] = 0.0
     x = 10.0 + np.arange(n)
@@ -88,7 +90,7 @@ def catalog(path: Path, sumrat=None) -> None:
         "x_fit": x, "y_fit": np.full(n, 20.0), "flux_fit": snr * 10.0, "flux_err": flux_err,
         "n_pixels_fit": np.full(n, 25), "flags": np.zeros(n, dtype=np.int64),
         "n_pixels": np.full(n, 9), "sumrat": np.full(n, 0.9) if sumrat is None else sumrat,
-        **floats}), path)
+        **({} if rb is None else {"rb_score": rb}), **floats}), path)
 
 
 #: dev's SExtractor columns the XSources loader reads, then the extra columns its pipeline
@@ -237,7 +239,7 @@ def test_overlap_and_sky_indices_are_computed_from_the_wcs(tmp_path, source):
 def test_the_source_set_is_the_brightest_inside_the_bounds(tmp_path, source):
     prefix = run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "one")
     rows = read(prefix, "sources")
-    # S/N 8 lies outside the image and S/N 3 has zero error: the three kept are 7, 6, 5.
+    # S/N 80 lies outside the image and S/N 30 has zero error: the three kept are 7, 6, 5.
     assert sorted(r["sid"] for r in rows) == [5, 6, 7]
     catalog_rows = {r["id"]: r for r in pq.read_table(
         source / "jid1" / import_products.DIFFERENCE_CATALOG).to_pylist()}
@@ -478,3 +480,18 @@ def test_the_sources_prefilter_is_the_sources_table_not_the_xsources(tmp_path, s
     # No sources cut, so null sumrat passes; the xsources keep their cuts.
     assert sorted(r["sid"] for r in read(prefix, "sources")) == [5, 6, 7]
     assert len(read(prefix, "xsources")) == 3
+
+
+def test_both_signs_sources_are_cut_on_rb_and_psf_fit_snr(tmp_path, source):
+    difference = source / "jid1"
+    rb = np.full(8, 0.9)
+    rb[6] = 0.0                              # sid 7 scored at the threshold: cut
+    rb[5] = np.nan                           # sid 6 unscored: kept
+    snr = np.arange(10.0, 81.0, 10.0)
+    snr[4] = 5.0                             # sid 5 at the S/N threshold: cut
+    catalog(difference / import_products.DIFFERENCE_CATALOG, rb=rb, snr=snr)
+    catalog(difference / import_products.DIFFERENCE_CATALOG_NEGATIVE, rb=rb, snr=snr)
+    rows = read(run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "rbsnr"), "sources")
+    # Left by S/N: 6 (unscored), 4, then 2 (3 has zero error, 1 is the faintest).
+    assert sorted((r["isdiffpos"], r["sid"]) for r in rows) == [
+        (False, 10), (False, 12), (False, 14), (True, 2), (True, 4), (True, 6)]

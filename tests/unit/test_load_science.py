@@ -241,13 +241,31 @@ def test_the_prefilter_runs_before_the_cap():
     assert table.column("sid").to_pylist() == [2]
 
 
-def test_the_sources_prefilter_threshold_is_its_own_table_or_an_older_bodys_shared_one():
-    assert catalogs.sources_prefilter_threshold(
-        {"sources_prefilter": {"sumrat_prefilter_threshold": 0.3},
-         "database_prefilter": {"sumrat_prefilter_threshold": 0.7}}) == 0.3
-    assert catalogs.sources_prefilter_threshold(
-        {"database_prefilter": {"sumrat_prefilter_threshold": 0.7}}) == 0.7   # before the split
-    assert catalogs.sources_prefilter_threshold(
-        {"sources_prefilter": {"sumrat_prefilter_threshold": ""}}) is None
-    with pytest.raises(ValueError, match="sources_prefilter"):
-        catalogs.sources_prefilter_threshold({"sources_prefilter": {"sumrat_prefilter_threshold": "0.4"}})
+def test_the_sources_prefilter_is_its_own_table_or_an_older_bodys_sumrat_alone():
+    shared = {"sumrat_prefilter_threshold": 0.7, "rb_prefilter_threshold": 0.2,
+              "snr_prefilter_threshold": 9.0}
+    assert catalogs.sources_prefilter(
+        {"sources_prefilter": {"sumrat_prefilter_threshold": 0.3, "rb_prefilter_threshold": 0.0,
+                               "snr_prefilter_threshold": ""},
+         "database_prefilter": shared}) == {
+        "sumrat_prefilter_threshold": 0.3, "rb_prefilter_threshold": 0.0, "snr_prefilter_threshold": None}
+    assert catalogs.sources_prefilter({"database_prefilter": shared}) == {   # before the split
+        "sumrat_prefilter_threshold": 0.7, "rb_prefilter_threshold": None, "snr_prefilter_threshold": None}
+    with pytest.raises(ValueError, match="sources_prefilter. rb_prefilter_threshold"):
+        catalogs.sources_prefilter({"sources_prefilter": {"rb_prefilter_threshold": "0.0"}})
+
+
+def test_the_rb_and_snr_cuts_drop_at_or_below_and_pass_an_unscored_source():
+    import pyarrow as pa
+
+    rows = _prefilter_rows([5.0] * 4, [0.9] * 4, [40.0, 30.0, 20.0, 5.0])   # S/N = flux_fit
+    rows = rows.append_column("rb_score", pa.array([0.5, 0.0, None, 0.9], pa.float64()))
+    table, candidates = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=-1,
+                                            rb_prefilter_threshold=0.0)
+    assert table.column("sid").to_pylist() == [1, 3, 4] and candidates == 3   # rb 0.0 cut, null passes
+    table, _ = catalogs.source_set(rows, KEY, 7, 60000.0, 10, 10, max_sources=-1,
+                                   snr_prefilter_threshold=5.0)
+    assert table.column("sid").to_pylist() == [1, 2, 3]                       # S/N 5.0 cut
+    table, _ = catalogs.source_set(rows.drop_columns(["rb_score"]), KEY, 7, 60000.0, 10, 10,
+                                   max_sources=-1, rb_prefilter_threshold=0.0)
+    assert table.num_rows == 4                                                # never scored: none cut

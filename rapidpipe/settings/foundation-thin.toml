@@ -718,21 +718,26 @@ filter_size = 3
 lower_median = false
 
 [difference.sources_prefilter]
-# The sources' share of dev's [DATABASE_PREFILTER]
+# The sources' cuts of dev's [DATABASE_PREFILTER]
 # (loadPSFCatIntoDBSourcesTable.py, rapid_pipeline_subs.py
 # prefilter_database_records at c931b001), applied by source_set to both of
 # SFFT's PSF-fit catalogs before the max_sources cap, in the difference job
-# and the import; ZOGY's catalog carries no sumrat and is not prefiltered. A
-# source is kept when its sumrat is above this, finite (a null sumrat is
-# rejected, where dev passes it), and its nearest pixel is at least 2 px from
-# the image edge (dev's XSources loader, 57559572, a module constant). ""
-# applies none of it (dev: the section missing). dev's rb_prefilter_threshold
-# (0.0: a scored source with rb <= 0 is not loaded) is not here: nothing is
-# cut on the score (rapid_docs decisions.md, rb-port). Kept apart from the
-# xsources' thresholds below, where dev reads one section for both, so
-# either can change without the other; the value is dev's (rapid_docs
-# decisions.md, sources-prefilter, Russ Laher, 2026-11-07).
+# and the import. Kept apart from the xsources' thresholds below, where dev
+# reads one section for both, so either can change without the other
+# (rapid_docs decisions.md, sources-prefilter, Russ Laher, 2026-11-07).
+# A source is kept when its sumrat is above this, finite (a null sumrat is
+# rejected, where dev passes it), and its nearest pixel is at least 2 px
+# from the image edge (dev's XSources loader, 57559572, a module constant);
+# "" applies neither (dev: the section missing). ZOGY's catalog carries no
+# sumrat and is not prefiltered.
 sumrat_prefilter_threshold = 0.4
+# A source with a finite rb score at or below this is dropped, an unscored
+# one kept, as dev's loader cuts; "" is no such cut.
+rb_prefilter_threshold = 0.0
+# A source whose PSF-fit S/N, flux_fit / flux_err (the S/N max_sources ranks
+# by), is at or below this is dropped; dev makes no S/N cut on its sources,
+# and its xsources' S/N is the 3 px aperture's. "" is no such cut.
+snr_prefilter_threshold = 5.0
 
 [difference.database_prefilter]
 # [DATABASE_PREFILTER], the xsources' cuts.
@@ -742,8 +747,7 @@ sumrat_prefilter_threshold = 0.4
 # when its finite sumrat is at or below sumrat_prefilter_threshold, its
 # finite rb score at or below rb_prefilter_threshold, or its finite S/N in
 # the 3 px aperture (FLUX_APER_1 / FLUXERR_APER_1) at or below
-# snr_prefilter_threshold; a missing value is never cut. The rb cut is
-# xsources' alone: sources keeps the rb-port ruling (rapid_docs
+# snr_prefilter_threshold; a missing value is never cut (rapid_docs
 # decisions.md, xsources). The PSF fits of xsources run only on the sources
 # that pass the sumrat and S/N cuts (extra_catalog_cols
 # photutils_cols_prefilter_only). "" is no such cut.

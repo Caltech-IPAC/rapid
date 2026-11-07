@@ -52,7 +52,7 @@ from rapidpipe.products.diffimage import catalog_outcome_bit
 from rapidpipe.science.alerts import forced
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES
 from rapidpipe.science.difference.tools import ToolFailed
-from rapidpipe.science.load.catalogs import source_set
+from rapidpipe.science.load.catalogs import source_set, sources_prefilter
 from rapidpipe.foundation.local import JobContext
 from tests.support.fakedifftools import (
     FakePsfCatalog,
@@ -84,6 +84,11 @@ def schema_columns(table: str) -> set[str]:
 # dev's socsims [SFFT] block: no cross-convolution, so SFFT writes its plain file names.
 SOCSIMS_SFFT = {"crossconv_flag": False, "sfft_bsmask_value": "20000.0", "sfft_bsmask_radius": "30.0",
                 "sfft_use_gainmatch_catalogs": False, "sfft_use_segmentation": False}
+
+
+#: [difference.sources_prefilter] with every cut off.
+NO_SOURCES_PREFILTER = {"sumrat_prefilter_threshold": "", "rb_prefilter_threshold": "",
+                        "snr_prefilter_threshold": ""}
 
 
 def settings(**tables) -> dict:
@@ -326,7 +331,7 @@ def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fak
     expected, _ = source_set(
         sfft_catalog, KEY, PID, MJDOBS, header["NAXIS1"], header["NAXIS2"],
         max_sources=THIN["difference"]["max_sources"],
-        sumrat_prefilter_threshold=THIN["difference"]["sources_prefilter"]["sumrat_prefilter_threshold"])
+        **sources_prefilter(THIN["difference"]))
     sources = read(prefix, "sources")
     assert [(s["sid"], s["xfit"], s["yfit"]) for s in sources] == [
         (s["sid"], s["xfit"], s["yfit"]) for s in expected.to_pylist()]
@@ -389,7 +394,7 @@ def test_sfft_with_the_prefilter_disabled_keeps_the_set_before_it(tmp_path, file
     """No sumrat on any source, so the prefilter would drop every one; "" bypasses all of it."""
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
     prefix = run_difference(tmp_path, files,
-                            body=settings(sources_prefilter={"sumrat_prefilter_threshold": ""}))
+                            body=settings(sources_prefilter=NO_SOURCES_PREFILTER))
     expected = _unprefiltered(prefix, "sfftdiffimage_masked_psfcat.parquet")
     assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
 
@@ -616,7 +621,7 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
     published image's pixels; the SFFT catalogs and the source set gain sumrat, nneg and nbad."""
     (tmp_path / "with").mkdir()
     (tmp_path / "without").mkdir()
-    unfiltered = settings(sources_prefilter={"sumrat_prefilter_threshold": ""},  # no sumrat, no cut
+    unfiltered = settings(sources_prefilter=NO_SOURCES_PREFILTER,  # no sumrat, no cut
                           database_prefilter={"sumrat_prefilter_threshold": ""})
     after = run_difference(tmp_path / "with", files, body=unfiltered)
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)

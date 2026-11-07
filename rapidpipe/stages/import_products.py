@@ -98,7 +98,7 @@ from rapidpipe.science.difference import xsources
 from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.science.intake import exposure_identifiers
 from rapidpipe.science.limmag import image_hdu_index, limiting_magnitude
-from rapidpipe.science.load.catalogs import source_set, sources_prefilter_threshold
+from rapidpipe.science.load.catalogs import source_set, sources_prefilter
 from rapidpipe.science.spatial import (
     healpix_indexes, image_centre_and_corners, overlapping_fields, tessellation_field)
 
@@ -306,7 +306,7 @@ def _epoch(job: JobContext, settings: dict, source: Path, epoch: dict) -> tuple[
         "status": STATUS_GOOD,
     }
     naxis = (diff_header["NAXIS1"], diff_header["NAXIS2"])
-    sources, kept = _sources(settings, sources_prefilter_threshold(job.settings["difference"]),
+    sources, kept = _sources(settings, sources_prefilter(job.settings["difference"]),
                              difference, key, epoch["pid"], mjdobs, *naxis)
     xsources_rows, xsources_record = _xsources(job.settings["difference"]["database_prefilter"],
                                                difference, key, epoch["pid"], mjdobs, *naxis)
@@ -323,7 +323,7 @@ def _fid(filter_name: str) -> int:
     return names.index(rapid_filter_name(filter_name)) + 1
 
 
-def _sources(settings: dict, sumrat_threshold: float | None, difference: Path, key: dict, pid: int,
+def _sources(settings: dict, prefilter: dict, difference: Path, key: dict, pid: int,
              mjdobs: float, naxis1: int, naxis2: int) -> tuple[pa.Table, dict]:
     """Both PSF-fit catalogs' capped source sets: dev's position bounds and prefilter, then the brightest by flux_fit / flux_err.
 
@@ -331,10 +331,9 @@ def _sources(settings: dict, sumrat_threshold: float | None, difference: Path, k
     ----------
     settings : dict
         The ``[import]`` table: ``max_sources``, ``xy_fit_min`` and ``xy_fit_max_offset``.
-    sumrat_threshold : float or None
-        The run's sources prefilter
-        (:func:`rapidpipe.science.load.catalogs.sources_prefilter_threshold`),
-        None for none.
+    prefilter : dict
+        The run's sources prefilter thresholds
+        (:func:`rapidpipe.science.load.catalogs.sources_prefilter`).
     difference : pathlib.Path
         The difference job's directory, holding :data:`DIFFERENCE_CATALOG`
         and, when `dev` made one, :data:`DIFFERENCE_CATALOG_NEGATIVE`.
@@ -355,7 +354,7 @@ def _sources(settings: dict, sumrat_threshold: float | None, difference: Path, k
     """
     options = dict(max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
                    xy_fit_max_offset=settings["xy_fit_max_offset"],
-                   sumrat_prefilter_threshold=sumrat_threshold)
+                   **prefilter)
     catalog = pq.read_table(difference / DIFFERENCE_CATALOG)
     sources, _ = source_set(catalog, key, pid, mjdobs, naxis1, naxis2, **options)
     negative_path = difference / DIFFERENCE_CATALOG_NEGATIVE

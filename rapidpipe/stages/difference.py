@@ -227,7 +227,7 @@ from rapidpipe.science.difference import (
 from rapidpipe.science.difference.fitsops import scale_image_data
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.intake import gzip_file
-from rapidpipe.science.load.catalogs import source_set, sources_prefilter_threshold
+from rapidpipe.science.load.catalogs import source_set, sources_prefilter
 from rapidpipe.science.spatial import field_neighbours, image_centre_and_corners, tessellation_field
 
 logger = logging.getLogger(__name__)
@@ -346,7 +346,7 @@ def check_settings(settings: dict[str, Any]) -> None:
             "[difference.sfft] run_sfft = false: SFFT's difference image is the only one "
             "registered, so the job would publish nothing; there is no fallback to ZOGY")
     _zero_point_override(settings)
-    sources_prefilter_threshold(settings)
+    sources_prefilter(settings)
     skip = settings.get("skip_loading_sources_records", False)
     if not isinstance(skip, bool):
         raise ValueError(f"[difference] skip_loading_sources_records must be true or false, got {skip!r}")
@@ -930,8 +930,7 @@ def run(job: JobContext) -> None:
         "checksum": _md5_of_file(w(filename_diffimage_published)), "status": STATUS_GOOD,
     }
     set_options = dict(max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
-                       xy_fit_max_offset=settings["xy_fit_max_offset"],
-                       sumrat_prefilter_threshold=sources_prefilter_threshold(settings))
+                       xy_fit_max_offset=settings["xy_fit_max_offset"], **sources_prefilter(settings))
     sources, candidates = source_set(
         catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"], **set_options)
     # A negative source's sid follows the positive catalog's ids, so the two number apart.
