@@ -15,7 +15,7 @@
   computed only for the sources that pass the database prefilter and lie
   inside the image (:func:`fit_selection`, `dev`'s
   ``photutils_cols_prefilter_only``). Last, RuBR-AT's ``rb_score`` and
-  ``rb_label``, from :func:`rb_input` through the sidecar of
+  ``rb_label``, from :func:`rb_input` through the classifier of
   :mod:`.realbogus`.
 - The loader ``loadSECatIntoDBSourcesTable.py`` keeps a source that lies
   inside the image more than two pixels from its edge
@@ -476,7 +476,7 @@ def fit_selection(catalog, pixel: dict[str, np.ndarray], naxis1: int, naxis2: in
 
 def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
                   settings: dict[str, Any]) -> tuple[dict[str, np.ndarray], int]:
-    """`dev`'s ``compute_extra_cols_sxtractor`` but RuBR-AT, which runs in the sidecar.
+    """`dev`'s ``compute_extra_cols_sxtractor`` but RuBR-AT, which the stage adds (:func:`rb_input`).
 
     Parameters
     ----------
@@ -528,7 +528,7 @@ def threshold(table: dict[str, Any], key: str) -> float | None:
 
 
 def rb_input(extra: dict[str, np.ndarray]):
-    """The table the RuBR-AT sidecar scores, in :data:`.realbogus.CATALOG_COLUMNS`' names.
+    """The table the RuBR-AT classifier scores, in :data:`.realbogus.CATALOG_COLUMNS`' names.
 
     Parameters
     ----------

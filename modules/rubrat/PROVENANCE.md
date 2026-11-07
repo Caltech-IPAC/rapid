@@ -49,3 +49,10 @@ through the RuBR-AT classifier and the moved one: identical scores, labels, and 
 The earlier `rapid/RuBR/` directory (Ashish Mahabal, commit `90fbc83b`, 2026-05-29), a
 different six-feature model with a DANN experiment, was removed; its DANN experiment and model
 package were moved to `legacy/dann/`.
+
+# ONNX export (2026-11-07)
+
+`training/export_onnx.py` is RAPID's, not RuBR-AT's: the pipeline runs the model as ONNX on
+`onnxruntime`, so `training/train_rb.py` ends by exporting `best.keras` to `best.onnx` with
+`SHA256SUMS`, and `rapidpipe/science/difference/realbogus.py` puts an `onnxruntime` session
+where `inference/classifier.py` loads Keras.

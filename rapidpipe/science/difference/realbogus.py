@@ -24,14 +24,13 @@ Three things differ from `dev`:
 - A classifier failure fails the job, as every fault in the stage does;
   `dev` skips the columns with a warning.
 
-TensorFlow and Keras are not in the pipeline environment: the classifier
-runs as a subprocess, ``<[difference.rubrat] python> -m
-rapidpipe.science.difference.realbogus`` (:func:`main`), through the
-image's sidecar virtual environment, which sees the pipeline environment's
-packages and adds only those two and what they need (the Containerfile;
-temporary, rapid_docs ``decisions.md``, rb-port). It reads the catalog and
-writes the scored catalog beside it with a JSON summary; :func:`command`
-is the call the difference stage makes.
+The classifier runs in the stage's own process on ``onnxruntime``
+(:func:`load_classifier`): the model is the training checkpoint exported
+to ONNX (``modules/rubrat/training/export_onnx.py``), and TensorFlow and
+Keras are not in the pipeline environment (rapid_docs ``decisions.md``,
+``decision-reliability-scored``). The difference stage loads it once per
+job and scores every catalog with it; :func:`main` is the hand tool over
+one job directory's files.
 
 The model is a directory of four files (``SHA256SUMS`` beside the three
 `dev`'s ``[RUBRAT]`` names) at the prefix :func:`model_prefix` resolves:
@@ -53,11 +52,15 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
+from modules.rubrat.inference.classifier import RealBogusClassifier, load_validation_threshold
+from modules.rubrat.preprocessing.data_utils import FeatureZScore
+
 #: The columns appended to the catalog, `dev`'s ``rb_catalog_col_names``.
 RB_COLUMNS = ("rb_score", "rb_label")
 
-#: The model files, `dev`'s ``[RUBRAT]`` keys.
-MODEL_FILES = ("checkpoint", "feats_scaler", "threshold_json")
+#: The model files, `dev`'s ``[RUBRAT]`` keys but ``model``, the ONNX file where `dev` names its
+#: Keras ``checkpoint``.
+MODEL_FILES = ("model", "feats_scaler", "threshold_json")
 
 #: `dev`'s ``_rb_filter_aliases``: the database filter name the FITS header carries.
 FILTER_ALIASES = {"W146": "F146"}
@@ -134,30 +137,69 @@ def filter_of(l2_image: Path) -> str:
     return str(value)
 
 
-def load_classifier(checkpoint: Path, feats_scaler: Path, threshold_json: Path, survey_id: int,
-                    batch_size: int):
-    """`dev`'s ``RealBogusClassifier`` on the model's files (imports TensorFlow: the sidecar only)."""
-    from modules.rubrat.inference.classifier import RealBogusClassifier, load_validation_threshold
+class OnnxSession:
+    """The two members of a Keras model that ``RealBogusClassifier`` reads, over an
+    ``onnxruntime.InferenceSession``: ``inputs`` (``.name``, ``.shape``) and ``predict``."""
 
-    return RealBogusClassifier(checkpoint, feats_scaler,
-                               threshold=load_validation_threshold(threshold_json),
-                               survey_id=int(survey_id), batch_size=int(batch_size))
+    def __init__(self, session):
+        self.session = session
+        self.inputs = [_Input(i.name, tuple(d if isinstance(d, int) else None for d in i.shape))
+                       for i in session.get_inputs()]
+        self.outputs = [o.name for o in session.get_outputs()]
+
+    def predict(self, inputs: dict[str, np.ndarray], batch_size: int, verbose: int = 0):
+        """The outputs by name, ``inputs`` fed to the session's inputs by name in batches of
+        ``batch_size``."""
+        names = [i.name for i in self.inputs]
+        n = len(inputs[names[0]])
+        parts = [self.session.run(None, {name: inputs[name][i:i + batch_size] for name in names})
+                 for i in range(0, n, batch_size)]
+        return {name: np.concatenate([part[k] for part in parts]) for k, name in enumerate(self.outputs)}
 
 
-def command(python: str, catalog: Path, output: Path, science: Path, reference: Path,
-            difference: Path, filter_name: str, model: Model, rubrat: dict[str, Any]) -> list[str]:
-    """The sidecar call scoring ``catalog`` into ``output`` (:func:`main`); ``python`` empty is
-    the stage's own interpreter."""
-    import sys
+@dataclass(frozen=True)
+class _Input:
+    name: str
+    shape: tuple
 
-    return [python or sys.executable, "-m", __name__,
-            "--catalog", str(catalog), "--output", str(output), "--science", str(science),
-            "--reference", str(reference), "--difference", str(difference),
-            "--filter", filter_name, "--checkpoint", str(model.files["checkpoint"]),
-            "--feats-scaler", str(model.files["feats_scaler"]),
-            "--threshold-json", str(model.files["threshold_json"]),
-            "--survey-id", str(int(rubrat["survey_id"])),
-            "--batch-size", str(int(rubrat["batch_size"]))]
+
+class OnnxClassifier(RealBogusClassifier):
+    """`dev`'s ``RealBogusClassifier`` on an ONNX model: its ``__init__``'s checks, and an
+    :class:`OnnxSession` on the CPU where it loads the Keras checkpoint."""
+
+    def __init__(self, model: str | Path, feature_scaler: str | Path, *, threshold: float,
+                 survey_id: int, batch_size: int = 128) -> None:
+        import onnxruntime
+
+        if survey_id not in (0, 1):
+            raise ValueError("survey_id must be 0 (HLTDS token) or 1 (GBTDS token)")
+        if not 0.0 <= float(threshold) <= 1.0:
+            raise ValueError("threshold must be in [0, 1]")
+        if int(batch_size) <= 0:
+            raise ValueError("batch_size must be positive")
+        self.checkpoint = Path(model).resolve()
+        self.feature_scaler_path = Path(feature_scaler).resolve()
+        self.threshold = float(threshold)
+        self.survey_id = int(survey_id)
+        self.batch_size = int(batch_size)
+        if not self.checkpoint.is_file():
+            raise FileNotFoundError(f"Model not found: {self.checkpoint}")
+        self.scaler = FeatureZScore(self.feature_scaler_path)
+        self.model = OnnxSession(onnxruntime.InferenceSession(
+            str(self.checkpoint), providers=["CPUExecutionProvider"]))
+        image = next((i for i in self.model.inputs if i.name == "images"), None)
+        if image is None or len(image.shape) != 4 or image.shape[-1] != 3:
+            raise ValueError("Model does not expose the RuBR-AT images input")
+        if image.shape[1] is None or image.shape[1] != image.shape[2]:
+            raise ValueError(f"Model image input must have a fixed square shape, got {image.shape}")
+        self.image_size = int(image.shape[1])
+
+
+def load_classifier(model: Path, feats_scaler: Path, threshold_json: Path, survey_id: int,
+                    batch_size: int) -> OnnxClassifier:
+    """The classifier on the model's files (:data:`MODEL_FILES`)."""
+    return OnnxClassifier(model, feats_scaler, threshold=load_validation_threshold(threshold_json),
+                          survey_id=int(survey_id), batch_size=int(batch_size))
 
 
 def summary_path(output: Path) -> Path:
@@ -225,16 +267,16 @@ def add_rb_columns(catalog: Path, output: Path, science: Path, reference: Path, 
 
 
 def main(argv: Sequence[str] | None = None, load: Callable = load_classifier) -> int:
-    """The sidecar's entry (:func:`command`): score one catalog, write it and its summary."""
+    """The hand tool: score one catalog with the model's files, write it and its summary."""
     parser = argparse.ArgumentParser(prog=f"python -m {__name__}", description=main.__doc__)
-    for name in ("catalog", "output", "science", "reference", "difference", "checkpoint",
+    for name in ("catalog", "output", "science", "reference", "difference", "model",
                  "feats-scaler", "threshold-json"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--filter", required=True)
     parser.add_argument("--survey-id", type=int, required=True)
     parser.add_argument("--batch-size", type=int, required=True)
     args = parser.parse_args(argv)
-    classifier = load(args.checkpoint, args.feats_scaler, args.threshold_json, args.survey_id,
+    classifier = load(args.model, args.feats_scaler, args.threshold_json, args.survey_id,
                       args.batch_size)
     summary = add_rb_columns(args.catalog, args.output, args.science, args.reference,
                              args.difference, args.filter, classifier)
@@ -243,9 +285,9 @@ def main(argv: Sequence[str] | None = None, load: Callable = load_classifier) ->
 
 
 __all__: Sequence[str] = (
-    "CATALOG_COLUMNS", "FILTER_ALIASES", "MODEL_FILES", "Model", "RB_COLUMNS", "add_rb_columns",
-    "command", "fetch_model", "load_classifier", "main", "model_prefix", "score", "summary_path",
-    "version_of",
+    "CATALOG_COLUMNS", "FILTER_ALIASES", "MODEL_FILES", "Model", "OnnxClassifier", "OnnxSession",
+    "RB_COLUMNS", "add_rb_columns", "fetch_model", "load_classifier", "main", "model_prefix",
+    "score", "summary_path", "version_of",
 )
 
 

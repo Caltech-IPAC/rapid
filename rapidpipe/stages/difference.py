@@ -177,7 +177,6 @@ from __future__ import annotations
 
 import gzip
 import hashlib
-import json
 import logging
 import math
 import os
@@ -290,6 +289,13 @@ def _fetch_rb_model(rubrat: dict[str, Any]) -> realbogus.Model:
     return realbogus.fetch_model(realbogus.model_prefix(rubrat), rubrat, get)
 
 
+def _load_rb_classifier(model: realbogus.Model, rubrat: dict[str, Any]):
+    """The real/bogus classifier on the fetched model's files, loaded once for the job."""
+    return realbogus.load_classifier(model.files["model"], model.files["feats_scaler"],
+                                     model.files["threshold_json"], rubrat["survey_id"],
+                                     rubrat["batch_size"])
+
+
 @dataclass
 class Toolkit:
     """The stage's boundary with external software; a test replaces :func:`toolkit`.
@@ -300,9 +306,8 @@ class Toolkit:
     (:func:`rapidpipe.science.difference.psfcat.psf_catalog`'s signature);
     ``reference_psf`` measures the reference PSF
     (:func:`rapidpipe.science.difference.refpsf.measure`'s signature);
-    ``rb_model`` fetches the real/bogus model (:func:`_fetch_rb_model`); the
-    classifier itself runs through ``runner``, in the sidecar
-    (:func:`rapidpipe.science.difference.realbogus.command`).
+    ``rb_model`` fetches the real/bogus model (:func:`_fetch_rb_model`) and
+    ``rb_classifier`` loads its classifier (:func:`_load_rb_classifier`).
     """
 
     runner: Any = field(default_factory=ToolRunner)
@@ -310,6 +315,7 @@ class Toolkit:
     psf_catalog: Callable = psfcat.psf_catalog
     reference_psf: Callable = refpsf.measure
     rb_model: Callable = _fetch_rb_model
+    rb_classifier: Callable = _load_rb_classifier
 
 
 def toolkit() -> Toolkit:
@@ -628,8 +634,10 @@ def run(job: JobContext) -> None:
     inputs = read_inputs(job)
     kit = toolkit()
     seed = _seed(settings)
-    # The real/bogus model is SFFT-trained; SFFT's catalog is the published one.
+    # The real/bogus model is SFFT-trained; SFFT's catalog is the published one. Its classifier
+    # is loaded once and scores every catalog of the job.
     rb_model = kit.rb_model(settings["rubrat"])
+    rb_classifier = None if rb_model is None else kit.rb_classifier(rb_model, settings["rubrat"])
 
     paths = settings["paths"]
     cfg_path = paths["cfg_path"]
@@ -872,7 +880,7 @@ def run(job: JobContext) -> None:
                   nan_indices=(nan_indices_sciimage, nan_indices_refimage),
                   reformatted_science_image=reformatted_science_image_filename,
                   gain_times_exptime=sca_gain * inputs.exptime, thresh=thresh)
-    rb = None if rb_model is None else (rb_model, realbogus.filter_of(w(science_image_filename)))
+    rb = None if rb_model is None else (rb_classifier, realbogus.filter_of(w(science_image_filename)))
     sfft_names, sfft_catalogs = _run_sfft(
         science_image_filename=science_image_filename,
         scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
@@ -1385,7 +1393,7 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
     thresh : float
         The coverage threshold below which the difference is masked.
     rb : tuple or None
-        ``(model, filter)``: `dev`'s real/bogus columns are added to both
+        ``(classifier, filter)``: `dev`'s real/bogus columns are added to both
         PSF-fit catalogs (:func:`_score_rb`) from the background-subtracted
         science image, the gain-matched reference and the image each catalog
         was fitted on, the negated difference for the negative one, as
@@ -1474,13 +1482,13 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
             columns.add_pixel_columns(w(catalogs.parquet[sign]), w(image), settings)
     catalogs.pixel_columns_s = round(time.perf_counter() - start, 3)
     if rb is not None:
-        model, filter_name = rb
+        classifier, filter_name = rb
         for sign, image in (("positive", diffimage), ("negative", diffimage_negative)):
             # An empty catalog is not scored, as the xsources' is not.
             if catalogs.parquet[sign] and pq.read_metadata(w(catalogs.parquet[sign])).num_rows:
-                summary = _score_rb(kit, work_dir, settings["rubrat"], model, filter_name,
-                                    w(catalogs.parquet[sign]), w(filename_bkg_subbed_science_image),
-                                    w(gainmatched_reference), w(image))
+                summary = _score_rb(classifier, filter_name, w(catalogs.parquet[sign]),
+                                    w(filename_bkg_subbed_science_image), w(gainmatched_reference),
+                                    w(image))
                 setattr(catalogs, "rb" if sign == "positive" else "rb_negative", summary)
     if with_xsources:
         catalogs.xsources = _xsources_columns(
@@ -1500,13 +1508,13 @@ def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: 
     Parameters
     ----------
     kit : Toolkit
-        The stage's tools; ``kit.runner`` runs the RuBR-AT sidecar.
+        The stage's tools.
     work_dir : pathlib.Path
         The job's working directory.
     settings : dict
         The ``[difference]`` table.
     rb : tuple or None
-        ``(model, filter)``, or None to score nothing.
+        ``(classifier, filter)``, or None to score nothing.
     signs : dict
         ``positive`` and ``negative``, each the catalog's file and the image
         its sources are positive in (the negated difference for the negative).
@@ -1531,11 +1539,11 @@ def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: 
         extra, fitted = xsources.extra_columns(catalog, data, error, psf_data, settings)
         out["fitted"][sign] = fitted
         if rb is not None and len(catalog):
-            model, filter_name = rb
+            classifier, filter_name = rb
             path = work_dir / f"xsources_{sign}_rb.parquet"
             pq.write_table(xsources.rb_input(extra), path)
-            summary = _score_rb(kit, work_dir, settings["rubrat"], model, filter_name, path,
-                                work_dir / science, work_dir / reference, work_dir / image)
+            summary = _score_rb(classifier, filter_name, path, work_dir / science,
+                                work_dir / reference, work_dir / image)
             scored = pq.read_table(path, columns=["rb_score", "rb_label"])
             extra["rb_score"] = scored.column("rb_score").to_numpy(zero_copy_only=False).astype(float)
             extra["rb_label"] = scored.column("rb_label").to_numpy(zero_copy_only=False).astype(float)
@@ -1588,27 +1596,26 @@ def xsources_set(found: dict[str, Any], settings: dict[str, Any], key: dict, pid
     return xsources.xsources_table(parts), record
 
 
-def _score_rb(kit, work_dir: Path, rubrat: dict[str, Any], model, filter_name: str,
-              catalog: Path, science: Path, reference: Path, difference: Path) -> dict[str, Any]:
-    """The sidecar's scored catalog in place of ``catalog``; its summary, with the call's seconds.
+def _score_rb(classifier, filter_name: str, catalog: Path, science: Path, reference: Path,
+              difference: Path) -> dict[str, Any]:
+    """``classifier``'s scored catalog in place of ``catalog``
+    (:func:`rapidpipe.science.difference.realbogus.add_rb_columns`); its summary, with the
+    call's seconds.
 
     The scored catalog must hold the catalog's ids in its order: scoring
     selects nothing (a mismatch raises ``RuntimeError``).
     """
     output = catalog.with_name(catalog.stem + "_rubrat.parquet")
     start = time.perf_counter()
-    kit.runner.run(realbogus.command(rubrat["python"], catalog, output, science, reference,
-                                     difference, filter_name, model, rubrat), cwd=work_dir)
+    summary = realbogus.add_rb_columns(catalog, output, science, reference, difference,
+                                       filter_name, classifier)
     seconds = round(time.perf_counter() - start, 3)
     before = pq.read_table(catalog, columns=["id"]).column("id")
     after = pq.read_table(output, columns=["id"]).column("id")
     if not before.equals(after):
         raise RuntimeError(f"{output.name}: {len(after)} ids, {catalog.name} {len(before)}, "
                            "not the same in order")
-    summary_file = realbogus.summary_path(output)
-    summary = json.loads(summary_file.read_text())
     os.replace(output, catalog)
-    summary_file.unlink()
     return {**summary, "call_seconds": seconds}
 
 

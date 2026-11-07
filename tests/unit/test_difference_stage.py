@@ -56,9 +56,11 @@ from rapidpipe.science.load.catalogs import source_set
 from rapidpipe.foundation.local import JobContext
 from tests.support.fakedifftools import (
     FakePsfCatalog,
+    FakeRbClassifier,
     FakeReferencePsf,
     FakeToolRunner,
     cdf_dir,
+    fake_rb_classifier,
     fake_rb_model,
     fake_sip_to_pv,
     write_epoch,
@@ -164,7 +166,7 @@ def fakes(monkeypatch, refpsf):
     runner, catalog = FakeToolRunner(), FakePsfCatalog()
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
         runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog, reference_psf=refpsf,
-        rb_model=fake_rb_model))
+        rb_model=fake_rb_model, rb_classifier=fake_rb_classifier))
     return runner, catalog
 
 
@@ -314,7 +316,7 @@ def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fak
 
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
         runner=runner, sip_to_pv=kit.sip_to_pv, psf_catalog=zogy_ids_apart,
-        reference_psf=kit.reference_psf, rb_model=kit.rb_model))
+        reference_psf=kit.reference_psf, rb_model=kit.rb_model, rb_classifier=kit.rb_classifier))
     prefix = run_difference(tmp_path, files)
     work = prefix / "diff"
     sfft_catalog = pq.read_table(work / "sfftdiffimage_masked_psfcat.parquet")
@@ -490,9 +492,6 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
         "zogy",
         "sextractor", "sextractor",     # ZOGY positive, negative
         "sextractor", "sextractor",     # SFFT positive, negative
-        "rubrat",                       # the real/bogus sidecar on SFFT's positive PSF-fit catalog
-        "rubrat",                       # and on its positive SExtractor sources (xsources); the
-                                        # fake negative SExtractor catalog is empty, so not scored
         "sextractor", "sextractor",     # naive positive, negative
         "sfft",
     ]
@@ -501,6 +500,28 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
     reference_bkgest = [c for c in runner.calls if c[0].endswith("bkgest")][1]
     assert reference_bkgest[reference_bkgest.index("-i") + 1] == (
         "awaicgen_output_mosaic_image_resampled_bkgest_input.fits")
+
+
+def test_the_classifier_is_loaded_once_from_the_fetched_model_and_scores_every_catalog(
+        tmp_path, fakes, monkeypatch):
+    """The real/bogus classifier runs in the stage's process: loaded once per job from the
+    model ``rb_model`` fetched, it scores both PSF-fit catalogs and the SExtractor sources."""
+    runner, catalog = fakes
+    loaded, classifier = [], FakeRbClassifier()
+
+    def load(model, rubrat):
+        loaded.append(model.prefix)
+        return classifier
+
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog,
+        reference_psf=FakeReferencePsf(), rb_model=fake_rb_model, rb_classifier=load))
+    prefix = run_difference(tmp_path, write_epoch(tmp_path / "inputs", vanished=True))
+    d = manifest(prefix)["difference"]
+    assert loaded == [d["rb"]["model"]]
+    rows = [d["rb"]["rows"], d["rb_negative"]["rows"]]
+    assert [call["rows"] for call in classifier.calls[:2]] == rows
+    assert len(classifier.calls) == 2 + len(d["xsources"]["scored"])
 
 
 def test_zogy_gets_the_reference_psf_measured_on_the_resampled_reference(
