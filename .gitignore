@@ -9,3 +9,9 @@ __pycache__/
 _build/
 
 .venv/
+
+# scripts/dev.sh: the pulled image's reference
+.rapid-dev/
+
+# a personal dev-container credential file, never committed
+.devcontainer/devcontainer.env

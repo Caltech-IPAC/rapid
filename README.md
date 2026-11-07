@@ -33,6 +33,28 @@ export IMAGE=$REGISTRY/rapid-pipeline:$TAG
 
 The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rapid` (`rapid_systems`' README, Python environments); the runbook's `$PY` is its `python3`.
 
+`scripts/dev.sh image pull` does the four lines above in one and remembers the image for the other `dev.sh` commands; `scripts/dev.sh image rev` says which commit and branches an image was built from.
+
+### Working on a branch in the image
+
+To run a branch of this checkout, its tests included, inside the team's image on your workstation, without building an image: `scripts/dev.sh`. It mounts the checkout at `/code` ahead of the package installed in the image (`PYTHONPATH`), so `rapidpipe`, `python -m pytest` and the stages run the checkout's code, and `work/` at `/work`. Two modes:
+
+- **local** (the default): a throwaway PostgreSQL 18 beside the container with `database/schema.sql` applied, `PG*` set to it, products under `work/out`. For the test suites and scratch runs.
+- **`--team`**: `RAPID_PARAMETER_PATH=/rapid/rebuild`, so the container reaches the team's rebuild database under the workstation's instance role (`rapid_systems`' `docs/workstation-submission.md`), with `RAPIDPIPE_OUTPUTS_ROOT` from your environment. A run there is a real run: use a dataset of your own.
+
+```sh
+export PATH=$PWD/scripts:$PATH                     # optional
+dev.sh image pull                                  # the newest rebuild image; `image pull TAG` for another
+dev.sh sync my-branch                              # this checkout at a pushed branch or commit (refuses a dirty tree)
+dev.sh db start                                    # the throwaway database (stop, reset, status)
+dev.sh shell                                       # bash in the image, this checkout at /code
+dev.sh run -- python -m pytest tests/unit -q       # one command instead of a shell
+dev.sh run -- python -m pytest tests/db tests/cli -q
+dev.sh run --team -- rapidpipe run show 7
+```
+
+The image carries no git: commit from the workstation, not the container. For a VS Code session in the same container, open the checkout over Remote-SSH (`rapid vscode`), export `RAPID_DEV_IMAGE=$(scripts/dev.sh image pull)` in your login shell, and "Reopen in Container" with `.devcontainer/rebuild-local` (starts the throwaway database itself) or `.devcontainer/rebuild-team`.
+
 ### The Gaia catalog
 
 The pipeline reads Gaia DR3 from a mirror of LINCC's HATS catalog, one copy per release, read as a cone per chip ([the ruling](https://roman-rapid.readthedocs.io/en/latest/system/decisions.html#decision-gaia-mirror)); the team's is in the catalogs bucket under `gaia/DR3/` ([Datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html#hlwas-r00342)). A local one with only the leaf the HLWAS r00342 field is on, order-2 pixel 138 (a 212 MB download), is built in the image, in the current directory, from `https://data.lsdb.io/hats/gaia_dr3/gaia/`. Its record says it is not complete, and the import step below registers it as `"partial": true`, which the team's dataset must never be:
