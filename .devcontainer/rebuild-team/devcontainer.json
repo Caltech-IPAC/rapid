@@ -1,0 +1,45 @@
+{
+  // The team's pipeline image with THIS checkout mounted at /code ahead of the
+  // installed package, on the team's rebuild database: scripts/dev.sh's team
+  // mode, as a VS Code dev container. The database is reached through the
+  // rebuild parameter tree under the workstation's instance role; nothing is
+  // copied in. A run here is a real run on the team's database: use a
+  // dataset of your own, and run the test suites in the rebuild-local config.
+  //
+  // Before the first open, on the workstation:
+  //   export RAPID_DEV_IMAGE=$(scripts/dev.sh image pull)
+  //   export RAPIDPIPE_OUTPUTS_ROOT=s3://<scratch bucket>/rapidpipe/<your prefix>
+  // (rapid_systems docs/workstation-submission.md names the bucket and queue).
+  "name": "rapid (rebuild image, team database)",
+  "image": "${localEnv:RAPID_DEV_IMAGE}",
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind,consistency=cached",
+  "workspaceFolder": "/code",
+  "mounts": [
+    "source=${localWorkspaceFolder}/work,target=/work,type=bind,consistency=cached"
+  ],
+
+  "overrideCommand": true,
+  "runArgs": ["--entrypoint", "/bin/sh"],
+
+  "containerEnv": {
+    "PYTHONPATH": "/code",
+    "RAPID_PARAMETER_PATH": "/rapid/rebuild",
+    "RAPIDPIPE_OUTPUTS_ROOT": "${localEnv:RAPIDPIPE_OUTPUTS_ROOT}",
+    "RAPIDPIPE_BATCH_JOB_QUEUE": "${localEnv:RAPIDPIPE_BATCH_JOB_QUEUE}",
+    "AWS_DEFAULT_REGION": "${localEnv:AWS_DEFAULT_REGION:us-east-1}",
+    "RAPIDPIPE_LOG_LEVEL": "INFO"
+  },
+
+  "postCreateCommand": "ln -sf /usr/local/bin/rapidpipe-entrypoint /usr/local/bin/rapidpipe && mkdir -p /work/out",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-python.vscode-pylance"],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/rapid/conda/envs/rapid/bin/python",
+        "python.terminal.activateEnvironment": false
+      }
+    }
+  }
+}

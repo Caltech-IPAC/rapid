@@ -1,0 +1,54 @@
+{
+  // The team's pipeline image with THIS checkout mounted at /code ahead of the
+  // installed package, and a throwaway PostgreSQL beside it: scripts/dev.sh's
+  // local mode, as a VS Code dev container. Open the checkout on a RAPID
+  // workstation over Remote-SSH (`rapid vscode`), then "Reopen in Container"
+  // and pick this config. Git stays on the host: the image carries none.
+  //
+  // Before the first open, on the workstation:
+  //   export RAPID_DEV_IMAGE=$(scripts/dev.sh image pull)   # or put it in ~/.bashrc
+  // VS Code's server reads RAPID_DEV_IMAGE from the login shell on the host.
+  // With podman on the fleet, set "dev.containers.dockerPath": "podman" in
+  // your VS Code settings.
+  "name": "rapid (rebuild image, local database)",
+  "image": "${localEnv:RAPID_DEV_IMAGE}",
+
+  // Start (or keep) the throwaway database in the pod the container joins.
+  "initializeCommand": "scripts/dev.sh db start",
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind,consistency=cached",
+  "workspaceFolder": "/code",
+  "mounts": [
+    "source=${localWorkspaceFolder}/work,target=/work,type=bind,consistency=cached"
+  ],
+
+  // The image's entrypoint is the pipeline command line; keep the container up instead.
+  "overrideCommand": true,
+  "runArgs": ["--entrypoint", "/bin/sh", "--pod", "rapid-dev"],
+
+  "containerEnv": {
+    "PYTHONPATH": "/code",
+    "PGHOST": "127.0.0.1",
+    "PGPORT": "5432",
+    "PGDATABASE": "rapid",
+    "PGUSER": "postgres",
+    "PGPASSWORD": "local",
+    "RAPIDPIPE_OUTPUTS_ROOT": "file:///work/out",
+    "RAPIDPIPE_LOG_LEVEL": "INFO"
+  },
+
+  // rapidpipe on PATH, as scripts/dev.sh does.
+  "postCreateCommand": "ln -sf /usr/local/bin/rapidpipe-entrypoint /usr/local/bin/rapidpipe && mkdir -p /work/out",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-python.vscode-pylance"],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/rapid/conda/envs/rapid/bin/python",
+        "python.terminal.activateEnvironment": false,
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests/unit"]
+      }
+    }
+  }
+}
