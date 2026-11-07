@@ -782,15 +782,17 @@ photutils_cols_prefilter_only = true
 # set by --set for a run; "" (shipped) reads the bucket from the SSM
 # parameter model_bucket_parameter, as [kafka] names its deployment values,
 # under model_key. The model's version is the prefix's last path component.
-# New, not dev's: python, the interpreter the classifier runs under, a
-# subprocess: the image's sidecar virtual environment, the only one holding
-# TensorFlow and Keras (the Containerfile; temporary, rapid_docs
-# decisions.md, rb-port). "" is the stage's own interpreter.
-python = "/opt/rapid/venvs/rubrat/bin/python"
+# New, not dev's: model, where dev names its Keras checkpoint, is the ONNX
+# file exported from that checkpoint (modules/rubrat/training/export_onnx.py),
+# run on onnxruntime in the stage's process; TensorFlow and Keras are not in
+# the pipeline (Ben, 2026-11-07). The 2026-10-06 model's export is the
+# sibling prefix rubrat-onnx/ of its rubrat/ one, same version string,
+# because the inputs bucket is write-once and the rubrat/ prefix's
+# SHA256SUMS could not take the file.
 model_prefix = ""
 model_bucket_parameter = "/rapid/scratch/s3/inputs-bucket"
-model_key = "rubrat/2026-10-06_canonical9_seed42"
-checkpoint = "best.keras"
+model_key = "rubrat-onnx/2026-10-06_canonical9_seed42"
+model = "best.onnx"
 feats_scaler = "canonical_9.json"
 threshold_json = "threshold.json"
 # Survey context token the model was trained with: 0 = HLTDS, 1 = GBTDS.

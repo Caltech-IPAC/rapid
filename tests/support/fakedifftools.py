@@ -271,8 +271,6 @@ class FakeToolRunner:
                 names.append("bkgest")
             elif len(args) > 1 and args[1].endswith("py_zogy.py"):
                 names.append("zogy")
-            elif args[1:3] == ["-m", "rapidpipe.science.difference.realbogus"]:
-                names.append("rubrat")
             else:
                 names.append(args[0])
         return names + ["sfft"] * len(self.shell_calls)
@@ -289,17 +287,9 @@ class FakeToolRunner:
             self._bkgest(args, cwd)
         elif len(args) > 1 and args[1].endswith("py_zogy.py"):
             self._zogy(args, cwd)
-        elif args[1:3] == ["-m", "rapidpipe.science.difference.realbogus"]:
-            self._realbogus(args, cwd)
         else:
             raise AssertionError(f"unexpected tool call {args!r}")
         return 0
-
-    def _realbogus(self, args, cwd: Path) -> None:
-        """The sidecar's own entry, in process, with :class:`FakeRbClassifier` for the model."""
-        from rapidpipe.science.difference import realbogus
-
-        realbogus.main(args[3:], load=lambda *files: FakeRbClassifier())
 
     def run_shell(self, command: str, *, cwd: Path, check: bool = True) -> int:
         self.shell_calls.append(command)
@@ -479,9 +469,15 @@ def fake_rb_model(rubrat):
                  {key: Path(rubrat[key]) for key in MODEL_FILES})
 
 
+def fake_rb_classifier(model, rubrat):
+    """No model loaded: a :class:`FakeRbClassifier` (``Toolkit.rb_classifier``)."""
+    return FakeRbClassifier()
+
+
 def fake_toolkit():
     """Every external tool faked, for a test to put in place of ``difference.toolkit``."""
     from rapidpipe.stages.difference import Toolkit
 
     return Toolkit(runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog(),
-                   reference_psf=FakeReferencePsf(), rb_model=fake_rb_model)
+                   reference_psf=FakeReferencePsf(), rb_model=fake_rb_model,
+                   rb_classifier=fake_rb_classifier)

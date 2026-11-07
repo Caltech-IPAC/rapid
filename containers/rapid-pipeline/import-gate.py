@@ -47,6 +47,7 @@ OPTIONAL_BY_REQUIREMENT = {
     "gwcs": "gwcs",
     "sympy": "sympy",
     "sip_tpv": "sip_tpv",
+    "onnxruntime": "onnxruntime",
     "photutils": "photutils.psf",
     "galsim": "galsim.roman",
     "requests": "requests",

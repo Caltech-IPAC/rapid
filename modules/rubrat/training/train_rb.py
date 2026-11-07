@@ -1,5 +1,11 @@
 #!/usr/bin/env python
-"""Train the cross-survey real/bogus CNN."""
+"""Train the cross-survey real/bogus CNN.
+
+The run ends by exporting ``best.keras`` to ``best.onnx`` beside it with
+``SHA256SUMS`` (``export_onnx.py``): the ONNX file is the model the pipeline
+runs; a delivered model is a prefix of it, the feature scaler and the
+threshold under ``SHA256SUMS``.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +33,7 @@ from modules.rubrat.training.train_utils import (
     write_json,
 )
 from modules.rubrat.training.provenance import run_context
+from modules.rubrat.training.export_onnx import export
 
 
 def parse_args() -> argparse.Namespace:
@@ -173,6 +180,8 @@ def main() -> int:
     if "val_accuracy" in history.history and "val_rb_accuracy" not in history.history:
         history.history["val_rb_accuracy"] = history.history["val_accuracy"]
     save_history(history, output)
+    # The last act: the best checkpoint as the ONNX model the pipeline runs, and SHA256SUMS.
+    export(output / "best.keras", output / "best.onnx")
     return 0
 
 

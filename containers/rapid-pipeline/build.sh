@@ -34,8 +34,8 @@
 #                               scripts from /code/modules/... (settings
 #                               `zogy_code`, `sfft_code`).
 #   modules/rubrat           -- the real/bogus classifier, run by
-#                               science/difference/realbogus.py in the
-#                               sidecar environment (the Containerfile).
+#                               science/difference/realbogus.py on
+#                               onnxruntime in the stage's process.
 #   database/modules/utils/roman_tessellation{,_db}.py
 #                            -- imported by science/spatial.py and
 #                               science/load/catalogs.py.
