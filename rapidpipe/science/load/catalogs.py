@@ -214,23 +214,60 @@ def prefilter(catalog, naxis1: int, naxis2: int, sumrat_prefilter_threshold: flo
 def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2: int, *,
                max_sources: int | None, xy_fit_min: float = XY_FIT_MIN,
                xy_fit_max_offset: float = XY_FIT_MAX_OFFSET,
-               sumrat_prefilter_threshold: float | None = None):
-    """A foundation ``sources`` set from a joined PSF-fit catalog (a ``pyarrow.Table``).
+               sumrat_prefilter_threshold: float | None = None, isdiffpos: bool = True,
+               sid_offset: int = 0):
+    """Map one sign's joined PSF-fit catalog onto ``sources`` rows.
 
-    `dev`'s fit-position bounds, then `dev`'s database prefilter when
-    ``sumrat_prefilter_threshold`` is a number (``sumrat`` above it, finite,
-    and the nearest pixel at least :data:`EDGE_MARGIN` from the edge;
-    ``None`` applies none of it), then the brightest ``max_sources`` by
-    ``flux_fit / flux_err`` (-1 or ``None`` keeps every source; 0 keeps
-    none), mapped as
-    :data:`CATALOG_COLUMNS` maps them. ``key`` is the set's ``{dataset,
-    expid, sca, fid}``; every source is positive (``isdiffpos``), as the
-    positive catalog is the one read. Returns ``(table, candidates)``, the
-    candidates being the sources inside the bounds with a finite ratio that
-    pass the prefilter, before the cap. `dev`'s ``sumrat``, ``nneg`` and
-    ``nbad`` are carried from the catalog, null where it has no value or no
-    such column, and its ``rb_score`` and ``rb_label`` as ``rb`` and
-    ``rblabel`` (:data:`RB_COLUMNS`).
+    The rows pass `dev`'s fit-position bounds and database prefilter, then the
+    cap. `dev` loads the positive and the negative difference image's catalogs,
+    each with its sign; this is one of them.
+
+    Parameters
+    ----------
+    catalog : pyarrow.Table
+        The joined Photutils PSF-fit catalog (``id``, ``x_fit``, ``y_fit``,
+        ``flux_fit``, ``flux_err`` and the rest of :data:`CATALOG_COLUMNS`),
+        with `dev`'s ``sumrat``, ``nneg``, ``nbad``, ``rb_score`` and
+        ``rb_label`` where measured.
+    key : dict
+        The set's ``{dataset, expid, sca, fid}``.
+    pid : int
+        The difference image's ``pid``, on every row.
+    mjdobs : float
+        The exposure's MJD, on every row.
+    naxis1, naxis2 : int
+        The difference image's size, pixels.
+    max_sources : int or None
+        Keep the brightest this many by ``flux_fit / flux_err``; -1 (or
+        ``None``) is no cap, keeping every source, and 0 keeps none.
+    xy_fit_min, xy_fit_max_offset : float
+        `dev`'s fit-position bounds: a row is kept when its fit position is
+        within ``[xy_fit_min, naxis - xy_fit_max_offset]``.
+    sumrat_prefilter_threshold : float or None
+        `dev`'s database prefilter: ``sumrat`` finite and above this, and the
+        nearest pixel at least :data:`EDGE_MARGIN` from the edge; ``None``
+        applies none of it.
+    isdiffpos : bool
+        The catalog's sign, on every row: true for the positive difference
+        image, false for the negative.
+    sid_offset : int
+        Added to the catalog's ``id`` to make ``sid``, so a set's two
+        catalogs number apart.
+
+    Returns
+    -------
+    table : pyarrow.Table
+        The rows, every ``sources`` column but ``job``; ``sumrat``, ``nneg``,
+        ``nbad``, ``rb`` and ``rblabel`` (:data:`RB_COLUMNS`) null where the
+        catalog has no value or no such column.
+    candidates : int
+        The sources inside the bounds with a finite S/N that pass the
+        prefilter, before the cap.
+
+    Raises
+    ------
+    ValueError
+        ``max_sources`` is neither -1, ``None`` nor a non-negative integer.
     """
     import pyarrow as pa
 
@@ -244,9 +281,14 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
             & (y <= naxis2 - xy_fit_max_offset) & np.isfinite(snr))
     if sumrat_prefilter_threshold is not None:
         keep &= prefilter(catalog, naxis1, naxis2, sumrat_prefilter_threshold)
+    if max_sources is None or max_sources == -1:
+        limit = None                    # no cap
+    elif isinstance(max_sources, int) and not isinstance(max_sources, bool) and max_sources >= 0:
+        limit = max_sources
+    else:
+        raise ValueError(f"max_sources must be -1 (no cap) or a non-negative integer, got {max_sources!r}")
     candidates = np.flatnonzero(keep)
-    cap = None if max_sources is None or max_sources < 0 else max_sources
-    chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:cap]
+    chosen = candidates[np.argsort(-snr[candidates], kind="stable")][:limit]
 
     columns = {db: column(name)[chosen] for name, db in CATALOG_COLUMNS if db != "npix"}
     ra, dec = columns["ra"].astype(float), columns["dec"].astype(float)
@@ -259,10 +301,10 @@ def source_set(catalog, key: dict, pid: int, mjdobs: float, naxis1: int, naxis2:
         values = column(name)[chosen].astype(float) if name in catalog.column_names else np.full(n, np.nan)
         columns[db] = pa.array(np.nan_to_num(values).astype(kind), mask=~np.isfinite(values))
     return pa.table({
-        "sid": columns["id"].astype(np.int64),
+        "sid": columns["id"].astype(np.int64) + sid_offset,
         "dataset": [key["dataset"]] * n, "expid": np.full(n, key["expid"]),
         "sca": np.full(n, key["sca"]), "fid": np.full(n, key["fid"]), "pid": np.full(n, pid),
-        "isdiffpos": np.full(n, True), "field": tessellation_ids(ra, dec).astype(np.int64),
+        "isdiffpos": np.full(n, isdiffpos), "field": tessellation_ids(ra, dec).astype(np.int64),
         "hp6": hp6.astype(np.int64), "hp9": hp9.astype(np.int64), "mjdobs": np.full(n, mjdobs),
         **columns,
     }), len(candidates)

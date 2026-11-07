@@ -217,7 +217,11 @@ def test_a_job_writes_its_difference_image_row_and_source_set(tmp_path, files, f
     recorded = manifest(prefix)["difference"]
     assert (recorded["pid"], recorded["rfid"]) == (PID, RFID)
     assert recorded["zero_point"] == {"value": 17.0, "source": "header"}
-    assert recorded["sources_kept"] == len(sources) <= recorded["sources_before_cap"]
+    kept, before = recorded["sources_kept"], recorded["sources_before_cap"]
+    assert kept["positive"] + kept["negative"] == len(sources)
+    assert all(kept[sign] <= before[sign] for sign in ("positive", "negative"))
+    # The fixture's negative difference holds nothing: every source is positive.
+    assert kept["negative"] == 0 and all(s["isdiffpos"] for s in sources)
 
 
 def test_a_job_associates_its_sources_with_the_catalog_it_read_and_records_the_read(
@@ -521,8 +525,10 @@ def test_the_manifest_records_the_reference_psf_metrics(tmp_path, files, fakes, 
     # Every metric is a number; one the job cannot make is absent (the fake finds no stars).
     assert all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in metrics.values())
     assert not {"core_fraction", "registration_dx_px"} & set(metrics)
-    assert metrics["n_sources"] == recorded["difference"]["sources_kept"]
-    assert metrics["n_candidates"] == recorded["difference"]["sources_before_cap"]
+    # The quality metrics are the positive sources'; the negatives are counted beside them.
+    assert metrics["n_sources"] == recorded["difference"]["sources_kept"]["positive"]
+    assert metrics["n_candidates"] == recorded["difference"]["sources_before_cap"]["positive"]
+    assert metrics["n_sources_negative"] == recorded["difference"]["sources_kept"]["negative"]
     assert 0 < metrics["usable_fraction"] <= 1
     assert (metrics["refpsf_sigma_px"], metrics["refpsf_stars"]) == (refpsf.sigma, refpsf.stars)
     assert metrics["ref_sigma_px"] == refpsf.sigma
@@ -614,11 +620,45 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
         {k: v for k, v in r.items() if k not in ignore} for r in read(after, "diffimages")]
 
 
-def test_max_sources_caps_the_source_set_and_records_the_count_before_it(tmp_path, files, fakes):
+def test_max_sources_caps_each_sign_and_records_the_count_before_it(tmp_path, fakes):
+    files = write_epoch(tmp_path / "inputs", vanished=True)
     prefix = run_difference(tmp_path, files, body=settings(max_sources=1))
     recorded = manifest(prefix)["difference"]
-    assert len(read(prefix, "sources")) == recorded["sources_kept"] == 1
-    assert recorded["sources_before_cap"] >= 1
+    assert recorded["sources_kept"] == {"positive": 1, "negative": 1}
+    assert len(read(prefix, "sources")) == 2
+    assert all(recorded["sources_before_cap"][sign] >= 1 for sign in ("positive", "negative"))
+
+
+def test_the_negative_psf_fit_catalog_loads_into_sources_scored_and_associated(tmp_path, fakes):
+    """dev's loader loads the negative SFFT PSF-fit catalog too, isdiffpos false: a star that
+    vanished from the science image is a negative source, numbered after the positive catalog's
+    ids, scored on the negated difference, and associated as a positive one is; the quality
+    metrics stay the positive sources'."""
+    runner, _ = fakes
+    files = write_epoch(tmp_path / "inputs", vanished=True)
+    body = settings()
+    body["associate"]["min_snr"] = 1.0
+    prefix = run_difference(tmp_path, files, body=body)
+    recorded = manifest(prefix)
+    work = prefix / "diff"
+    positive_ids = pq.read_table(work / "sfftdiffimage_masked_psfcat.parquet").column("id").to_pylist()
+    negative = pq.read_table(work / "sfftdiffimage_masked_psfcat_negative.parquet")
+    assert negative.num_rows > 0 and negative.column_names[-2:] == ["rb_score", "rb_label"]
+    sources = read(prefix, "sources")
+    negatives = [s for s in sources if not s["isdiffpos"]]
+    positives = [s for s in sources if s["isdiffpos"]]
+    assert negatives and positives
+    assert sorted(s["sid"] for s in negatives) == sorted(
+        max(positive_ids) + i for i in negative.column("id").to_pylist())
+    assert len({s["sid"] for s in sources}) == len(sources)
+    assert all(s["rb"] is not None for s in negatives)
+    assert any(abs(s["xfit"] - 46.0) < 1.5 and abs(s["yfit"] - 30.0) < 1.5 for s in negatives)
+    d, metrics = recorded["difference"], recorded["metrics"]
+    assert d["sources_kept"] == {"positive": len(positives), "negative": len(negatives)}
+    assert d["rb_negative"]["scored"] == negative.num_rows == metrics["n_rb_scored_negative"]
+    assert (metrics["n_sources"], metrics["n_sources_negative"]) == (len(positives), len(negatives))
+    members = {m["sid"] for m in read(prefix, "memberships")}
+    assert {s["sid"] for s in negatives} <= members
 
 
 def test_zero_point_override_wins_over_the_reference_header(tmp_path, files, fakes):
@@ -677,9 +717,9 @@ def test_two_science_psfs_fail(tmp_path, files, fakes):
 
 def test_the_shipped_difference_table_is_valid_and_refuses_fake_sources():
     difference.check_settings(THIN["difference"])
-    assert THIN["difference"]["max_sources"] == -1     # uncapped; [packet] max_alerts is the one cap
-    assert THIN["packet"]["max_alerts"] == 2000
-    difference.check_settings(settings(max_sources=0)["difference"])     # a cap of none is a cap
+    assert THIN["difference"]["max_sources"] == THIN["import"]["max_sources"] == -1   # no cap, as dev
+    assert THIN["packet"]["max_alerts"] == 2000                                       # the one cap
+    difference.check_settings(settings(max_sources=0)["difference"])                 # 0 keeps none
     with pytest.raises(ValueError, match="fake-source"):
         difference.check_settings(settings(fake_sources={"inject_fake_sources_flag": True})["difference"])
     with pytest.raises(ValueError, match="max_sources"):

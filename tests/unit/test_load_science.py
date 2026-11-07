@@ -8,6 +8,7 @@ import math
 
 import healpy as hp
 import numpy as np
+import pytest
 
 from database.modules.utils.roman_tessellation_db import RomanTessellationClosedForm
 from astropy.io import ascii
@@ -161,7 +162,12 @@ def test_source_set_keeps_the_brightest_inside_the_bounds_and_zero_keeps_all():
     assert table.column("sid").to_pylist() == [2, 3]
     assert set(table.column("pid").to_pylist()) == {7}
     everything, _ = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=-1)
-    assert sorted(everything.column("sid").to_pylist()) == [1, 2, 3]
+    assert sorted(everything.column("sid").to_pylist()) == [1, 2, 3]   # -1: no cap
+    none, kept = source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=0)
+    assert none.num_rows == 0 and kept == 3                            # 0 keeps none
+    for bad in (-2, 1.5, True):
+        with pytest.raises(ValueError, match="max_sources"):
+            source_set(pa.table(rows), key, 7, 60000.0, 10, 10, max_sources=bad)
 
 
 def test_source_set_carries_the_pixel_columns_null_where_the_catalog_has_none():

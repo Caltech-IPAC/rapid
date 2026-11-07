@@ -8,8 +8,9 @@
 
 [import]
 # The brightest sources kept per difference image, by fluxfit / fluxerr;
-# -1 keeps every source, 0 none.
-max_sources = 500
+# -1 is no cap, keeping every source, as dev, which caps nothing; 0 keeps
+# none (Russ Laher, 2026-11-06).
+max_sources = -1
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
 xy_fit_max_offset = 0.5
@@ -496,10 +497,12 @@ sextractor_interp_type = "ALL"
 # differences to `dev`. Tool options `dev` passes on a command line are
 # kept as the strings its configuration holds.
 [difference]
-# The brightest sources kept per difference image, by fluxfit / fluxerr,
-# as [import] max_sources; -1 keeps every source, 0 none (shipped: the
-# source set is uncapped, and the packet stage's [packet] max_alerts is the
-# one cap, dev's MAX_SOURCES_PER_CHIP; Emily, 2026-11-06).
+# The brightest sources kept per difference image and sign, by fluxfit /
+# fluxerr; -1 is no cap, keeping every source, as dev, which caps
+# nothing; 0 keeps none (Russ Laher, 2026-11-06). Both signs load: the
+# positive and the negative SFFT PSF-fit catalogs, as dev's
+# loadPSFCatIntoDBSourcesTable.py. The packet stage's [packet] max_alerts
+# is the one cap on what alerts (Emily, 2026-11-06).
 max_sources = -1
 # true: the difference job loads no sources records. Its source set is still
 # declared, with no rows, so the set's binding opens and its xsources, which
@@ -770,8 +773,8 @@ photutils_cols_prefilter_only = true
 [difference.rubrat]
 # [RUBRAT]: the RuBR-AT real/bogus classifier (modules/rubrat, dev's
 # compute_rb; rapidpipe.science.difference.realbogus) scores every source of
-# SFFT's positive PSF-fit catalog, rb_score and rb_label, a column of the
-# catalog and of `sources` (rb, rblabel); the model is SFFT-trained, and
+# SFFT's positive and negative PSF-fit catalogs, as dev's, rb_score and
+# rb_label, a column of each catalog and of `sources` (rb, rblabel); the model is SFFT-trained, and
 # ZOGY's catalogs are not scored. The model is
 # a prefix holding SHA256SUMS and the three files below, each verified. New,
 # not dev's (dev: s3_prefix): model_prefix, a full s3:// or file:// prefix,
