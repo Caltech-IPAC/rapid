@@ -40,13 +40,14 @@ from rapidpipe.foundation import prefix
 from rapidpipe.science.catalogs.readers import catalog_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
-    CatalogInput, Read, WindowImage, _plain, _separation, covering, neighbour, reliability,
-    window_reach, write_set)
+    CatalogInput, Read, WindowImage, _plain, _separation, cap_triggers, covering, measure_forced,
+    neighbour, reliability, window_reach, write_set)
 from tests.support.catalogs import ra_offset, write_gaia_store, write_hp6_store, write_lvs_store
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
 SETTINGS = {"stamp_half_width": 64, "prv_window_days": 365.25, "forced_window_days": 30.0,
+            "max_alerts": 2000,
             "gaia_match": True, "ned_match": True, "lvs_match": True,
             "gaia_radius_arcsec": 1.0, "gaia_max_matches": 3,
             "ned_radius_arcsec": 10.0, "ned_max_matches": 3, "ned_host_selection": False,
@@ -273,6 +274,43 @@ def test_forced_rows_a_predecessor_holds_are_reused_not_measured(tmp_path):
     carried = {f["midpointMjd"]: f["psfFlux"] for f in records[1]["prvDiaForcedSources"]}
     # the record's psfFlux is an Avro float
     assert carried == {MJD[1]: 12345.0, MJD[2]: pytest.approx(forced[(7, 202)]["psf_flux"], rel=1e-6)}
+
+
+def test_the_cap_keeps_the_highest_absolute_snr_triggers_in_sid_order():
+    """dev's _cut_to_max_sources by |S/N|: a strong negative source outranks a weak positive one,
+    a missing S/N ranks last, order by sid is kept, -1 keeps everything and 0 keeps none."""
+    def trigger(sid, fluxfit, fluxerr):
+        return Source(sid=sid, aid=sid, expid=2, sca=8, mjdobs=MJD[2], ra=RA0, dec=DEC0, xfit=1.0,
+                      yfit=1.0, band="W146", xerr=0.1, yerr=0.1, fluxfit=fluxfit, fluxerr=fluxerr,
+                      flags=0, field=1, pid=102, exptime=60.0)
+    triggers = [trigger(1, 50.0, 10.0),      # S/N 5
+                trigger(2, -900.0, 10.0),    # S/N -90: a negative source, the strongest
+                trigger(3, 300.0, 10.0),     # S/N 30
+                trigger(4, 100.0, 0.0)]      # no S/N
+    kept, dropped = cap_triggers(triggers, 2)
+    assert [s.sid for s in kept] == [2, 3] and dropped == 2
+    kept, dropped = cap_triggers(triggers, 3)
+    assert [s.sid for s in kept] == [1, 2, 3] and dropped == 1
+    assert cap_triggers(triggers, -1) == (triggers, 0)
+    assert cap_triggers(triggers, 4) == (triggers, 0)
+    assert cap_triggers(triggers, 0) == ([], 4)
+
+
+def test_an_image_without_a_science_psf_is_measured_on_its_difference_only(tmp_path):
+    """dev 01f89299: no psfs row for the image's filter and SCA skips the science product; the
+    difference is still measured and the row is kept, its science fluxes null."""
+    write_epoch(tmp_path / "e1", [(50, 50, 400.0)])
+    ra, dec = (float(v[0]) for v in wcs().all_pix2world([50.0], [50.0], 1))
+    image = WindowImage(pid=101, rid=201, expid=1, sca=8, fid=8, band="W146", mjdobs=MJD[1],
+                        corners=corners(), diff=tmp_path / "e1" / "zogy_diffimage_masked.fits",
+                        diff_psf=tmp_path / "e1" / "diffpsf.fits",
+                        diff_uncert=tmp_path / "e1" / "zogy_diffimage_uncert_masked.fits",
+                        sci=tmp_path / "e1" / "bkg_subbed_science_image.fits", sci_psf=None)
+    rows, measured = measure_forced([image], [fp.Position(7, ra, dec)], {}, 61000.0)
+    (row,) = rows
+    assert measured == 1 and row["rid"] == 201 and abs(row["psf_flux"] - 400.0) < 50.0
+    assert row["science_flux"] is None and row["science_fluxerr"] is None
+    assert row["x"] == pytest.approx(50.0, abs=1e-6) and row["flags"] == 0   # dev's one-based x
 
 
 def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):

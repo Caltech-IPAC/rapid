@@ -1,4 +1,4 @@
-# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 883e3876
+# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 82bbca68
 """``packet``: one difference image's alert packets, schema 00.07, from named inputs.
 
 Foundation plan v5, Part 2: a new port of `dev`'s ``alerts/`` package. It
@@ -73,14 +73,25 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   (:mod:`rapidpipe.science.alerts.forced`) at the object's founding
   position on every window image whose footprint holds it, both the
   difference image (with its PSF and uncertainty) and the background-
-  subtracted science image (with the science PSF; no uncertainty image is
-  imported, so `dev`'s :func:`~rapidpipe.science.alerts.forced.error_array`
+  subtracted science image (with that image's own science PSF, below; no
+  uncertainty image is imported, so `dev`'s
+  :func:`~rapidpipe.science.alerts.forced.error_array`
   fallback applies), merged one row per (object, image) as `dev`'s
   ``_run_forced`` merges them. An (object, image) pair whose
   ``forced_id`` an official packet set holds is copied from it. The difference
   image measured is the window's published one (SFFT since the
   differencer switch, with ``sfftdiffpsf.fits``, as `dev`'s ``diff_flavor =
   sfft``; ZOGY's ``diffpsf.fits`` for a window image published before it).
+  Each window image's science PSF is the ``psfs`` row of its filter and
+  SCA that its difference job named as an input, read from ``job_inputs``
+  and recorded (:func:`science_psfs`); an image whose job named none (an
+  import) takes the packet job's own named ``psfs`` input when the key
+  matches, else the key's official row; an image with no row at all is
+  measured on its difference image only, logged and counted in the
+  summary's ``window_without_science_psf`` (`dev` 01f89299 skips the
+  science product the same way; it takes the best ``psfs`` row per
+  filter and SCA at the read, where this takes the row the image was
+  differenced with).
 - ``gaiaMatches``, ``nedMatches`` and ``lvsMatches``: each from the chip's
   cone of its copy, the footprint's centre and half-diagonal widened by the
   match radius and `dev`'s slack, and for Gaia by the largest proper motion
@@ -110,7 +121,7 @@ decompressed once per job when it is first read (:func:`_plain`), to a
 plain file beside its staged copy, or in the download cache for a
 ``file://`` product, which is never changed; forced photometry and the cutouts then
 read the plain file, so the trigger's difference and science images, read
-by both, and the science PSF, read on every window image, are not
+by both, and a science PSF shared by several window images, are not
 decompressed again.
 
 Outputs under the prefix: ``packets/<expid>-<sca>-<fid>.avro`` (one Avro
@@ -284,7 +295,7 @@ class WindowImage:
     diff_psf: Path
     diff_uncert: Path | None
     sci: Path
-    sci_psf: Path
+    sci_psf: Path | None                          # None: no psfs row for the image; science not measured
 
 
 @dataclasses.dataclass
@@ -329,6 +340,22 @@ class Read:
     catalogs: dict[str, CatalogInput]            # by name, the ones the job names
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
+    capped: int = 0                              # triggers dropped by [packet] max_alerts
+
+
+def cap_triggers(triggers: list[Source], max_alerts: int) -> tuple[list[Source], int]:
+    """`dev`'s ``_cut_to_max_sources``: the ``max_alerts`` triggers of highest |S/N|, in their
+    order, and how many were dropped; -1 keeps every trigger (`dev`'s 0), 0 keeps none.
+
+    `dev` ranks by signed S/N with a missing one last; here the absolute
+    value, so a negative source (``isdiffpos`` false, once the source set
+    carries them) ranks by its strength. A missing S/N still ranks last.
+    """
+    if max_alerts < 0 or len(triggers) <= max_alerts:
+        return triggers, 0
+    ranked = sorted(triggers, key=lambda s: (s.snr is None, -abs(s.snr or 0.0)))
+    kept = {s.sid for s in ranked[:max_alerts]}
+    return [s for s in triggers if s.sid in kept], len(triggers) - max_alerts
 
 
 def _one(inputs: list[dict], product: str, job: int) -> dict:
@@ -406,6 +433,9 @@ def _read(job: JobContext) -> Read:
         raise ValueError(f"job {job.job}: [packet] switches on {switched_on} but the job names {names}")
     ref_in = _one(inputs, "refimages", job.job)
     window_days = float(job.settings["packet"]["forced_window_days"])
+    max_alerts = job.settings["packet"]["max_alerts"]
+    if not isinstance(max_alerts, int) or isinstance(max_alerts, bool) or max_alerts < -1:
+        raise ValueError(f"[packet] max_alerts must be an integer, -1 for no cap, got {max_alerts!r}")
     reads: list[dict] = []
 
     with job.connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -426,6 +456,11 @@ def _read(job: JobContext) -> Read:
                 object_job[r["aid"]] = r["object_job"]
                 field_of[r["aid"]] = r["field"]
         triggers = [s for s in alertable if s.sid in aid_of]
+        triggers, capped = cap_triggers(triggers, max_alerts)
+        if capped:
+            logger.info("job %s: keeping the %d highest-|S/N| of %d triggers; %d dropped"
+                        " ([packet] max_alerts, dev's temporary stand-in for a real/bogus cut)",
+                        job.job, len(triggers), len(triggers) + capped, capped)
         aids = sorted({aid_of[s.sid] for s in triggers})
         fields = sorted({field_of[a] for a in aids})
         cur.execute(ORIGINS_SQL, (fields, [object_job[a] for a in aids], aids))
@@ -454,7 +489,11 @@ def _read(job: JobContext) -> Read:
         cur.execute("SELECT filename FROM psfs WHERE job = %s AND "
                     + _key_where(psf_in["key"], "psfs")[0],
                     (psf_in["source_job"], *_key_where(psf_in["key"], "psfs")[1]))
-        sci_psf = get(cur.fetchone()["filename"])
+        named_psf = cur.fetchone()
+        if named_psf is None:
+            raise ValueError(f"job {job.job}: no psfs row {psf_in['key']} in job {psf_in['source_job']}")
+        named_psf = {"job": psf_in["source_job"], "key": dict(psf_in["key"]),
+                     "filename": named_psf["filename"]}
 
         cur.execute("SELECT d.ra0, d.dec0, d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4,"
                     " l.mjdobs FROM diffimages d JOIN l2files l ON l.rid = d.rid"
@@ -467,10 +506,22 @@ def _read(job: JobContext) -> Read:
                                  "lo": own["mjdobs"] - window_days,
                                  "hi": own["mjdobs"] + TRIGGER_EPSILON_DAYS})
         images = []
-        for d in covering(cur.fetchall(), [objects[a][:2] for a in aids], source_job):
+        chosen = covering(cur.fetchall(), [objects[a][:2] for a in aids], source_job)
+        psf_rows, psf_reads = science_psfs(cur, chosen, key["dataset"], named_psf)
+        reads += psf_reads
+        fetched_psfs: dict[str, Path] = {}
+        for d in chosen:
             image_key = {"dataset": d["dataset"], "expid": d["expid"], "sca": d["sca"], "fid": d["fid"]}
             reads += [{"product": "diffimages", "key": image_key, "source_job": d["job"]},
                       {"product": "l2files", "key": image_key, "source_job": d["l2_job"]}]
+            psf_row = psf_rows.get(d["job"])
+            if psf_row is None:
+                logger.warning("job %s: window image pid=%s (expid %s sca %s fid %s) has no science"
+                               " psfs row; measured on its difference image only",
+                               job.job, d["pid"], d["expid"], d["sca"], d["fid"])
+                sci_psf = None
+            else:
+                sci_psf = fetched_psfs.setdefault(psf_row["filename"], get(psf_row["filename"]))
             diff = get(d["filename"])
             plain = diff.name.removesuffix(".gz")
             uncert = fp.DIFF_UNCERT_BASENAMES.get(plain)
@@ -521,12 +572,75 @@ def _read(job: JobContext) -> Read:
     if len(trigger_image) != 1:
         raise ValueError(f"job {job.job}: the trigger's difference image is not in its window")
     return Read(key=key, source_job=source_job, object_job=object_job, field_of=field_of,
-                flags_zero=len(alertable), triggers=triggers,
+                flags_zero=len(alertable), triggers=triggers, capped=capped,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
                 catalogs={name: _open_catalog(name, catalog_job, location)
                           for name, (catalog_job, location) in locations.items()},
                 refcat_path=get(ref["filename"]), reads=reads)
+
+
+#: The science ``psfs`` rows the window images' difference jobs named as inputs, by image job.
+IMAGE_PSFS_SQL = (
+    "SELECT i.job, p.job AS psf_job, p.fid, p.sca, p.filename FROM job_inputs i"
+    " JOIN psfs p ON p.job = i.source_job AND p.kind = 'science'"
+    " AND p.dataset = i.key ->> 'dataset' AND p.fid = (i.key ->> 'fid')::smallint"
+    " AND p.sca = (i.key ->> 'sca')::smallint"
+    " WHERE i.job = ANY(%s) AND i.kind = 'input' AND i.product = 'psfs'"
+    " AND i.key ->> 'kind' = 'science'")
+
+#: The official science ``psfs`` rows of a dataset for the given (fid, sca) pairs.
+OFFICIAL_PSFS_SQL = (
+    "SELECT job AS psf_job, fid, sca, filename FROM psfs_official"
+    " WHERE dataset = %s AND kind = 'science' AND (fid, sca) IN"
+    " (SELECT * FROM unnest(%s::smallint[], %s::smallint[]))")
+
+
+def science_psfs(cur, images: list[dict], dataset: str,
+                 named: dict) -> tuple[dict[int, dict | None], list[dict]]:
+    """Each window image's science PSF row, by the image's job, and the reads to record.
+
+    An image's PSF is, in order: the science ``psfs`` row its difference
+    job named as an input (what the image was differenced with); the
+    packet job's own named ``psfs`` input ``named`` (``job``, ``key``,
+    ``filename``) when its filter and SCA are the image's; the official
+    row for the image's filter and SCA at the read; or None. Every row
+    read that is not ``named`` (already among the job's inputs) is
+    returned as a ``psfs`` read, once.
+    """
+    jobs = sorted({d["job"] for d in images})
+    found: dict[int, dict] = {}
+    if jobs:
+        cur.execute(IMAGE_PSFS_SQL, (jobs,))
+        for row in cur.fetchall():
+            found[row["job"]] = {"psf_job": row["psf_job"], "fid": row["fid"], "sca": row["sca"],
+                                 "filename": row["filename"]}
+    named_pair = (int(named["key"]["fid"]), int(named["key"]["sca"]))
+    pending = sorted({(d["fid"], d["sca"]) for d in images
+                      if d["job"] not in found and (d["fid"], d["sca"]) != named_pair})
+    official: dict[tuple[int, int], dict] = {}
+    if pending:
+        cur.execute(OFFICIAL_PSFS_SQL, (dataset, [f for f, _ in pending], [s for _, s in pending]))
+        for row in cur.fetchall():
+            official[row["fid"], row["sca"]] = {"psf_job": row["psf_job"], "fid": row["fid"],
+                                                "sca": row["sca"], "filename": row["filename"]}
+    rows: dict[int, dict | None] = {}
+    for d in images:
+        if d["job"] in found:
+            rows[d["job"]] = found[d["job"]]
+        elif (d["fid"], d["sca"]) == named_pair:
+            rows[d["job"]] = {"psf_job": named["job"], "fid": d["fid"], "sca": d["sca"],
+                              "filename": named["filename"]}
+        else:
+            rows[d["job"]] = official.get((d["fid"], d["sca"]))
+    reads = []
+    for row in sorted({(r["psf_job"], r["fid"], r["sca"]) for r in rows.values() if r}):
+        psf_job, fid, sca = row
+        if psf_job == named["job"] and (fid, sca) == named_pair:
+            continue
+        reads.append({"product": "psfs", "key": {"dataset": dataset, "fid": fid, "sca": sca,
+                                                 "kind": "science"}, "source_job": psf_job})
+    return rows, reads
 
 
 def window_reach(image: dict) -> float:
@@ -612,6 +726,8 @@ def measure_forced(images: list[WindowImage], positions: list[fp.Position],
         merged: dict[int, dict] = {}
         for product, path, psf, uncert in (("diff", image.diff, image.diff_psf, image.diff_uncert),
                                            ("science", image.sci, image.sci_psf, None)):
+            if psf is None:                      # no science PSF: the difference alone, as dev
+                continue
             for m in fp.forced_photometry(str(_plain(path)), str(_plain(psf)), todo, rid=image.rid,
                                           product=product,
                                           uncert_path=str(_plain(uncert)) if uncert else None):
@@ -885,11 +1001,14 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), path / filename)
     return {"avro": f"packets/{name}", "avro_bytes": avro.stat().st_size,
             "flags_zero": read.flags_zero, "packets": len(order),
+            "triggers_dropped_by_cap": read.capped,
             "packets_snr_gt20": sum(1 for source, _ in order
                                     if source.fluxerr and source.fluxfit / source.fluxerr > 20),
             "packets_bright_footprint": sum(1 for source, _ in order
                                             if source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
-            "window_images": len(window), "forced_rows": len(forced_rows),
+            "window_images": len(window),
+            "window_without_science_psf": sum(1 for i in window if i.sci_psf is None),
+            "forced_rows": len(forced_rows),
             "forced_measured": measured, "forced_reused": len(forced_rows) - measured,
             **{f"{kind}_matches": sum(len(m) for m in matches[kind] if m) for kind in CATALOG_KINDS},
             "catalogs": records,

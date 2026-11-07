@@ -718,6 +718,7 @@ def test_two_science_psfs_fail(tmp_path, files, fakes):
 def test_the_shipped_difference_table_is_valid_and_refuses_fake_sources():
     difference.check_settings(THIN["difference"])
     assert THIN["difference"]["max_sources"] == THIN["import"]["max_sources"] == -1   # no cap, as dev
+    assert THIN["packet"]["max_alerts"] == 2000                                       # the one cap
     difference.check_settings(settings(max_sources=0)["difference"])                 # 0 keeps none
     with pytest.raises(ValueError, match="fake-source"):
         difference.check_settings(settings(fake_sources={"inject_fake_sources_flag": True})["difference"])

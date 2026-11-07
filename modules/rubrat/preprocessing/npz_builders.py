@@ -78,18 +78,57 @@ def arcsinh_stack_cutout(
     *,
     image_size: int,
     scale: float = 0.01,
+    zero_nans: bool = False,
 ) -> np.ndarray | None:
+    """Build one arcsinh-scaled science/reference/difference stack.
+
+    The default drops a stack that contains any NaN, which is the training-set
+    rule. Live scoring passes ``zero_nans=True`` and replaces those pixels with
+    0 before the arcsinh, matching the fill already used at the stamp edge.
+    """
+    image, _nan_fraction = arcsinh_stack_cutout_with_nan_fraction(
+        sci,
+        ref,
+        diff,
+        x,
+        y,
+        image_size=image_size,
+        scale=scale,
+        zero_nans=zero_nans,
+    )
+    return image
+
+
+def arcsinh_stack_cutout_with_nan_fraction(
+    sci: np.ndarray,
+    ref: np.ndarray,
+    diff: np.ndarray,
+    x: float,
+    y: float,
+    *,
+    image_size: int,
+    scale: float = 0.01,
+    zero_nans: bool = False,
+) -> tuple[np.ndarray | None, float]:
+    """Like ``arcsinh_stack_cutout``, also returning the masked-pixel fraction.
+
+    The fraction is the share of spatial pixels where any channel was NaN.
+    It is NaN when the cutout does not overlap the image.
+    """
     cuts = [
         extract_cutout(sci, x, y, image_size),
         extract_cutout(ref, x, y, image_size),
         extract_cutout(diff, x, y, image_size),
     ]
     if any(c is None for c in cuts):
-        return None
+        return None, float("nan")
     stack = np.stack(cuts, axis=-1).astype(np.float32)
-    if np.isnan(stack).any():
-        return None
-    return np.arcsinh(stack / np.float32(scale)).astype(np.float32)
+    nan_fraction = float(np.isnan(stack).any(axis=-1).mean())
+    if nan_fraction > 0.0 and not zero_nans:
+        return None, nan_fraction
+    if nan_fraction > 0.0:
+        stack = np.where(np.isnan(stack), np.float32(0.0), stack)
+    return np.arcsinh(stack / np.float32(scale)).astype(np.float32), nan_fraction
 
 
 def feature_row(row: pd.Series | dict) -> np.ndarray:

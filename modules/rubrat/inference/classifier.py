@@ -17,7 +17,12 @@ import numpy as np
 import pandas as pd
 
 from modules.rubrat.preprocessing.data_utils import EXPECTED_FEATURE_NAMES, FeatureZScore
-from modules.rubrat.preprocessing.npz_builders import FILTER_IDS, arcsinh_stack_cutout, feature_row, filter_id
+from modules.rubrat.preprocessing.npz_builders import (
+    FILTER_IDS,
+    arcsinh_stack_cutout_with_nan_fraction,
+    feature_row,
+    filter_id,
+)
 from modules.rubrat.preprocessing.fits_loader import load_fits
 from modules.rubrat.preprocessing.rubr_adapter import load_detection_catalog, normalize_filter_name
 from modules.rubrat.preprocessing.validation import sha256_file
@@ -248,6 +253,7 @@ class RealBogusClassifier:
         valid_indices: list[int] = []
         reasons = np.full(len(detections), "nonfinite_or_unusable_cutout", dtype=object)
         scores = np.full(len(detections), np.nan, dtype=np.float64)
+        nan_fractions = np.full(len(detections), np.nan, dtype=np.float64)
 
         def _flush() -> None:
             if not images:
@@ -290,14 +296,16 @@ class RealBogusClassifier:
             if x + half <= 0 or y + half <= 0 or x - half >= science.shape[1] or y - half >= science.shape[0]:
                 reasons[index] = "centroid_outside_image"
                 continue
-            cutout = arcsinh_stack_cutout(
+            cutout, nan_fraction = arcsinh_stack_cutout_with_nan_fraction(
                 science,
                 reference,
                 difference,
                 x,
                 y,
                 image_size=self.image_size,
+                zero_nans=True,
             )
+            nan_fractions[index] = nan_fraction
             feat = feature_row(row)
             if cutout is None:
                 reasons[index] = "nonfinite_or_unusable_cutout"
@@ -321,6 +329,7 @@ class RealBogusClassifier:
         output["rb_label"] = labels
         output["rb_valid"] = valid
         output["rb_status"] = reasons
+        output["rb_nan_fraction"] = nan_fractions
         output["rb_threshold"] = self.threshold
         output["rb_model_filter"] = canonical_filter
         output["rb_model_filter_id"] = fid

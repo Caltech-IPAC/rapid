@@ -7,11 +7,11 @@ in the usage line and the bright-footprint comment on ``psfFitFlags``; the
 three reliability params (``reliability``, ``reliabilityThreshold``,
 ``reliabilityVersion``) are `dev`'s since rb-port, their sources the
 rebuild's (``[packet]`` for `dev`'s ``[ALERTS]``, ``[difference.rubrat]``
-for ``[RUBRAT]``). The `.avsc` files it describes are copied verbatim from
-``alerts/schema/00/07/`` into this package's ``schema/00/07/``; `dev`'s
-``gen_schema.py`` (which writes them from this registry) is not ported --
-:func:`rapidpipe.science.alerts.assemble.schema_problems` checks the two
-agree instead.
+for ``[RUBRAT]``). The `.avsc` files it describes are written from this
+registry by ``python -m rapidpipe.science.alerts.gen_schema`` (`dev`'s
+``gen_schema.py``) into this package's ``schema/<major>/<minor>/``;
+:func:`rapidpipe.science.alerts.assemble.load_schema` refuses a set that
+differs from the registry.
 
 `dev`'s original header follows.
 
@@ -578,7 +578,7 @@ _REF_SRC = ("computed at assembly from the reference-image mosaic SExtractor "
 
 REF_MATCH_PARAMS = (
     Param("sourceId",      "string",           "SExtractor NUMBER of the reference source, unique within "
-                                               "this field's mosaic catalog",
+                                               "this field's mosaic catalog", #TODO: change to refCatID
                         IMPLEMENTED, _REF_SRC, attr="source_id"),
     Param("ra",            "double",           "Right ascension of the reference source; ICRS [deg]",
                         IMPLEMENTED, _REF_SRC),
