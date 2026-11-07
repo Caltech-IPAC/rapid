@@ -266,6 +266,26 @@ def truth_files(intake: dict, truth: list | None = None) -> list[str]:
         Bucket=bucket, Prefix=prefix).get("Contents", []) if o["Key"].endswith(".parquet")]
 
 
+#: A detection's flux under [packet] alert_catalog "xsources": its fit's, else the 3 px aperture's,
+#: as the packet stage's psfFlux (rapid_docs decision-packets-from-xsources).
+XSOURCE_FLUX = ("CASE WHEN s.fluxfit IS NOT NULL AND s.snrfit IS NOT NULL AND s.snrfit <> 0"
+                " AND s.fluxfit <> 'NaN' AND s.snrfit <> 'NaN' THEN s.fluxfit ELSE s.fluxap1 END")
+
+
+def detections_sql(settings: dict) -> str:
+    """The run's official detections' query, one ``%s`` the run: the catalog its packets are made
+    from (``[packet] alert_catalog``; ``"sources"`` for a body without the key), so a packet's
+    ``(source_job, sid)`` joins its trigger. An xsource's ``sid`` is its ``xsid``, its ``fluxfit``
+    :data:`XSOURCE_FLUX` and its ``flags`` SExtractor's."""
+    x = "x" if settings.get("packet", {}).get("alert_catalog", "sources") == "xsources" else ""
+    flux = XSOURCE_FLUX if x else "s.fluxfit"
+    return (f"SELECT s.job, s.{x}sid AS sid, s.expid, s.sca, s.ra, s.dec, {flux} AS fluxfit, s.flags,"
+            " s.field = d.field AS in_field"
+            f" FROM {x}sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
+            " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
+            " JOIN diffimages d ON d.pid = s.pid")
+
+
 def load(conn, run_id: int) -> dict:
     """A run's rows this script reads: ``run`` (dataset, settings), ``shift``, ``sources``,
     ``packets``, ``diffs`` (the (expid, SCA) with an official difference image), the difference
@@ -282,11 +302,8 @@ def load(conn, run_id: int) -> dict:
     (run,) = q("SELECT dataset, settings FROM runs WHERE id = %s", (run_id,))
     intake = run["settings"]["settings"]["intake"] if "settings" in run["settings"] else run["settings"]["intake"]
     shift = tuple(float(v) for v in intake.get("crpix_shift", [0.0, 0.0]))
-    sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
-                             " s.field = d.field AS in_field"
-                             " FROM sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
-                             " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
-                             " JOIN diffimages d ON d.pid = s.pid", (run_id,)))
+    body = run["settings"]["settings"] if "settings" in run["settings"] else run["settings"]
+    sources = pd.DataFrame(q(detections_sql(body), (run_id,)))
     packets = pd.DataFrame(q(
         "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
         " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"

@@ -57,6 +57,18 @@ manifest's ``reads``, which the publisher writes to ``job_inputs``:
 A late epoch's memberships therefore appear in packets issued after it
 arrives, never in those already sent.
 
+``[packet] alert_catalog`` names the tables read (rapid_docs
+``decision-packets-from-xsources``; :data:`ALERT_CATALOGS`): ``"xsources"``,
+shipped, reads the set's xsources, the ``xobjects`` and the
+``xmemberships`` where this docstring says sources, objects and
+memberships, each xsource read as a :class:`Source` by
+:func:`xsource_fields`; ``"sources"``, and a run body without the key,
+reads ``sources``, ``objects`` and ``memberships``. An xsource triggers
+when its SExtractor ``flags`` equal ``[associate] xsource_flags``. The
+``sources`` input and the ``sources`` reads name the source sets either
+way: a set's xsources are official through its ``sources`` binding. The
+index's ``aid`` and ``sid`` are the ``xaid`` and ``xsid`` under ``"xsources"``.
+
 The job's ``expects`` row names the previous packet binding for its key,
 or none.
 
@@ -105,7 +117,7 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   groups read; the set still issues. ``refStarMatches``/``refGalaxyMatches``
   from the reference mosaic catalog, likewise; ``ssMatches`` null (not run:
   deferred by the plan).
-- ``reliability`` from ``sources.rb`` (the difference job's real/bogus
+- ``reliability`` from ``sources.rb`` or ``xsources.rb`` (the difference job's real/bogus
   score, SFFT only), and on a scored trigger ``reliabilityThreshold`` and
   ``reliabilityVersion`` from ``[packet] rb_threshold`` and ``rb_version``
   (:func:`reliability`); all three null on an unscored source.
@@ -136,7 +148,8 @@ The manifest's ``metrics``: ``n_packets``, the set's packets, and
 ``n_packets_snr_gt20``, those whose source's fit flux over its error is
 above 20, and ``n_packets_bright_footprint``, those whose source carries
 the bright-footprint flag
-(:data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`).
+(:data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`; 0
+under ``"xsources"``, whose flags are the fit's).
 """
 
 from __future__ import annotations
@@ -228,31 +241,136 @@ SOURCE_JOINS = (
     " LEFT JOIN surveys sv ON sv.program_id = e.program_id")
 
 #: The trigger set's memberships: its sources' objects and their fields, from the children of
-#: ``memberships`` its difference job wrote (``memberships_of``), never the parent.
-TRIGGER_SQL = ("SELECT sid, object_job, aid, field FROM memberships_of(ARRAY[%s]::bigint[])"
-               " ORDER BY sid, aid, object_job")
+#: ``memberships`` its difference job wrote (``memberships_of``), never the parent; under
+#: ``"xsources"`` its xsources' xobjects from ``xmemberships`` (``{aid}`` ``xaid``, ``{sid}`` ``xsid``).
+TRIGGER_SQL = ("SELECT {sid} AS sid, object_job, {aid} AS aid, field FROM {memberships}_of(ARRAY[%s]::bigint[])"
+               " ORDER BY {sid}, {aid}, object_job")
 
 #: The triggers' objects' founding positions, from their fields' children of ``objects``.
-ORIGINS_SQL = ("SELECT o.aid, o.ra0, o.dec0 FROM objects_in(%s::integer[]) o WHERE (o.job, o.aid) IN"
-               " (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))")
+ORIGINS_SQL = ("SELECT o.{aid} AS aid, o.ra0, o.dec0 FROM {objects}_in(%s::integer[]) o"
+               " WHERE (o.job, o.{aid}) IN (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))")
 
 #: The memberships of the triggers' objects whose source set is official, and the set's own, from
 #: the objects' fields' children of ``memberships`` (an object's memberships are filed under its field).
+#: An xmembership's set is official through its ``sources`` binding, as its xsources are.
 MEMBERSHIPS_SQL = (
-    "SELECT m.aid, m.source_job, m.sid FROM memberships_in(%(fields)s::integer[]) m"
-    " WHERE (m.object_job, m.aid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
+    "SELECT m.{aid} AS aid, m.source_job, m.{sid} AS sid FROM {memberships}_in(%(fields)s::integer[]) m"
+    " WHERE (m.object_job, m.{aid}) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
     " AND (m.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
     " AND o.product = 'sources' AND o.job = m.job))")
 
 #: Those members' source rows, from one child table of ``sources`` (never the parent: a query
 #: there visits every child, rapidpipe.foundation.children).
 MEMBER_ROWS_SQL = (
-    f"SELECT {SOURCE_COLUMNS} FROM {{child}} s{SOURCE_JOINS}"
-    " WHERE (s.job, s.sid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(sids)s::bigint[]))")
+    "SELECT {columns} FROM {{child}} s" + SOURCE_JOINS
+    + " WHERE (s.job, s.{sid}) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(sids)s::bigint[]))")
 
 #: The job's own source set's alertable rows, from its child table.
-OWN_ROWS_SQL = (f"SELECT {SOURCE_COLUMNS} FROM {{child}} s{SOURCE_JOINS}"
-                " WHERE s.job = %s AND s.flags & ~%s = %s ORDER BY s.sid")
+OWN_ROWS_SQL = "SELECT {columns} FROM {{child}} s" + SOURCE_JOINS + " WHERE s.job = %s AND {alertable} ORDER BY s.{sid}"
+
+#: An xsource row as it is read: the columns :func:`xsource_fields` maps to a :class:`Source`.
+XSOURCE_COLUMNS = (
+    "s.job AS source_job, s.dataset, s.xsid AS sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.x, s.y,"
+    " s.fluxap1, s.fluxerrap1, s.fluxfit, s.snrfit, s.flagsfit, s.redchi, s.npixfit, s.cfit,"
+    " s.sharpness, s.roundness1, s.roundness2, s.field, s.hp6, s.hp9, s.pid, s.isdiffpos, s.rb,"
+    " s.rblabel" + SOURCE_COLUMNS[SOURCE_COLUMNS.index(", f.filter AS band"):])
+
+
+@dataclasses.dataclass(frozen=True)
+class AlertCatalog:
+    """The tables ``[packet] alert_catalog`` makes a packet set from, and how their rows are read.
+
+    ``alertable`` is the own set's trigger condition, its one ``%s`` the
+    flags value (the sources' also takes the informational bits first).
+    """
+    parent: str
+    objects: str
+    memberships: str
+    aid: str
+    sid: str
+    columns: str
+    alertable: str
+
+    def sql(self, template: str) -> str:
+        """``template`` with this catalog's tables and columns."""
+        return template.format(parent=self.parent, objects=self.objects, memberships=self.memberships,
+                               aid=self.aid, sid=self.sid, columns=self.columns,
+                               alertable=self.alertable)
+
+
+#: ``[packet] alert_catalog``'s values (rapid_docs decision-packets-from-xsources).
+ALERT_CATALOGS = {
+    "sources": AlertCatalog("sources", "objects", "memberships", "aid", "sid", SOURCE_COLUMNS,
+                            "s.flags & ~%s = %s"),
+    "xsources": AlertCatalog("xsources", "xobjects", "xmemberships", "xaid", "xsid", XSOURCE_COLUMNS,
+                             "s.flags = %s"),
+}
+
+
+def alert_catalog(settings: dict) -> str:
+    """The run's ``[packet] alert_catalog``: ``"sources"`` for a run body stored before the key.
+
+    Parameters
+    ----------
+    settings : dict
+        The run's settings body.
+
+    Returns
+    -------
+    str
+        ``"xsources"`` or ``"sources"``.
+
+    Raises
+    ------
+    ValueError
+        When the value is neither.
+    """
+    name = settings["packet"].get("alert_catalog", "sources")
+    if name not in ALERT_CATALOGS:
+        raise ValueError(f"[packet] alert_catalog must be one of {sorted(ALERT_CATALOGS)}, got {name!r}")
+    return name
+
+
+def _finite(value) -> float | None:
+    """``value`` as a float, or None when it is null or not finite."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def xsource_fields(row: dict) -> dict:
+    """An xsource row (:data:`XSOURCE_COLUMNS`) as :class:`Source` fields, the ruling's mapping.
+
+    The PSF fit of `dev`'s extra columns gives ``fluxfit``, ``fluxerr``
+    (``fluxfit / snrfit``) and ``flags`` (``flagsfit``); an xsource not
+    fitted (``fluxfit`` or ``snrfit`` null or not finite, or ``snrfit``
+    0) takes the 3 px aperture, ``FLUX_APER_1`` and ``FLUXERR_APER_1``,
+    and flags 0. ``apflux``, ``apfluxerr`` are always the 3 px aperture;
+    ``xfit``, ``yfit`` are ``XWIN_IMAGE``, ``YWIN_IMAGE`` made zero-based.
+
+    Parameters
+    ----------
+    row : dict
+        One xsource row with its exposure's columns, as read.
+
+    Returns
+    -------
+    dict
+        The row's :class:`Source` fields, the exposure's columns unchanged.
+    """
+    out = dict(row)
+    x, y = out.pop("x"), out.pop("y")
+    fluxap, fluxerrap = _finite(out.pop("fluxap1")), _finite(out.pop("fluxerrap1"))
+    fluxfit, snrfit = _finite(out.pop("fluxfit")), _finite(out.pop("snrfit"))
+    flagsfit = out.pop("flagsfit")
+    fitted = fluxfit is not None and snrfit                # snrfit neither null nor 0
+    out.update(xfit=float(x) - 1.0, yfit=float(y) - 1.0, apflux=fluxap, apfluxerr=fluxerrap,
+               fluxfit=fluxfit if fitted else fluxap,
+               fluxerr=fluxfit / snrfit if fitted else fluxerrap,
+               flags=int(flagsfit or 0) if fitted else 0)
+    return out
+
 
 #: The window's candidate difference images: official, or the trigger's own, of the dataset, by L2
 #: mjdobs, centred within ``reach`` degrees of the trigger image's centre (two of its half-diagonals,
@@ -340,6 +458,7 @@ class Read:
     catalogs: dict[str, CatalogInput]            # by name, the ones the job names
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
+    catalog: str = "sources"                     # [packet] alert_catalog
     capped: int = 0                              # triggers dropped by [packet] max_alerts
 
 
@@ -371,13 +490,14 @@ def _key_where(key: dict, alias: str) -> tuple[str, list]:
 
 
 def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
-                 fields: list[int]) -> list[dict]:
+                 fields: list[int], catalog: AlertCatalog = ALERT_CATALOGS["sources"]) -> list[dict]:
     """The members of the triggers' objects, each with its object's ``member_aid``.
 
     The memberships first (:data:`MEMBERSHIPS_SQL`), then the members' rows
     from the child tables of ``sources`` that hold them, one query per child
     (:data:`MEMBER_ROWS_SQL`), never the parent. A member appears once per
-    object, ordered by object, source set and source id.
+    object, ordered by object, source set and source id. Under ``catalog``
+    ``xsources``: the xobjects' xmemberships and the xsources' children.
 
     Parameters
     ----------
@@ -389,16 +509,18 @@ def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
         The job's own source set, whose memberships count before it is official.
     fields : list of int
         The objects' fields, whose children of ``memberships`` hold their memberships.
+    catalog : AlertCatalog, optional
+        The tables read (:data:`ALERT_CATALOGS`).
 
     Returns
     -------
     list of dict
-        One row per (object, member) with :data:`SOURCE_COLUMNS` and ``member_aid``.
+        One row per (object, member) with the catalog's columns and ``member_aid``.
     """
-    cur.execute(MEMBERSHIPS_SQL, {"jobs": object_jobs, "aids": aids, "own": own,
+    cur.execute(catalog.sql(MEMBERSHIPS_SQL), {"jobs": object_jobs, "aids": aids, "own": own,
                                   "fields": sorted(set(fields))})
     links = {(r["aid"], r["source_job"], r["sid"]) for r in cur.fetchall()}
-    children = set_children(cur, "sources", {job for _, job, _ in links})
+    children = set_children(cur, catalog.parent, {job for _, job, _ in links})
     wanted: dict[str, set[tuple[int, int]]] = {}
     for _, job, sid in links:
         if job in children:
@@ -406,7 +528,7 @@ def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
     found: dict[tuple[int, int], dict] = {}
     for child, keys in sorted(wanted.items()):
         keys = sorted(keys)
-        cur.execute(sql.SQL(MEMBER_ROWS_SQL).format(child=sql.Identifier(child)),
+        cur.execute(sql.SQL(catalog.sql(MEMBER_ROWS_SQL)).format(child=sql.Identifier(child)),
                     {"jobs": [k[0] for k in keys], "sids": [k[1] for k in keys]})
         for row in cur.fetchall():
             found[(row["source_job"], row["sid"])] = dict(row)
@@ -434,21 +556,27 @@ def _read(job: JobContext) -> Read:
     ref_in = _one(inputs, "refimages", job.job)
     window_days = float(job.settings["packet"]["forced_window_days"])
     max_alerts = job.settings["packet"]["max_alerts"]
+    catalog_name = alert_catalog(job.settings)
+    catalog = ALERT_CATALOGS[catalog_name]
+    alertable_flags = ((INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS) if catalog_name == "sources"
+                       else (int(job.settings["associate"]["xsource_flags"]),))
+    as_source = (lambda r: Source.from_row(r)) if catalog_name == "sources" else (
+        lambda r: Source.from_row(xsource_fields(r)))
     if not isinstance(max_alerts, int) or isinstance(max_alerts, bool) or max_alerts < -1:
         raise ValueError(f"[packet] max_alerts must be an integer, -1 for no cap, got {max_alerts!r}")
     reads: list[dict] = []
 
     with job.connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        own_child = set_children(cur, "sources", [source_job]).get(source_job)
+        own_child = set_children(cur, catalog.parent, [source_job]).get(source_job)
         rows = []
         if own_child is not None:                # none: the set loaded no rows
-            cur.execute(sql.SQL(OWN_ROWS_SQL).format(child=sql.Identifier(own_child)),
-                        (source_job, INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS))
+            cur.execute(sql.SQL(catalog.sql(OWN_ROWS_SQL)).format(child=sql.Identifier(own_child)),
+                        (source_job, *alertable_flags))
             rows = cur.fetchall()
-        alertable = [Source.from_row(r) for r in rows]
+        alertable = [as_source(r) for r in rows]
         exposures = {(r["dataset"], r["expid"]): r["exposure_job"] for r in rows}
 
-        cur.execute(TRIGGER_SQL, (source_job,))
+        cur.execute(catalog.sql(TRIGGER_SQL), (source_job,))
         aid_of, object_job, field_of = {}, {}, {}
         for r in cur.fetchall():                 # ordered by aid: the lowest is first
             if r["sid"] not in aid_of:
@@ -463,19 +591,20 @@ def _read(job: JobContext) -> Read:
                         job.job, len(triggers), len(triggers) + capped, capped)
         aids = sorted({aid_of[s.sid] for s in triggers})
         fields = sorted({field_of[a] for a in aids})
-        cur.execute(ORIGINS_SQL, (fields, [object_job[a] for a in aids], aids))
+        cur.execute(catalog.sql(ORIGINS_SQL), (fields, [object_job[a] for a in aids], aids))
         origin = {r["aid"]: (r["ra0"], r["dec0"]) for r in cur.fetchall()}
 
         members: dict[int, list[tuple[int, Source]]] = {}
         objects: dict[int, tuple[float, float, Sums]] = {
             aid: (*origin[aid], Sums(*origin[aid])) for aid in aids}
         member_sets = set()
-        for row in _member_rows(cur, [object_job[a] for a in aids], aids, source_job, fields):
+        for row in _member_rows(cur, [object_job[a] for a in aids], aids, source_job, fields,
+                                catalog):
             aid = row.pop("member_aid")
-            member = Source.from_row(row)
+            member = as_source(row)
             member.aid = aid
             members.setdefault(aid, []).append((row["source_job"], member))
-            objects[aid][2].add(row["ra"], row["dec"], row["fluxfit"])
+            objects[aid][2].add(member.ra, member.dec, member.fluxfit)
             member_sets.add(row["source_job"])
             exposures[row["dataset"], row["expid"]] = row["exposure_job"]
         reads += [{"product": "exposures", "key": {"dataset": d, "expid": e}, "source_job": j}
@@ -571,7 +700,8 @@ def _read(job: JobContext) -> Read:
     trigger_image = [i for i in images if (i.expid, i.sca, i.fid) == (key["expid"], key["sca"], key["fid"])]
     if len(trigger_image) != 1:
         raise ValueError(f"job {job.job}: the trigger's difference image is not in its window")
-    return Read(key=key, source_job=source_job, object_job=object_job, field_of=field_of,
+    return Read(key=key, source_job=source_job, catalog=catalog_name, object_job=object_job,
+                field_of=field_of,
                 flags_zero=len(alertable), triggers=triggers, capped=capped,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
@@ -1004,8 +1134,10 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
             "triggers_dropped_by_cap": read.capped,
             "packets_snr_gt20": sum(1 for source, _ in order
                                     if source.fluxerr and source.fluxfit / source.fluxerr > 20),
+            # an xsource's flags are its fit's, which carry no bright-footprint bit
             "packets_bright_footprint": sum(1 for source, _ in order
-                                            if source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
+                                            if read.catalog == "sources"
+                                            and source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
             "window_images": len(window),
             "window_without_science_psf": sum(1 for i in window if i.sci_psf is None),
             "forced_rows": len(forced_rows),

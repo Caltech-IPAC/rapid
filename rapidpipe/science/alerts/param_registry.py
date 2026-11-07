@@ -241,9 +241,9 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.isdiffpos (inverted; renamed per schema spreadsheet)",
                     getter=lambda d: not d.isdiffpos),
     Param("apFlux",        ["null", "float"],  "Aperture flux on difference image (stub) [nJy]",
-                    STUB, "aperture photometry (not in DB flow; SExtractor MAG_AUTO in file flow)"),
+                    IMPLEMENTED, "xsources.fluxap1 (FLUX_APER_1, 3 px; null for a source)", attr="apflux"),
     Param("apFluxErr",     ["null", "float"],  "Uncertainty in apFlux (stub) [nJy]",
-                    STUB, "aperture photometry"),
+                    IMPLEMENTED, "xsources.fluxerrap1 (FLUXERR_APER_1)", attr="apfluxerr"),
     # --- Forced Photometry ---------------------------------------------------- #TODO
     Param("scienceFlux",   ["null", "float"],  "Forced PSF flux on science image (stub) [nJy]", #TODO: why is this not in diaForcedSource???
                     STUB, _FP),
