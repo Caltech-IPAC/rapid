@@ -296,6 +296,7 @@ regression) and run 158 (FAIL on the consumer only: the gate holds all but one o
 | outage-probe-read | The two windows read. 2026-10-29: array `ce9d80e9`, three children SUCCEEDED on attempt 1, exit 0, slowest extra 0.353 s, bracket not met (the 15:00 UTC window failed at the canary; the hand windows rebooted rapid-db after `--until`). 2026-11-05: no array; the schedule's `SubmitJob` (14:58:17 UTC) was refused, `rapid-rebuild:98` having been deregistered 2026-11-03 19:23 UTC, so the live bracket was never observed by a job. The budget is set instead from the window executions' own rapid-db records, reboot branch, fence marker (PAUSE) to the reopen's first accepted login: 177.7 s (`97d2f5df`, 10-22), 178.1 s (`0978f41b`, 10-29), 177.8 s (`5c03b987`, 11-05: PAUSE 15:13:51, kernel 15:16:37.8, postgres ready 15:16:46.1, pooler listening 15:16:48.35, first login 15:16:48.38 UTC). `rapidpipe/db/connection.py` retries a connect for 300 s (`DEFAULT_CONNECT_RETRY_S`, 178 s plus 120 s headroom) in place of five tries (57.5 s under PAUSE, 7.5 s refused), and its first refusal logs the maintenance lock's holder once; the probe verb is deleted | none (window records) | this PR; rapid_systems and rapid_docs PRs |
 | gaia-mirror | the Gaia product is one mirror per release read as a cone per chip, not a box per dataset (rapid_docs `decision-gaia-mirror`, Emily Everetts, 2026-10-29): `dev`'s catalog store and cone readers (NED, NED-LVS, Gaia; a41c4d7b) ported as `rapidpipe.science.catalogs`, `python -m rapidpipe.science.catalogs.store ingest-gaia` builds the mirror once per release into the catalogs bucket under `gaia/DR3/` (rapid_systems' `roman-rapid-catalogs`, proposed with this step); the import scope's `gaia` names the prefix (`"partial": true` for a developer's copy of some leaves) and copies nothing; the packet job reads the chip's cone widened by the largest proper motion over the epoch offset and records the release, the epoch, the cone and the row groups read in its manifest's `packet.gaia`; the intake's WCS offset metric reads the frame's cone. The team's mirror is not yet built; the live runs' boxes stay bound to those runs | none yet | rapid_docs gaia-mirror |
 | catalog-matches | the packet's NED and NED-LVS matches join Gaia (rapid_docs `decision-catalog-matches`, Emily Everetts, 2026-10-30): `dev`'s `build_nedcat` to `match_lvscat` in `science.alerts.crossmatch`, the copies under the catalogs bucket's `ned/36.1_20260527_v2/` (NED release 36.1_20260527_v2 re-cut to order 6, NED-LVS `NEDLVS_20260424` as Parquet), `catalogs` rows named by kind and registered by the import scope's `ned` and `lvs`; `[packet] gaia_match`, `ned_match`, `lvs_match` shipped on, the loop requiring every switched-on copy, and every named match best-effort: a copy that cannot be opened or serve the chip's cone ships its field null with the reason in the manifest's `packet.catalogs.<name>` and the set's `catalogs_failed`, the set still issuing. The NED copies are not yet built; the README's run switches the two off | none yet | rapid_docs ned-lvs |
+| sfft-block-base (2026-11-07) | dev's socsims `[difference.sfft]` block on the GBTDS and RimTimSim overlays (Ben's ruling 2026-11-07, sfft-singular), no ZOGY fallback (`diff_flavor` retired); on `rapid-rebuild:103` (`63243090`, `sha256:fc38d659…`), one epoch each, a fresh dataset and run apiece, against the latest row for the sample: GBTDS gb3 2014201 completes (157 failed), core +0.0529, ring −0.0177, difference 5,324 s against ZOGY 139's −0.0485, −0.0386, 889 s; RimTimSim F213 4571 completes (156 failed), core +0.0510, ring +0.0907, 32,132 of 123,630 positive candidates above S/N 20, difference 8,317 s against ZOGY 124's −0.0694, −0.0339, 2,643 s; HLWAS null 4040101 core −0.0030, ring −0.0013, 293 packets against SFFT 153's +0.0005, −0.0074, 86 and ZOGY 150's −0.0010, +0.0017, 181; OpenUniverse 28737 detected 12 of 56, false positives 1,989, core −0.0068, ring −0.0017 against ZOGY 125's 4, 493, −0.0202, +0.0136; flight 1049 e4 core +0.0106, ring −0.0163, usable 0.781, 813 packets against ZOGY 126's +0.0013, −0.0050, 0.781, 328; every count rose with the tip's uncapped two-sign sources (PR 529) and `max_alerts` 2000 (PR 531), so counts do not compare with the earlier rows; `check_run.sh`'s reader query had failed on every run since field-children (PR 536); run 161 (flight) failed its packet job on `external`'s key, rerun as 165 | 160, 161, 162, 163, 164, 165 | PRs 535, 536; rapid_docs 169 |
 
 ## Current procedure
 
@@ -381,7 +382,8 @@ PR 465's `ring_count` regression. Nor on `rapid-rebuild:91`
 `rapid-rebuild:92` (`rapid-rebuild-production:83`, ZOGY by default):
 `rapid-rebuild:93` (`rapid-rebuild-production:84`, `0b7492fc`, PR 490)
 publishes the SFFT default and supersedes both; `rapid-rebuild:95`
-(`rapid-rebuild-production:86`, `776bdc3b`, PR 495) is the newest.
+(`rapid-rebuild-production:86`, `776bdc3b`, PR 495) is superseded by
+`rapid-rebuild:103` (`63243090`, PR 535), the newest a proof ran on.
 
 **A run.** One dataset name and one live run per proof; a run's bindings
 are its dataset's alone; two loops never run under one run at once. The
@@ -456,8 +458,12 @@ the packet's three reliability fields carry it. SMDC's
 `sources_official` view predates the two columns: read them from
 `sources`. SFFT runs under dev's OpenUniverse `[difference.sfft]` block
 (cross-convolution, segmentation, gain-match catalogs, bsmask 50 / 100)
-for every dataset, the base's since sfft-block-base; dev's rule turns
-cross-convolution off for a RimTimSim file. An overlay reaches a run from
+for every dataset but GBTDS and RimTimSim, the base's since
+sfft-block-base; their overlays carry dev's socsims block (no
+cross-convolution, bsmask 20000 / 30, no gain-match catalogs, no
+segmentation), whose kernel solve does not go singular on their crowded
+frames (PR 535); dev's rule turns cross-convolution off for a RimTimSim
+file. An overlay reaches a run from
 the checkout at `rp run create`, which stores the resolved body; a job
 reads that body, never an overlay file, so an overlay edit needs no revision.
 A flight overlay sets
@@ -538,10 +544,20 @@ items no later part closed; each names where its numbers are.
   no more; excluding the zeroed DQ cores from SFFT's fit in the stage
   (PR 435) is recorded, not built. On GBTDS and RimTimSim F213 every
   difference job fails under the block (SFFT's `Singular matrix`, exit 70;
-  runs 156, 157): what those two publish is Ben's open ruling. `dev`'s
+  runs 156, 157); their overlays carry dev's socsims block since PR 535,
+  which differences both (runs 164, 163) but leaves GBTDS's core at
+  +0.053 and RimTimSim's ring at +0.091 (ZOGY −0.049 and −0.034). Why the
+  base block's solve is singular there is a finding for Russ. `dev`'s
   socsims block on the socsims lite overlay differences GBTDS without the
   failure (run 158, 1,998 epochs), its core median +0.066 holding 1,997
   of 1,998 sets at the HLWAS-derived ±0.025.
+- **A packet job fails when one import job registers both NED and
+  NED-LVS** and a source matches the same galaxy in both: `external`'s
+  unique key names the catalog by its import job, not its name, so the two
+  rows collide (`UniqueViolation`, run 161's job 32179, a WISEA galaxy on
+  flight 1049). The import stage's docstring shows the three catalogs in
+  one scope. Until the key or the stage changes, register each catalog by
+  its own import job (runs 163 to 165).
 - **The bright-star residual's cause**: flagged (bit 16384), not fixed;
   about 20 per epoch above S/N 20 on SCA 8 F146, two to three times that
   on SCAs 4 and 5 (parts 10, 11 step 3).
