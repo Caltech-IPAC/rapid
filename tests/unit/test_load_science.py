@@ -245,14 +245,14 @@ def test_the_sources_prefilter_is_its_own_table_or_an_older_bodys_sumrat_alone()
     shared = {"sumrat_prefilter_threshold": 0.7, "rb_prefilter_threshold": 0.2,
               "snr_prefilter_threshold": 9.0}
     assert catalogs.sources_prefilter(
-        {"sources_prefilter": {"sumrat_prefilter_threshold": 0.3, "rb_prefilter_threshold": 0.0,
-                               "snr_prefilter_threshold": ""},
-         "database_prefilter": shared}) == {
+        {"sources_database_prefilter": {"sumrat_prefilter_threshold": 0.3,
+                                        "rb_prefilter_threshold": 0.0, "snr_prefilter_threshold": ""},
+         "xsources_database_prefilter": shared}) == {
         "sumrat_prefilter_threshold": 0.3, "rb_prefilter_threshold": 0.0, "snr_prefilter_threshold": None}
-    assert catalogs.sources_prefilter({"database_prefilter": shared}) == {   # before the split
+    assert catalogs.sources_prefilter({"database_prefilter": shared}) == {   # a body before the split
         "sumrat_prefilter_threshold": 0.7, "rb_prefilter_threshold": None, "snr_prefilter_threshold": None}
-    with pytest.raises(ValueError, match="sources_prefilter. rb_prefilter_threshold"):
-        catalogs.sources_prefilter({"sources_prefilter": {"rb_prefilter_threshold": "0.0"}})
+    with pytest.raises(ValueError, match="sources_database_prefilter. rb_prefilter_threshold"):
+        catalogs.sources_prefilter({"sources_database_prefilter": {"rb_prefilter_threshold": "0.0"}})
 
 
 def test_the_rb_and_snr_cuts_drop_at_or_below_and_pass_an_unscored_source():

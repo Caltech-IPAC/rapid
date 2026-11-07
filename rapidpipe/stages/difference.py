@@ -91,8 +91,8 @@ and ``sources`` (SFFT's positive and negative PSF-fit catalogs, as
 :func:`rapidpipe.science.load.catalogs.source_set` with its sign as
 ``isdiffpos``, the negatives' ``sid`` numbered after the positive
 catalog's ids, through `dev`'s database prefilter first
-(``[difference.sources_prefilter]``, apart from the xsources'
-``[difference.database_prefilter]``), then, per sign, capped at
+(``[difference.sources_database_prefilter]``, apart from the xsources'
+``[difference.xsources_database_prefilter]``), then, per sign, capped at
 ``max_sources``, shipped -1, no cap, as `dev`; the quality metrics are the
 positive sources', with ``n_sources_negative`` and
 ``n_candidates_negative`` beside them; a source in a bright reference source's footprint
@@ -1552,7 +1552,7 @@ def xsources_set(found: dict[str, Any], settings: dict[str, Any], key: dict, pid
     found : dict
         :func:`_xsources_columns`' result.
     settings : dict
-        The ``[difference]`` table, whose ``database_prefilter`` holds the cuts.
+        The ``[difference]`` table, whose ``xsources_database_prefilter`` holds the cuts.
     key : dict
         The set's ``dataset``, ``expid``, ``sca`` and ``fid``.
     pid : int
@@ -1567,7 +1567,7 @@ def xsources_set(found: dict[str, Any], settings: dict[str, Any], key: dict, pid
         and what the manifest records: rows read and kept, fitted and scored,
         by sign, and the seconds.
     """
-    f = settings["database_prefilter"]
+    f = xsources.prefilter_table(settings)
     thresholds = {"sumrat": xsources.threshold(f, "sumrat_prefilter_threshold"),
                   "rb": xsources.threshold(f, "rb_prefilter_threshold"),
                   "snr": xsources.threshold(f, "snr_prefilter_threshold")}

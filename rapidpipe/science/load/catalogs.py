@@ -211,7 +211,7 @@ def prefilter(catalog, naxis1: int, naxis2: int, sumrat_prefilter_threshold: flo
                 & (ynear >= EDGE_MARGIN) & (ynear <= naxis2 - 1 - EDGE_MARGIN))
 
 
-#: The thresholds of ``[difference.sources_prefilter]``, as :func:`source_set` takes them.
+#: The thresholds of ``[difference.sources_database_prefilter]``, as :func:`source_set` takes them.
 SOURCES_PREFILTER_KEYS = ("sumrat_prefilter_threshold", "rb_prefilter_threshold",
                           "snr_prefilter_threshold")
 
@@ -219,11 +219,11 @@ SOURCES_PREFILTER_KEYS = ("sumrat_prefilter_threshold", "rb_prefilter_threshold"
 def sources_prefilter(settings: dict) -> dict[str, float | None]:
     """The run's prefilter thresholds for ``sources``, as :func:`source_set`'s keyword arguments.
 
-    ``[difference.sources_prefilter]``, kept apart from
-    ``[difference.database_prefilter]``, the xsources' thresholds. A run body
-    stored before the split has no ``sources_prefilter``: it takes the
-    latter's sumrat threshold and no rb or S/N cut, as it did (rapid_docs
-    decisions.md, sources-prefilter).
+    ``[difference.sources_database_prefilter]``, kept apart from
+    ``[difference.xsources_database_prefilter]``, the xsources' thresholds. A run
+    body stored before the split has neither: it takes its shared
+    ``[difference.database_prefilter]``'s sumrat threshold and no rb or S/N
+    cut, as it did (rapid_docs decisions.md, sources-prefilter).
 
     Parameters
     ----------
@@ -241,10 +241,10 @@ def sources_prefilter(settings: dict) -> dict[str, float | None]:
     ValueError
         A value is neither ``""`` nor a number.
     """
-    if "sources_prefilter" in settings:
-        table, keys = "sources_prefilter", SOURCES_PREFILTER_KEYS
+    if "sources_database_prefilter" in settings:
+        table, keys = "sources_database_prefilter", SOURCES_PREFILTER_KEYS
     else:
-        table, keys = "database_prefilter", SOURCES_PREFILTER_KEYS[:1]
+        table, keys = "database_prefilter", SOURCES_PREFILTER_KEYS[:1]   # a body before the split
     out = dict.fromkeys(SOURCES_PREFILTER_KEYS)
     for name in keys:
         value = settings.get(table, {}).get(name, "")

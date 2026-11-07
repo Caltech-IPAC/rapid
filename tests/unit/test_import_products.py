@@ -37,10 +37,10 @@ REPO = Path(__file__).resolve().parents[2]
 RA, DEC = 267.96138, -28.72761
 SETTINGS = {"import": {"max_sources": 3, "xy_fit_min": -0.5, "xy_fit_max_offset": 0.5,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10},
-            "difference": {"sources_prefilter": {"sumrat_prefilter_threshold": 0.4,
+            "difference": {"sources_database_prefilter": {"sumrat_prefilter_threshold": 0.4,
                                                  "rb_prefilter_threshold": 0.0,
                                                  "snr_prefilter_threshold": 5.0},
-                           "database_prefilter": {"sumrat_prefilter_threshold": 0.4,
+                           "xsources_database_prefilter": {"sumrat_prefilter_threshold": 0.4,
                                                   "rb_prefilter_threshold": 0.0,
                                                   "snr_prefilter_threshold": 5.0}}}
 EPOCHS = [{"expid": 101, "rid": 7001, "pid": 9001, "rfid": 55, "l2": "l2/one.fits",
@@ -474,7 +474,7 @@ def test_the_sources_prefilter_is_the_sources_table_not_the_xsources(tmp_path, s
     sextractor_catalog(source / "jid1" / names["negative"], XSOURCES_NEGATIVE)
     catalog(source / "jid1" / import_products.DIFFERENCE_CATALOG, sumrat=np.full(8, np.nan))
     body = {**SETTINGS, "difference": {**SETTINGS["difference"],
-                                       "sources_prefilter": {"sumrat_prefilter_threshold": ""}}}
+                                       "sources_database_prefilter": {"sumrat_prefilter_threshold": ""}}}
     monkeypatch.setattr(sys.modules[__name__], "SETTINGS", body)
     prefix = run_import(tmp_path, source, {"epochs": [EPOCHS[0]]}, "apart")
     # No sources cut, so null sumrat passes; the xsources keep their cuts.

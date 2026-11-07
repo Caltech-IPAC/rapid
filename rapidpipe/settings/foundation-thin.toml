@@ -717,7 +717,7 @@ filter_size = 3
 # about -0.32 (dev babd5d16).
 lower_median = false
 
-[difference.sources_prefilter]
+[difference.sources_database_prefilter]
 # The sources' cuts of dev's [DATABASE_PREFILTER]
 # (loadPSFCatIntoDBSourcesTable.py, rapid_pipeline_subs.py
 # prefilter_database_records at c931b001), applied by source_set to both of
@@ -739,8 +739,10 @@ rb_prefilter_threshold = 0.0
 # and its xsources' S/N is the 3 px aperture's. "" is no such cut.
 snr_prefilter_threshold = 5.0
 
-[difference.database_prefilter]
-# [DATABASE_PREFILTER], the xsources' cuts.
+[difference.xsources_database_prefilter]
+# [DATABASE_PREFILTER], the xsources' cuts. A run body stored before the
+# split has the shared [difference.database_prefilter] instead, which the
+# stages read in its place (rapid_docs decisions.md, sources-prefilter).
 sumrat_prefilter_threshold = 0.4
 # xsources (rapidpipe.science.difference.xsources), as dev's XSources loader
 # (loadSECatIntoDBSourcesTable.py, d2657f7d) cuts them: a source is dropped
@@ -775,7 +777,8 @@ pixel_cols_bkg_filter_size = 3
 # among photutils_cols_num_processes forked processes; the kernel's FWHM and
 # the initial flux's aperture are psfcat_diffimage's fwhm and
 # aperture_radius. photutils_cols_prefilter_only fits only the sources that
-# pass database_prefilter's sumrat and S/N cuts and lie inside the image.
+# pass xsources_database_prefilter's sumrat and S/N cuts and lie inside
+# the image.
 photutils_cols_snap_radius = 1
 photutils_cols_xy_bounds = ""
 photutils_cols_fit_shape = [5, 5]

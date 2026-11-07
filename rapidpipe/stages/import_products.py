@@ -47,7 +47,7 @@ L2 row's ``limmag`` is measured with the science PSF (``kind``
 for each of the difference job's two PSF-fit catalogs, the ``max_sources``
 brightest rows by ``flux_fit / flux_err`` (-1 is no cap, keeping every row),
 inside `dev`'s fit-position bounds and through the run's
-``[difference.sources_prefilter]``, mapped as
+``[difference.sources_database_prefilter]``, mapped as
 :func:`rapidpipe.science.load.catalogs.source_set` maps them, as the
 difference stage does: the negative catalog's rows ``isdiffpos`` false, each
 ``sid`` its catalog ``id`` plus the positive catalog's largest. A directory
@@ -55,7 +55,7 @@ without the negative catalog imports no negative sources. ``xsources`` holds
 the rows of SFFT's two SExtractor catalogs that `dev`'s XSources loader
 (``loadSECatIntoDBSourcesTable.py``) keeps, with the extra columns and rb
 scores `dev` wrote into them (:mod:`rapidpipe.science.difference.xsources`)
-and the run's ``[difference.database_prefilter]`` cuts; a directory with
+and the run's ``[difference.xsources_database_prefilter]`` cuts; a directory with
 neither catalog imports none, and one with only one is rejected (exit 65).
 The manifest records the sources kept per sign (``sources_kept``) and the
 xsources read and kept per sign (``xsources``, null when none were
@@ -308,7 +308,7 @@ def _epoch(job: JobContext, settings: dict, source: Path, epoch: dict) -> tuple[
     naxis = (diff_header["NAXIS1"], diff_header["NAXIS2"])
     sources, kept = _sources(settings, sources_prefilter(job.settings["difference"]),
                              difference, key, epoch["pid"], mjdobs, *naxis)
-    xsources_rows, xsources_record = _xsources(job.settings["difference"]["database_prefilter"],
+    xsources_rows, xsources_record = _xsources(xsources.prefilter_table(job.settings["difference"]),
                                                difference, key, epoch["pid"], mjdobs, *naxis)
     tables = {"exposures": [{"dataset": job.dataset, "expid": epoch["expid"], "dateobs": dateobs,
                              "exptime": exptime, "program_id": None, **exposure_identifiers(header)}],
@@ -378,7 +378,7 @@ def _xsources(prefilter: dict, difference: Path, key: dict, pid: int, mjdobs: fl
     Parameters
     ----------
     prefilter : dict
-        The run's ``[difference.database_prefilter]`` table.
+        The run's ``[difference.xsources_database_prefilter]`` table.
     difference : pathlib.Path
         The difference job's directory, holding :data:`XSOURCES_CATALOGS`.
     key : dict

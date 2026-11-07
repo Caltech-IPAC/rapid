@@ -86,7 +86,7 @@ SOCSIMS_SFFT = {"crossconv_flag": False, "sfft_bsmask_value": "20000.0", "sfft_b
                 "sfft_use_gainmatch_catalogs": False, "sfft_use_segmentation": False}
 
 
-#: [difference.sources_prefilter] with every cut off.
+#: [difference.sources_database_prefilter] with every cut off.
 NO_SOURCES_PREFILTER = {"sumrat_prefilter_threshold": "", "rb_prefilter_threshold": "",
                         "snr_prefilter_threshold": ""}
 
@@ -394,7 +394,7 @@ def test_sfft_with_the_prefilter_disabled_keeps_the_set_before_it(tmp_path, file
     """No sumrat on any source, so the prefilter would drop every one; "" bypasses all of it."""
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
     prefix = run_difference(tmp_path, files,
-                            body=settings(sources_prefilter=NO_SOURCES_PREFILTER))
+                            body=settings(sources_database_prefilter=NO_SOURCES_PREFILTER))
     expected = _unprefiltered(prefix, "sfftdiffimage_masked_psfcat.parquet")
     assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
 
@@ -621,8 +621,8 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
     published image's pixels; the SFFT catalogs and the source set gain sumrat, nneg and nbad."""
     (tmp_path / "with").mkdir()
     (tmp_path / "without").mkdir()
-    unfiltered = settings(sources_prefilter=NO_SOURCES_PREFILTER,  # no sumrat, no cut
-                          database_prefilter={"sumrat_prefilter_threshold": ""})
+    unfiltered = settings(sources_database_prefilter=NO_SOURCES_PREFILTER,  # no sumrat, no cut
+                          xsources_database_prefilter={"sumrat_prefilter_threshold": ""})
     after = run_difference(tmp_path / "with", files, body=unfiltered)
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
     before = run_difference(tmp_path / "without", files, body=unfiltered)
@@ -827,7 +827,7 @@ def test_reference_psf_science_takes_the_metrics_stars_from_the_reference_catalo
 
 
 def test_the_sources_and_the_xsources_prefilters_are_set_apart(tmp_path, files, fakes):
-    """sources_prefilter cuts the source set alone, database_prefilter the xsources alone."""
+    """sources_database_prefilter cuts the source set alone, xsources_database_prefilter the xsources alone."""
     def run(name, **tables):
         (tmp_path / name).mkdir()
         prefix = run_difference(tmp_path / name, files, body=settings(**tables))
@@ -837,5 +837,5 @@ def test_the_sources_and_the_xsources_prefilters_are_set_apart(tmp_path, files, 
     sources, xsources_rows = run("shipped")
     assert sources and xsources_rows
     shut = {"sumrat_prefilter_threshold": 1e9}   # every finite sumrat is at or below it
-    assert run("x", database_prefilter=shut) == (sources, [])
-    assert run("s", sources_prefilter=shut) == ([], xsources_rows)
+    assert run("x", xsources_database_prefilter=shut) == (sources, [])
+    assert run("s", sources_database_prefilter=shut) == ([], xsources_rows)
