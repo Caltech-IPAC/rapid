@@ -36,3 +36,18 @@ dq_mask_bits = 0x2110C01
 # 0.40 px off after 10 shifts). Every difference failed "refpsf: 0 stars, 10
 # needed". ZOGY gets the science PSF for both images, as run 17 did.
 reference_psf = "science"
+
+[difference.sfft]
+# dev's [SFFT] socsims block (launchSingleSciencePipeline.ini, "--- socsims
+# ---"), as gbtds-r00340-fakesrc carries it: no cross-convolution, the
+# bright-source mask at 20000 DN/s within 30 px, no gain-match catalogs, no
+# segmentation. The base's OpenUniverse block fails this dataset's kernel
+# solve: every SFFT difference of r00340-gb3 (both epochs, science frames of
+# 144,464 SExtractor sources) raised "Singular matrix", exit 70 (run 157,
+# rapid-rebuild:95, sfft-block-base 2026-10-27); under this block GBTDS ran
+# SFFT through rapid 490 to 494. (Ben, 2026-11-07, sfft-singular)
+crossconv_flag = false
+sfft_bsmask_value = "20000.0"
+sfft_bsmask_radius = "30.0"
+sfft_use_gainmatch_catalogs = false
+sfft_use_segmentation = false

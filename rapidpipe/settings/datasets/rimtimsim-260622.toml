@@ -36,6 +36,22 @@ F213 = "roman_wfi_epsf_0280.asdf"
 # -0.0044, inside its bound, but ring -0.0339 -> -0.0557, further outside
 # 0.015. Not taken. Runbook part 13 step rts-f213-core.
 
+[difference.sfft]
+# dev's [SFFT] socsims block (launchSingleSciencePipeline.ini, "--- socsims
+# ---"), as gbtds-r00340-fakesrc carries it: no cross-convolution (dev's
+# rule turns it off for a RimTimSim file anyway), the bright-source mask at
+# 20000 DN/s within 30 px, no gain-match catalogs, no segmentation. The
+# base's OpenUniverse block fails this dataset's kernel solve: F213 epoch
+# 4571's SFFT difference (82,866 SExtractor sources) raised "Singular
+# matrix", exit 70, on both attempts (run 156, rapid-rebuild:95, sfft-block-
+# base 2026-10-27); under this block RimTimSim ran SFFT through rapid 490 to
+# 494. (Ben, 2026-11-07, sfft-singular)
+crossconv_flag = false
+sfft_bsmask_value = "20000.0"
+sfft_bsmask_radius = "30.0"
+sfft_use_gainmatch_catalogs = false
+sfft_use_segmentation = false
+
 [difference.instrument]
 # dev's [INSTRUMENT] rimtimsims block: the converter writes DN at gain 1.
 sca_gain = 1.0
