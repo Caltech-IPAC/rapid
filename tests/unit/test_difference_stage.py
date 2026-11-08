@@ -547,7 +547,8 @@ def test_the_manifest_records_the_reference_psf_metrics(tmp_path, files, fakes, 
     metrics = recorded["metrics"]
     assert {"refpsf_sigma_px", "refpsf_stars", "sci_psf_sigma_px", "psf_centroid_offset_x_px",
             "psf_centroid_offset_y_px", "ref_sigma_px", "ref_sci_sigma_ratio", "noise_correlation",
-            "usable_fraction", "n_candidates", "n_sources", "n_sources_snr_gt20"} <= set(metrics)
+            "usable_fraction", "n_candidates", "n_sources", "n_sources_snr_gt20",
+            "refpsf_s", "pixel_columns_s", "gzip_s"} <= set(metrics)
     # Every metric is a number; one the job cannot make is absent (the fake finds no stars).
     assert all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in metrics.values())
     assert not {"core_fraction", "registration_dx_px"} & set(metrics)

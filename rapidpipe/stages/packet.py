@@ -149,7 +149,14 @@ The manifest's ``metrics``: ``n_packets``, the set's packets, and
 above 20, and ``n_packets_bright_footprint``, those whose source carries
 the bright-footprint flag
 (:data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`; 0
-under ``"xsources"``, whose flags are the fit's).
+under ``"xsources"``, whose flags are the fit's); and the job's seconds by
+step, wall clock: ``packet_read_s``, the reads (:func:`_read`: the one
+transaction and the window's difference images and PSFs fetched);
+``packet_forced_s``, the forced photometry measured on the window;
+``packet_matching_s``, the catalog and reference-catalog matches;
+``packet_cutouts_s``, the trigger's three images read and every stamp cut;
+``packet_assembly_s``, the packets built and written, the stamps' seconds
+excluded. The last four are the ``packet`` summary's ``timing_s``.
 """
 
 from __future__ import annotations
@@ -984,7 +991,9 @@ def _best_effort(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
 
 
 def run(job: JobContext) -> None:
+    t0 = time.perf_counter()
     read = _read(job)
+    read_s = time.perf_counter() - t0
     summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
                         sync_seed=f"{job.job}/{job.attempt}",
                         reliability=reliability(job.settings))
@@ -994,7 +1003,9 @@ def run(job: JobContext) -> None:
                        empty_ok=() if read.triggers else ("packets",), packet=summary, reads=read.reads,
                        metrics={"n_packets": summary["packets"],
                                 "n_packets_snr_gt20": summary["packets_snr_gt20"],
-                                "n_packets_bright_footprint": summary["packets_bright_footprint"]})
+                                "n_packets_bright_footprint": summary["packets_bright_footprint"],
+                                "packet_read_s": round(read_s, 3),
+                                **{f"packet_{k}": v for k, v in summary["timing_s"].items()}})
 
 
 def reliability(settings: dict) -> tuple[float, str]:

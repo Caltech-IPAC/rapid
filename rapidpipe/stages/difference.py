@@ -143,8 +143,14 @@ median second-moment sigma of the registration stars on the
 background-subtracted science image, and ``sci_star_psf_sigma_ratio``, it
 over ``sci_psf_sigma_px``; and the
 uncapped catalog's ``n_sources_near_bright_px`` and
-``n_sources_ring_snr_gt20``, defined there; ``pixel_columns_s``, the
-seconds the pixel columns took for both SFFT catalogs; ``n_objects_read``,
+``n_sources_ring_snr_gt20``, defined there; the job's seconds by step,
+wall clock: ``refpsf_s``, the reference PSF's measurement (or the science
+PSF's copy under ``reference_psf = "science"``); ``pixel_columns_s``, the
+pixel columns of both SFFT catalogs; ``rb_s``, the real/bogus calls on both
+SFFT PSF-fit catalogs; ``xsources_s``, the xsources' extra columns and
+their real/bogus scores, both signs; ``gzip_s``, the trim, the published
+images gzipped and the rest removed (the SFFT solve and the catalogs are
+not timed); ``n_objects_read``,
 ``n_objects_founded``, ``n_memberships`` and ``n_sources_out_of_field``,
 the accepted sources outside the image's own field, the association's;
 ``n_xobjects_read``, ``n_xobjects_founded`` and ``n_xmemberships``, the
@@ -714,6 +720,7 @@ def run(job: JobContext) -> None:
     refpsf_record, metrics, measured_psf = _measure_reference_psf(
         kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
         w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"])
+    metrics["refpsf_s"] = refpsf_record["seconds"]
     # The reference catalog's sky positions; the metrics' stars, the measurement's finder stars
     # or, under reference_psf = "science", the catalog's own (_catalog_stars).
     reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
@@ -916,6 +923,7 @@ def run(job: JobContext) -> None:
         filename_bkg_subbed_science_image,
         output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME],
         others=diagnostics)
+    metrics["gzip_s"] = published["gzip_s"]
     filename_diffimage_published = published_image + ".gz"
     centre, corners = image_centre_and_corners(WCS(header), header["NAXIS1"], header["NAXIS2"])
     footprint = {"ra0": centre["ra"], "dec0": centre["dec"]}
