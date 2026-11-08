@@ -251,20 +251,19 @@ def test_resample_swarps_three_images_background_off_after_the_first(tmp_path):
 # ----------------------------------------------------------------------
 
 
-def test_bkgest_command_is_devs():
-    table = {"output_image_type": "2", "clippedmean_calc_type": "3",
-             "local_clippedmean_grid_spacing": "500", "local_clippedmean_input_window": "501",
-             "filename_global_clippedmean_sciimage_tbl": "g.tbl",
-             "filename_bkg_subbed_science_image": "bkg.fits"}
-    assert background.build_bkgest_command("/code/c/bin/bkgest", "/code/c/include", "in.fits", table) == [
-        "/code/c/bin/bkgest", "-i", "in.fits", "-f", "2", "-c", "3", "-g", "500", "-w", "501",
-        "-a", "/code/c/include", "-ot", "g.tbl", "-o2", "bkg.fits"]
+def test_background_map_recovers_a_smooth_sky_under_noise_and_nans():
+    rng = np.random.default_rng(1)
+    y, x = np.mgrid[:1000, :1000]
+    sky = 100.0 + 0.001 * x + 0.002 * y
+    data = sky + rng.normal(0.0, 5.0, sky.shape)
+    data[100:150, 100:150] = np.nan
+    found = background.background_map(data, {"local_clippedmean_grid_spacing": "250"})
+    assert np.isfinite(found).all()
+    assert np.median(np.abs(found - sky)) < 0.5
 
 
 def test_reference_background_subtracted_in_place_uncovered_pixels_kept(tmp_path):
-    table = {"output_image_type": "2", "clippedmean_calc_type": "3",
-             "local_clippedmean_grid_spacing": "500", "local_clippedmean_input_window": "501",
-             "filename_global_clippedmean_refimage_tbl": "r.tbl"}
+    table = {"local_clippedmean_grid_spacing": "500"}
     data = np.full((6, 6), 10.0)
     data[2, 2] = 50.0
     data[:, 0] = 7.0                      # SWarp's value where there is no coverage
@@ -272,32 +271,12 @@ def test_reference_background_subtracted_in_place_uncovered_pixels_kept(tmp_path
     cov[:, 0] = 0.0
     _write(tmp_path / "ref.fits", data, wcs_header(6, sip=False))
     _write(tmp_path / "cov.fits", cov, wcs_header(6, sip=False))
-    runner = FakeToolRunner()
     assert background.subtract_reference_background(
-        runner, tmp_path, "bkgest", "/inc", "ref.fits", "cov.fits", table) == 6
-    (call,) = runner.calls
-    assert call[call.index("-i") + 1] == "ref_bkgest_input.fits"
-    assert call[call.index("-ot") + 1] == "r.tbl"
-    assert np.isnan(fits.getdata(tmp_path / "ref_bkgest_input.fits")[:, 0]).all()
+        FakeToolRunner(), tmp_path, "bkgest", "/inc", "ref.fits", "cov.fits", table) == 6
     out = fits.getdata(tmp_path / "ref.fits")
     assert (out[:, 0] == 7.0).all()                        # uncovered: SWarp's values back
     assert out[3, 3] == pytest.approx(0.0) and out[2, 2] == pytest.approx(40.0)
     assert fits.getheader(tmp_path / "ref.fits")["REFBKGSB"] is True
-
-
-def test_reference_background_fails_when_bkgest_writes_nothing(tmp_path):
-    class Silent:
-        def run(self, args, *, cwd):
-            return 3
-
-    table = {"output_image_type": "2", "clippedmean_calc_type": "3",
-             "local_clippedmean_grid_spacing": "500", "local_clippedmean_input_window": "501",
-             "filename_global_clippedmean_refimage_tbl": "r.tbl"}
-    _write(tmp_path / "ref.fits", np.ones((4, 4)), wcs_header(4, sip=False))
-    _write(tmp_path / "cov.fits", np.ones((4, 4)), wcs_header(4, sip=False))
-    with pytest.raises(RuntimeError, match="exit code 3"):
-        background.subtract_reference_background(
-            Silent(), tmp_path, "bkgest", "/inc", "ref.fits", "cov.fits", table)
 
 
 # ----------------------------------------------------------------------

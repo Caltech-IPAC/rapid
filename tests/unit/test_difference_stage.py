@@ -486,13 +486,12 @@ def test_skip_loading_sources_records_must_be_a_boolean(value):
         difference.check_settings(body)
 
 
-def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_path, files, fakes):
+def test_tools_run_in_dev_order_with_the_background_in_process(tmp_path, files, fakes):
     runner, _ = fakes
     run_difference(tmp_path, files)
     assert runner.tools_called() == [
         "sextractor",                   # science-image catalog
         "swarp", "swarp", "swarp",      # reference image, coverage map, uncertainty
-        "bkgest", "bkgest",             # science image, then the resampled reference
         "sextractor", "sextractor",     # gain-match catalogs, science then reference
         "zogy",
         "sextractor", "sextractor",     # ZOGY positive, negative
@@ -502,9 +501,6 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
     ]
     swarp = [c for c in runner.calls if c[0].endswith("swarp")]
     assert [c[c.index("-SUBTRACT_BACK") + 1] for c in swarp] == ["N", "N", "N"]
-    reference_bkgest = [c for c in runner.calls if c[0].endswith("bkgest")][1]
-    assert reference_bkgest[reference_bkgest.index("-i") + 1] == (
-        "awaicgen_output_mosaic_image_resampled_bkgest_input.fits")
 
 
 def test_the_classifier_is_loaded_once_from_the_fetched_model_and_scores_every_catalog(
