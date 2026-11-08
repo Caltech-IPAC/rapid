@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from rapidpipe.foundation import PublishError, apply, job_show, publish
+from rapidpipe.foundation import catalog as object_catalog
 from rapidpipe.foundation.prefix import local_path
 from tests.db.foundation_helpers import (
     DATASET, FIELD_KEY, SURVEY, memberships_rows, new_job, new_run, objects_rows, open_bindings,
@@ -218,11 +220,11 @@ def test_reconcile_attaches_a_founder_to_one_founded_since_the_read_and_records_
 
 
 def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_end_as_one_object(
-        connect, tmp_path):
+        connect, tmp_path, monkeypatch):
     """The field rule: job A founds in field 1 and job B in field 2, 0.18 arcseconds apart, both
     after an empty read, each locking both fields (each touched field and its neighbours). While
-    another transaction holds field 1's lock B's publication waits; once it is released B's
-    reconcile reads A's object in the neighbouring field and attaches to it."""
+    another transaction holds field 1's lock B's publication finds it held and tries again; once
+    it is released B's reconcile reads A's object in the neighbouring field and attaches to it."""
     a_conn, b_conn = connect(), connect()
     run = new_run(a_conn)
     a, b = new_job(a_conn, run), new_job(a_conn, run)
@@ -234,9 +236,18 @@ def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_e
         [_member(b, b, 8, 1, field=2)], [], fields=[2, 1])
     with a_conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s, 1)", (run,))
+    refused, taking = threading.Event(), object_catalog.try_lock
+
+    def try_lock(cur, run, fields):
+        taken = taking(cur, run, fields)
+        if not taken:
+            refused.set()
+        return taken
+
+    monkeypatch.setattr(object_catalog, "try_lock", try_lock)
     with ThreadPoolExecutor(1) as pool:
         pending = pool.submit(publish, b_conn, b, 1, prefix)
-        wait_until_blocked(connect(), b_conn.get_backend_pid())
+        assert refused.wait(10)
         a_conn.commit()
         result = pending.result(timeout=10)
 

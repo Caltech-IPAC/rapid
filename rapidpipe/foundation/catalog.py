@@ -8,11 +8,11 @@ matched none, in the source's own field. Two epochs differenced at once
 both see no object at a new source and both found one, in one field or
 either side of a boundary. The publisher, inside its one transaction for
 the job, takes the locks of every field the job's manifest names
-(:func:`lock`: each field that gained an object or a membership and each
-one's neighbours, transaction-scoped advisory locks on the run and field
-taken in ascending field order, so two jobs founding either side of a
-boundary share a lock and serialise, and two jobs never wait on each
-other in a cycle), reads the objects of the run in those fields founded
+(:func:`try_lock`: each field that gained an object or a membership and each
+one's neighbours, transaction-scoped advisory locks on the run and field,
+all taken or none, so two jobs founding either side of a boundary share a
+lock and serialise; a job that finds one held rolls back and tries again,
+never waiting on it while it holds a pool connection), reads the objects of the run in those fields founded
 by jobs outside the job's recorded read (:func:`between`, those published
 since the read), and :func:`attach` gives each founded object within the
 match radius of one of them to that object instead: its memberships are
@@ -40,6 +40,8 @@ ascending order.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
+
 from rapidpipe.products.spatial import ra_offset, within
 
 #: The catalogs reconciled at publish, by objects table: (objects table, memberships table,
@@ -48,12 +50,22 @@ CATALOGS = {"objects": ("objects", "memberships", "aid", "sid"),
             "xobjects": ("xobjects", "xmemberships", "xaid", "xsid")}
 
 
-def lock(cur, run: int, fields: list[int]) -> None:
-    """Serialise publication per (run, field) for each of ``fields``, ascending, until the transaction ends."""
+def try_lock(cur, run: int, fields: list[int]) -> bool:
+    """Take the (run, field) lock of each of ``fields``, ascending, until the transaction ends, or none.
+
+    One statement of ``pg_try_advisory_xact_lock``, which never waits: true
+    when every lock is taken, false when another transaction holds any, and
+    the caller then rolls back, releasing those it did take with its pool
+    connection. A publisher that waited on the locks instead held a pooler
+    server connection for the wait, and run 177's 800 waiters filled the
+    pipeline's pool (publish-pool-wedge, 2026-11-08).
+    """
     ordered = sorted({int(f) for f in fields})
-    if ordered:
-        cur.execute("; ".join(["SELECT pg_advisory_xact_lock(%s, %s)"] * len(ordered)),
-                    [v for f in ordered for v in (int(run), f)])
+    if not ordered:
+        return True
+    cur.execute("SELECT " + " AND ".join(["pg_try_advisory_xact_lock(%s, %s)"] * len(ordered)),
+                [v for f in ordered for v in (int(run), f)])
+    return bool(cur.fetchone()[0])
 
 
 def between(cur, job: int, run: int, catalog: dict, read_jobs: list[int],
@@ -93,9 +105,17 @@ def attach(job: int, founded: list[dict], memberships: list[dict], others: list[
     on the job. ``ident`` and ``sid`` name the object and source id columns
     (``xaid`` and ``xsid`` for the xsources' catalog).
     """
+    # Only an object within two radii in declination can be within one on the sky, so each
+    # founded object tests that band of ``others`` (sorted by declination), in ``others``' order:
+    # founded times others pairs took run 177's holder ten minutes under its locks.
+    by_dec = sorted(range(len(others)), key=lambda i: others[i][3])
+    decs = [others[i][3] for i in by_dec]
     targets = {}
     for obj in founded:
-        near = [o for o in others if within(obj["ra0"], obj["dec0"], o[2], o[3], radius)]
+        band = by_dec[bisect_left(decs, obj["dec0"] - 2 * radius):
+                      bisect_right(decs, obj["dec0"] + 2 * radius)]
+        near = [others[i] for i in sorted(band)
+                if within(obj["ra0"], obj["dec0"], others[i][2], others[i][3], radius)]
         if near:
             targets[obj[ident]] = (obj, near)
     kept = [obj for obj in founded if obj[ident] not in targets]
