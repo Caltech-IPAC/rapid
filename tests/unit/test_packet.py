@@ -40,8 +40,8 @@ from rapidpipe.foundation import prefix
 from rapidpipe.science.catalogs.readers import catalog_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
-    CatalogInput, Read, WindowImage, _plain, _separation, cap_triggers, covering, measure_forced,
-    neighbour, reliability, window_reach, write_set)
+    CatalogInput, Read, WindowImage, _plain, _separation, alert_catalog, cap_triggers, covering,
+    measure_forced, neighbour, reliability, window_reach, write_set, xsource_fields)
 from tests.support.catalogs import ra_offset, write_gaia_store, write_hp6_store, write_lvs_store
 
 N = 100                       # image side, pixels
@@ -414,3 +414,51 @@ def test_reliability_is_the_threshold_and_the_models_version_or_the_set_one():
     assert reliability(run) == (0.5134, "m-other")
     run["packet"]["rb_version"] = "named"
     assert reliability(run) == (0.5134, "named")
+
+
+def _xsource_row(**columns) -> dict:
+    """An xsource row as the packet stage reads it, fitted unless ``columns`` say otherwise."""
+    return {"source_job": 11, "sid": 3, "x": 50.0, "y": 40.0, "fluxap1": 380.0, "fluxerrap1": 12.0,
+            "fluxfit": 400.0, "snrfit": 40.0, "flagsfit": 4, "redchi": 1.25, **columns}
+
+
+@pytest.mark.parametrize("unfitted", [{"fluxfit": None}, {"snrfit": None}, {"snrfit": 0.0},
+                                      {"fluxfit": float("nan")}, {"snrfit": float("inf")}])
+def test_an_unfitted_xsource_takes_the_3px_aperture_and_flags_0(unfitted):
+    fields = xsource_fields(_xsource_row(**unfitted))
+    assert (fields["fluxfit"], fields["fluxerr"], fields["flags"]) == (380.0, 12.0, 0)
+    assert (fields["apflux"], fields["apfluxerr"]) == (380.0, 12.0)
+
+
+def test_a_fitted_xsource_carries_its_fit_and_zero_based_pixels():
+    fields = xsource_fields(_xsource_row())
+    assert (fields["fluxfit"], fields["fluxerr"], fields["flags"]) == (400.0, 10.0, 4)
+    assert (fields["apflux"], fields["apfluxerr"]) == (380.0, 12.0)
+    assert (fields["xfit"], fields["yfit"], fields["redchi"]) == (49.0, 39.0, 1.25)
+    source = Source.from_row({**fields, "expid": 1, "sca": 8, "mjdobs": MJD[1], "ra": RA0,
+                              "dec": DEC0, "band": "F184"})
+    assert source.snr == 40.0                      # [packet] max_alerts ranks by the fit's S/N
+
+
+def test_alert_catalog_is_sources_for_a_body_without_the_key_and_refuses_another_value():
+    assert alert_catalog({"packet": {}}) == "sources"
+    assert alert_catalog({"packet": {"alert_catalog": "xsources"}}) == "xsources"
+    with pytest.raises(ValueError, match="alert_catalog"):
+        alert_catalog({"packet": {"alert_catalog": "objects"}})
+
+
+def test_the_base_settings_ship_xsources():
+    import tomllib
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parents[2] / "rapidpipe" / "settings" / "foundation-thin.toml"
+    assert alert_catalog(tomllib.loads(base.read_text())) == "xsources"
+
+
+def test_the_xsources_catalog_reads_the_xsources_tables():
+    from rapidpipe.stages.packet import ALERT_CATALOGS, MEMBERSHIPS_SQL, ORIGINS_SQL, TRIGGER_SQL
+
+    x = ALERT_CATALOGS["xsources"]
+    assert "FROM xmemberships_of(" in x.sql(TRIGGER_SQL) and "xsid AS sid" in x.sql(TRIGGER_SQL)
+    assert "FROM xobjects_in(" in x.sql(ORIGINS_SQL)
+    assert "FROM xmemberships_in(" in x.sql(MEMBERSHIPS_SQL)

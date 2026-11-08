@@ -388,15 +388,15 @@ def check_catalog(run: int) -> bool:
                   " objects' sums = their members'", t0)
 
 
-def members_by_aid(job: int, pairs: list[tuple[int, int]]) -> dict:
+def members_by_aid(job: int, pairs: list[tuple[int, int]], x: str = "") -> dict:
     """(object_job, aid) -> {(source job, sid): mjdobs}: the objects' members in the source sets
-    packet job ``job`` recorded reading."""
+    packet job ``job`` recorded reading; ``x`` ``"x"``: the xobjects' xmembers, by xaid and xsid."""
     read = [r["source_job"] for r in q("SELECT source_job FROM job_inputs WHERE job = %s"
                                        " AND kind = 'input' AND product = 'sources'", (job,))]
-    rows = q("SELECT DISTINCT m.object_job, m.aid, m.source_job, m.sid, s.mjdobs"
-             " FROM memberships_of(%(read)s::bigint[]) m"
-             " JOIN sources_of(%(read)s::bigint[]) s ON s.job = m.source_job AND s.sid = m.sid"
-             " WHERE (m.object_job, m.aid) IN"
+    rows = q(f"SELECT DISTINCT m.object_job, m.{x}aid AS aid, m.source_job, m.{x}sid AS sid, s.mjdobs"
+             f" FROM {x}memberships_of(%(read)s::bigint[]) m"
+             f" JOIN {x}sources_of(%(read)s::bigint[]) s ON s.job = m.source_job AND s.{x}sid = m.{x}sid"
+             f" WHERE (m.object_job, m.{x}aid) IN"
              " (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))",
              {"read": read, "jobs": [p[0] for p in pairs], "aids": [p[1] for p in pairs]})
     out = defaultdict(dict)
@@ -418,7 +418,9 @@ def packet_set_failures(job: int) -> tuple[list[str], Counter]:
     forced = {r["forced_id"]: r for r in read_output(job, "forced").to_pylist()}
     (run_row,) = q("SELECT r.settings FROM jobs j JOIN runs r ON r.id = j.run WHERE j.id = %s", (job,))
     size = 2 * int(run_row["settings"]["packet"]["stamp_half_width"]) + 1
-    members = members_by_aid(job, sorted({(r["object_job"], r["aid"]) for r in index}))
+    # The index's aid and sid name xobjects and xsources under [packet] alert_catalog "xsources".
+    x = "x" if run_row["settings"]["packet"].get("alert_catalog", "sources") == "xsources" else ""
+    members = members_by_aid(job, sorted({(r["object_job"], r["aid"]) for r in index}), x)
     containers = {}
     for row in index:
         where = f"packet job {job} sid {row['sid']}"

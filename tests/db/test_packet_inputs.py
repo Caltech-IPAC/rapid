@@ -13,7 +13,8 @@ with no ``surveys`` row); the reliability fields are null; the source sets,
 the exposures and the forced window it read are recorded as the job's
 ``input`` rows. A
 reference with no ``refimcatalogs`` row fails the job: the reference stage
-always writes one.
+always writes one. Under ``[packet] alert_catalog = "xsources"`` the same
+is read from the set's xsources, xobjects and xmemberships.
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ from rapidpipe.products.diffimage import SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.catalogs.store import gaia_from_table
 from rapidpipe.stages import packet
 from tests.db.foundation_helpers import write_attempt
+from tests.db.test_child_reads import _script
+from tests.db.test_children import xsource_rows
 from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, write_refcat
 
 SURVEY, DATASET, FIELD = "S", "D", 4658155
@@ -93,13 +96,21 @@ def image_rows(directory) -> dict[str, list[dict]]:
 
 
 def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_id: int = -1,
-               max_alerts: int | None = None, second_source: bool = False):
+               max_alerts: int | None = None, second_source: bool = False,
+               xsources: list[dict] | None = None, alert_catalog: str | None = None):
     """A live run's packet job over one imported epoch, and the import, stray and exposure jobs.
 
     ``max_alerts`` overrides the run's ``[packet] max_alerts``; ``second_source`` adds a weaker
-    source (sid 2, S/N 4) in its own object 101 beside the S/N 40 one."""
+    source (sid 2, S/N 4) in its own object 101 beside the S/N 40 one. ``xsources`` (rows of
+    ``xsources`` but ``job``) are published with the set: each with ``"member": True`` founds
+    xobject ``200 + xsid`` holding it, and the stray set's xmembership joins xobject 201.
+    ``alert_catalog`` sets the run's ``[packet] alert_catalog``; None leaves the key out."""
     settings = RUN_SETTINGS if max_alerts is None else {
         **RUN_SETTINGS, "packet": {**RUN_SETTINGS["packet"], "max_alerts": max_alerts}}
+    if alert_catalog is not None:
+        settings = {**settings, "packet": {**settings["packet"], "alert_catalog": alert_catalog}}
+    if xsources is not None:
+        settings = {**settings, "associate": {"xsource_flags": 0}}
     live = create_run(conn, "tester", "live", "abc123", settings, SURVEY, DATASET)
     other = create_run(conn, "tester", "a recipe that is not live", "def456",
                        settings, SURVEY, DATASET)
@@ -142,6 +153,16 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
                                   "yfit": 79.0, "ra": ra2, "dec": dec2, "fluxfit": 40.0})
         tables["objects"].append({**tables["objects"][0], "aid": 101})
         tables["memberships"].append({**tables["memberships"][0], "aid": 101, "sid": 2, "flux": 40.0})
+    members = []
+    if xsources is not None:
+        members = [x for x in xsources if x.get("member")]
+        tables["xsources"] = [{k: v for k, v in x.items() if k != "member"} for x in xsources]
+        tables["xobjects"] = [{"xaid": 200 + x["xsid"], "dataset": DATASET, "survey": SURVEY,
+                               "field": FIELD, "ra0": x["ra"], "dec0": x["dec"], "flux0": x["fluxap"]}
+                              for x in members]
+        tables["xmemberships"] = [{"object_job": imported, "xaid": 200 + x["xsid"], "field": FIELD,
+                                   "source_job": imported, "xsid": x["xsid"], "dra": 0.0, "ddec": 0.0,
+                                   "flux": x["fluxap"]} for x in members]
     publish(conn, imported, 1, write_attempt(tmp_path / "import", tables))
     # The exposure, published by its own job, as intake publishes it apart from the source set.
     exposure = create_job(conn, live, "intake", {}, expects=[
@@ -149,11 +170,14 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
     publish(conn, exposure, 1, write_attempt(tmp_path / "intake", {"exposures": exposures}))
     # A recipe that is not live: its unofficial source set joined object 100 too; never counted.
     stray = create_job(conn, other, "import", {})
-    publish(conn, stray, 1, write_attempt(tmp_path / "stray", {
-        "sources": tables["sources"],
-        "memberships": [{"object_job": imported, "aid": 100, "field": FIELD, "source_job": stray,
-                         "sid": 1,
-                         "dra": 0.0, "ddec": 0.0, "flux": 400.0}]}))
+    stray_tables = {"sources": tables["sources"],
+                    "memberships": [{"object_job": imported, "aid": 100, "field": FIELD,
+                                     "source_job": stray, "sid": 1,
+                                     "dra": 0.0, "ddec": 0.0, "flux": 400.0}]}
+    if members:
+        stray_tables["xsources"] = tables["xsources"]
+        stray_tables["xmemberships"] = [{**tables["xmemberships"][0], "source_job": stray}]
+    publish(conn, stray, 1, write_attempt(tmp_path / "stray", stray_tables))
 
     inputs = [{"product": p, "key": k, "source_job": j} for p, k, j in (
         ("sources", IMAGE_KEY, imported),
@@ -339,3 +363,77 @@ def test_each_window_image_is_measured_with_its_own_science_psf(connect, tmp_pat
     ((without,),) = query(conn, "SELECT (manifest -> 'packet' ->> 'window_without_science_psf')::int"
                                 " FROM jobs WHERE id = %s", (job,))
     assert without == (1 if route == "none" else 0)
+
+
+def xsource(xsid: int, column: float, line: float, **columns) -> dict:
+    """One xsource of the trigger's set at one-based pixel (``column``, ``line``), fitted, flags 0."""
+    ra, dec = (float(v[0]) for v in wcs().all_pix2world([column], [line], 1))
+    (row,) = [r for r in xsource_rows(MJD[1], 8, n=xsid) if r["xsid"] == xsid]
+    return {**row, "expid": 1, "fid": 8, "pid": 601, "field": FIELD, "ra": ra, "dec": dec,
+            "x": column, "y": line, "isdiffpos": True, **columns}
+
+
+def _records(conn, job) -> dict[int, dict]:
+    """The packet set's records, by diaSourceId."""
+    ((filename,),) = query(conn, "SELECT DISTINCT filename FROM packets WHERE job = %s", (job,))
+    with local_path(filename).open("rb") as stream:
+        return {r["diaSourceId"]: r for r in fastavro.reader(stream)}
+
+
+def test_an_xsources_packet_set_is_made_from_the_xsources_their_xobjects_and_xmemberships(
+        connect, tmp_path):
+    """rapid_docs decision-packets-from-xsources: the triggers are the set's xmember xsources with
+    flags = [associate] xsource_flags, the index names their xobjects and xsids, never the sources'
+    object 100; a fitted xsource carries its fit in psfFlux, an unfitted one the 3 px aperture,
+    both the aperture in apFlux; x and y are zero-based; history counts official xmemberships
+    only; the source sets read are recorded as sources reads, and the run's checks pass."""
+    conn = connect()
+    xsources = [
+        xsource(1, 50, 50, member=True, fluxfit=400.0, snrfit=40.0, flagsfit=0, rb=0.875,
+                fluxap1=380.0, fluxerrap1=12.0, redchi=1.25, npixfit=49, sharpness=0.25),
+        xsource(2, 20, 80, member=True, fluxfit=None, snrfit=None, flagsfit=None,
+                fluxap1=60.0, fluxerrap1=10.0),
+        xsource(3, 80, 20, member=True, flags=2),        # SExtractor flags: not a trigger
+        xsource(4, 80, 80)]                              # in no xobject: not a trigger
+    job, founder, stray, *_ = packet_job(conn, tmp_path, xsources=xsources, alert_catalog="xsources")
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+
+    assert query(conn, "SELECT object_job, aid, sid FROM packets_official WHERE job = %s ORDER BY sid",
+                 (job,)) == [(founder, 201, 1), (founder, 202, 2)]
+    assert {a for (a,) in query(conn, "SELECT aid FROM forced WHERE job = %s", (job,))} == {201, 202}
+    records = _records(conn, job)
+    fitted, aperture = records[1], records[2]
+    assert fitted["diaObject"]["diaObjectId"] == 201
+    assert fitted["diaObject"]["nDiaSources"] == 1                 # the stray set's xmembership not counted
+    source = fitted["diaSource"]
+    assert (source["psfFlux"], source["psfFluxErr"], source["snr"]) == (400.0, 10.0, 40.0)
+    assert (source["apFlux"], source["apFluxErr"]) == (380.0, 12.0)
+    assert (source["x"], source["y"], source["psfFitFlags"]) == (49.0, 49.0, 0)
+    assert (source["psfRChi2"], source["psfNdata"], source["sharpness"]) == (1.25, 49, 0.25)
+    assert (source["psfQfit"], source["peak"], source["xErr"]) == (None, None, None)
+    assert source["reliability"] == 0.875
+    source = aperture["diaSource"]
+    assert (source["psfFlux"], source["psfFluxErr"], source["apFlux"]) == (60.0, 10.0, 60.0)
+    assert (source["psfFitFlags"], source["psfRChi2"]) == (0, 1.0)
+    recorded = query(conn, "SELECT product, source_job FROM job_inputs WHERE job = %s"
+                           " AND kind = 'input' ORDER BY product, source_job", (job,))
+    assert ("sources", founder) in recorded and ("sources", stray) not in recorded
+
+    reader = _script("read_packets")
+    assert reader.read_set(conn, job)[1] == []
+    validate = _script("validate_run")
+    validate._s3 = None
+    assert validate.packet_set_failures(job)[0] == []
+    assert len(validate.members_by_aid(job, [(founder, 201)], "x")[(founder, 201)]) == 1
+
+
+def test_a_run_body_without_alert_catalog_reads_the_sources(connect, tmp_path):
+    """A body stored before [packet] alert_catalog keeps "sources": xsources published beside the
+    set change nothing."""
+    conn = connect()
+    job, founder, *_ = packet_job(conn, tmp_path, xsources=[xsource(1, 50, 50, member=True)])
+    assert "alert_catalog" not in RUN_SETTINGS["packet"]
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"]
+    assert query(conn, "SELECT aid, sid FROM packets_official WHERE job = %s", (job,)) == [(100, 1)]

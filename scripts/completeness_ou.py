@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         return rows
 
     with connect(application_name="completeness-ou") as conn:
-        (run,) = q("SELECT dataset FROM runs WHERE id = %s", (a.run,))
+        (run,) = q("SELECT dataset, settings FROM runs WHERE id = %s", (a.run,))
         images = q("SELECT d.expid, d.sca, d.field, d.fid, l.filename, l.mjdobs, f.filter"
                    " FROM diffimages_official d JOIN l2files_official l ON l.dataset = d.dataset"
                    " AND l.expid = d.expid AND l.sca = d.sca AND l.fid = d.fid"
@@ -184,11 +184,8 @@ def main(argv: list[str] | None = None) -> int:
                    " JOIN job_inputs n ON n.job = d.job AND n.kind = 'input' AND n.product = 'refimages'"
                    " JOIN refimages r ON r.job = n.source_job JOIN refimimages i ON i.job = r.job AND i.rfid = r.rfid"
                    " JOIN l2files l ON l.rid = i.rid JOIN filters f ON f.fid = l.fid WHERE d.run = %s", (a.run,))
-        sources = pd.DataFrame(q("SELECT s.job, s.sid, s.expid, s.sca, s.ra, s.dec, s.fluxfit, s.flags,"
-                                 " s.field = d.field AS in_field"
-                                 " FROM sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
-                                 " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
-                                 " JOIN diffimages d ON d.pid = s.pid", (a.run,)))
+        body = run["settings"]["settings"] if "settings" in run["settings"] else run["settings"]
+        sources = pd.DataFrame(q(completeness.detections_sql(body), (a.run,)))
         packets = pd.DataFrame(q(
             "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
             " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"

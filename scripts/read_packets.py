@@ -123,11 +123,13 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
     inputs = {(r["product"], r["source_job"]) for r in _query(
         conn, "SELECT product, source_job FROM job_inputs WHERE job = %s AND kind = 'input'",
         (job,))}
-    member_of = {(r["object_job"], r["aid"], r["sid"]) for r in _query(
-        conn, "SELECT m.object_job, m.aid, m.sid FROM memberships_of(ARRAY["
-              "(SELECT p.source_job FROM packets_of(ARRAY[%s]::bigint[]) p LIMIT 1)]) m", (job,))}
     (settings,) = _query(conn, "SELECT r.settings FROM jobs j JOIN runs r ON r.id = j.run"
                                " WHERE j.id = %s", (job,))
+    # The index's aid and sid name xobjects and xsources under [packet] alert_catalog "xsources".
+    x = "x" if settings["settings"]["packet"].get("alert_catalog", "sources") == "xsources" else ""
+    member_of = {(r["object_job"], r["aid"], r["sid"]) for r in _query(
+        conn, f"SELECT m.object_job, m.{x}aid AS aid, m.{x}sid AS sid FROM {x}memberships_of(ARRAY["
+              "(SELECT p.source_job FROM packets_of(ARRAY[%s]::bigint[]) p LIMIT 1)]) m", (job,))}
     size = 2 * int(settings["settings"]["packet"]["stamp_half_width"]) + 1
     key = index[0]
     chip_rows = _query(conn, """

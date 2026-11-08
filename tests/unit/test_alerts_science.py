@@ -36,7 +36,7 @@ def _source(sid, **overrides):
            "yerr": 0.02, "fluxfit": 100.0, "fluxerr": 2.0, "flags": 0, "field": 5321,
            "hp6": 1, "hp9": 2, "pid": 4242, "isdiffpos": True, "qfit": 0.1, "cfit": 0.1,
            "redchi": 1.0, "npixfit": 25, "sharpness": 0.5, "roundness1": 0.0,
-           "roundness2": 0.0, "peak": 12.0, "exptime": 139.8, **IDENTIFIERS,
+           "roundness2": 0.0, "peak": 12.0, "apflux": None, "apfluxerr": None, "exptime": 139.8, **IDENTIFIERS,
            "survey": "SOCSIMS", "rb": None, "rblabel": None}
     row.update(overrides)
     return Source.from_row(row, strict=True)
@@ -261,7 +261,7 @@ def test_index_associations_keeps_the_lowest_aid_and_the_orphans():
                    ("sid", "expid", "sca", "mjdobs", "ra", "dec", "xfit", "yfit", "band", "xerr",
                     "yerr", "fluxfit", "fluxerr", "flags", "field", "hp6", "hp9", "pid",
                     "isdiffpos", "qfit", "cfit", "redchi", "npixfit", "sharpness",
-                    "roundness1", "roundness2", "peak", "exptime", *IDENTIFIERS, "survey", "rb",
+                    "roundness1", "roundness2", "peak", "apflux", "apfluxerr", "exptime", *IDENTIFIERS, "survey", "rb",
                     "rblabel")}, "object_aid": 5}]
     indexed = assemble.index_associations(rows, history)
     assert indexed.objects_by_sid[1]["aid"] == 5
