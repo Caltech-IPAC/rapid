@@ -3,9 +3,9 @@
 Contracts: the stem parses and names the file's path under the source root;
 the FITS file is the SOC reader's layout, its science image the file's
 counts in DN, its keywords the file's own filter, SCA, exposure time and
-start, the pointing as ``OBSERVTN`` and the zero point from ``[intake.
-nominal_zptmag]``, and the truth tables follow the images; a file whose own
-filter or detector contradicts its name fails; under the dataset's overlay
+start, no ``OBSERVTN`` (the pointing is not a Roman observation number)
+and the zero point from ``[intake.nominal_zptmag]``, and the truth tables
+follow the images; a file whose own filter or detector contradicts its name fails; under the dataset's overlay
 (``reader = "openuniverse"``, ``crpix_shift = [-1, -1]``) the stage reads
 ``<filter>/<pointing>/<stem>_simple.asdf``, declares rows whose ``expid`` is
 the pointing, and writes a zero-based WCS: a sky position the file's
@@ -104,7 +104,7 @@ def test_the_fits_file_is_the_soc_layout_with_the_files_own_keywords(tmp_path):
         assert names[:2] == ["PRIMARY", "SCI"] and "TRANSIENTS" in names
         assert names.index("TRANSIENTS") > max(names.index(n) for n in ("SCI", "ERR", "DQ"))
         assert len(hdul["TRANSIENTS"].data) == 2
-        assert (primary["FILTER"], primary["SCA_NUM"], primary["OBSERVTN"]) == ("H158", 8, 10032)
+        assert (primary["FILTER"], primary["SCA_NUM"]) == ("H158", 8)
         assert primary["EXPTIME"] == EXPTIME and primary["MJD-OBS"] == pytest.approx(MJD)
         assert primary["ZPTMAG"] == 26.5113
         assert sci.header["BUNIT"] == "DN"
@@ -167,6 +167,7 @@ def test_the_stage_reads_the_openuniverse_path_keys_the_rows_by_pointing_and_is_
     (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
     assert (exposure["expid"], exposure["program_id"]) == (10032, -2)
     assert (l2file["dataset"], l2file["expid"], l2file["sca"], l2file["fid"]) == ("ou-tds1", 10032, 8, 2)
+    assert exposure["observation"] is None  # the pointing is not a Roman observation number
     with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
         assert hdul["SCI"].header["FILTER"] == "H158"
         sip = WCS(hdul["SCI"].header)

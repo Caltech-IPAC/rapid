@@ -33,9 +33,12 @@ What the adapter supplies, each from a measurement on
   no ``meta.photometry``; the conversion therefore takes ``[intake.
   nominal_zptmag]``, which the dataset's overlay sets to galsim.roman's AB
   zero points.
-- The identifiers. The file carries no Roman observation identifiers; the
-  pointing (the index into the survey's observing sequence) is the file
-  name's and is written as ``OBSERVTN``, the others are undefined.
+- The identifiers. The file carries no Roman observation identifiers, so
+  all are undefined. The pointing (the index into the survey's observing
+  sequence, past 32,767 in the TDS) is not one: it stays in the file name,
+  the source key and the file's own meta, never ``OBSERVTN``, which the
+  intake writes to the ``smallint`` ``exposures.observation`` (run 173's four
+  pointings above 32,767 failed there).
 """
 
 from __future__ import annotations
@@ -95,7 +98,7 @@ def model(tree: dict, stem: str) -> _Node:
         raise ValueError(f"{stem}: the file's own detector {meta['detector']} is not its name's")
     exptime = float(meta["exp_time"])
     start = Time(meta["mjd_obs"], format="mjd", scale="utc")  # the exposure's start (the sequence's date)
-    observation = {name: None for name in ("program", "execution_plan", "pass", "segment",
+    observation = {name: None for name in ("program", "execution_plan", "pass", "segment", "observation",
                                            "visit", "exposure", "visit_id", "observation_id")}
     dm = _Node(
         meta=_Node(
@@ -103,7 +106,7 @@ def model(tree: dict, stem: str) -> _Node:
             exposure=_Node(exposure_time=exptime, start_time=start,
                            end_time=start + TimeDelta(exptime, format="sec")),
             pointing=_Node(target_ra=float(meta["ra_pointing"]), target_dec=float(meta["dec_pointing"])),
-            observation=_Node(observation, observation=ids["pointing"]),
+            observation=_Node(observation),
             openuniverse=_Node(meta),  # the file's own meta, as HIERARCH cards
             wcs=tree["wcs"]),
         # counts per second, which the conversion's EXPTIME scaling returns to DN
