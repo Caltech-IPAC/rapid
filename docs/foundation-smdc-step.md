@@ -376,11 +376,14 @@ one dated file, one granted statement as `postgres` on the database host
 ON_ERROR_STOP=1`), applied once and recorded in its step.
 
 **The image.** rapid_systems' `containers/rapid-pipeline/build-rebuild.sh
-<sha> --tag rebuild-<sha>`, the full 40-character sha (a short one fails
-the deploy hook after the push), then its
+<sha>`, the full 40-character sha (a short one fails the deploy hook
+after the push), which tags the image `rebuild-<sha>-<base8>` after the
+first eight hex of its base image's digest, then its
 `cloudformation/release-hooks/deploy` with `RELEASE_TAG` and
 `RELEASE_IMAGE_DIGEST`, which registers the next `rapid-rebuild` revision
-and moves `rapid-rebuild-production`'s with it. One deploy at a time
+and never moves `rapid-rebuild-production`'s: only `release-hooks/promote`
+repins production, from a retained release (rapid_docs
+`decision-production-retained-releases`). One deploy at a time
 (one stack). A proof submits the revision its own deploy printed, or,
 when two deploys meet one tag, the revision whose image digest the job
 definition shows. Never prove on `rapid-rebuild:85` or `:86`: both carry
@@ -391,7 +394,12 @@ PR 465's `ring_count` regression. Nor on `rapid-rebuild:91`
 publishes the SFFT default and supersedes both; `rapid-rebuild:95`
 (`rapid-rebuild-production:86`, `776bdc3b`, PR 495) is superseded by
 `rapid-rebuild:103` (`63243090`, PR 535), itself superseded by
-`rapid-rebuild:104` (`12db1a28`, PR 542), the newest a proof ran on.
+`rapid-rebuild:104` (`12db1a28`, PR 542), and `:104` by
+`rapid-rebuild:105` (`bf1bf83c`, run 167; it ships the `xsources`' S/N
+prefilter off, Russ's test value, which no proof measured), itself
+superseded by `rapid-rebuild:106` (`1f75f8e8`, PR 547, image
+`rebuild-1f75f8e8…-a448c68e`), the newest a proof ran on (run 168,
+rapid-xpath-baseline task 2).
 
 **A run.** One dataset name and one live run per proof; a run's bindings
 are its dataset's alone; two loops never run under one run at once. The

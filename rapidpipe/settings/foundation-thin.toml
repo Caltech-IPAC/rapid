@@ -7,10 +7,14 @@
 # is RAPIDPIPE_OUTPUTS_ROOT.
 
 [import]
+# Ports dev's loaders pipeline/loadPSFCatIntoDBSourcesTable.py and
+# pipeline/loadSECatIntoDBSourcesTable.py, both signs, as the difference job
+# loads them (rapid_docs decision-import-both-signs, decision-negative-sources).
 # The brightest sources kept from each of a difference image's two PSF-fit
 # catalogs, by fluxfit / fluxerr; -1 is no cap, keeping every source, as
-# dev, which caps nothing; 0 keeps none (Russ Laher, 2026-11-06). The
-# import's xsources are never capped, as the difference job's are not.
+# dev, which caps nothing (dev's value); 0 keeps none; below -1 is refused
+# (Russ Laher, 2026-11-06). The import's xsources are never capped, as the
+# difference job's are not.
 max_sources = -1
 # dev's fit-position bounds, in pixels (loadPSFCatIntoDBSourcesTable.py L35-36).
 xy_fit_min = -0.5
@@ -105,17 +109,24 @@ F213 = ""
 [associate]
 # Read by the difference job, which associates its sources with the field's
 # objects (plan amendment 2026-10-24; the associate stage is retired).
-# Degrees (dev's crossmatch match_radius).
+# Ports dev's [SOURCE_MATCHING] of the ini and pipeline/crossMatchSources.py.
+# Degrees (dev's [SOURCE_MATCHING] match_radius).
 match_radius = 0.00001528
-# Sources matched: flags equal to this, and fluxfit / fluxerr at least min_snr.
+# Sources matched: flags equal to this once the informational bit
+# (INFORMATIONAL_SOURCE_FLAGS) is cleared, and fluxfit / fluxerr at least
+# min_snr. source_flags is dev's (crossMatchSources.py matches flags = 0);
+# min_snr is new, not dev's, which makes no S/N cut here.
 source_flags = 0
 min_snr = 5.0
-# Xsources matched (the xsources' cross-match into xobjects and xmemberships, under
-# sfft): SExtractor flags equal to this, both signs, no S/N cut (dev's
-# crossMatchXSources.py matches flags = 0).
+# Xsources matched (the xsources' cross-match into xobjects and xmemberships,
+# rapid_docs decision-xobjects): SExtractor flags equal to this, both signs,
+# no S/N cut; dev's value (pipeline/crossMatchXSources.py matches flags = 0).
 xsource_flags = 0
 
 [packet]
+# Ports dev's alert production (alerts/providers.py and the ini's [ALERTS]);
+# rapid_docs decision-packets-from-xsources.
+# Read by no stage; the edge cut is the fixed 2 px margin of the prefilters.
 edge_pixels = 2
 # Cutouts are (2 * half width + 1) pixels square (dev providers.py STAMP_HALF_WIDTH).
 stamp_half_width = 64
@@ -123,12 +134,12 @@ stamp_half_width = 64
 prv_window_days = 365.25
 forced_window_days = 30.0
 # dev's MAX_SOURCES_PER_CHIP (providers._cut_to_max_sources): the triggers
-# kept per source set, the highest |fluxfit / fluxerr| first, so everything
-# after it (history, matches, forced photometry, the packets) sees only the
-# survivors; -1 keeps every trigger (dev's 0), 0 none. dev marks it a
+# kept per source set, the highest |snr| first (fluxfit / fluxerr, the 3 px
+# aperture's for an unfitted xsource), so everything after it (history,
+# matches, forced photometry, the packets) sees only the survivors; -1 keeps
+# every trigger (dev's 0), 0 none. dev's value, 2000. dev marks it a
 # temporary stand-in for a real/bogus cut. The absolute value is new, not
-# dev's: a negative source, once the source set carries them, ranks by its
-# strength, not last.
+# dev's: a negative source ranks by its strength, not last.
 max_alerts = 2000
 # New, not dev's (rapid_docs decision-packets-from-xsources): the catalog the
 # packets are made from. "xsources": the set's xsources (prefiltered by
@@ -160,11 +171,12 @@ lvs_max_matches = 3
 # Reference-catalog star and galaxy matches (dev providers.py), likewise.
 refcat_radius_arcsec = 5.0
 refcat_max_matches = 3
-# [ALERTS] rb_threshold and rb_version: a scored trigger's reliabilityThreshold
-# and reliabilityVersion. rb_threshold MUST equal threshold.json of the
-# [difference.rubrat] model (dev's rule); rb_version "" is that model's
-# version, the last path component of its prefix. An unscored trigger
-# (sources.rb null) carries neither.
+# [ALERTS] rb_threshold and rb_version (dev's values): a scored trigger's
+# reliabilityThreshold and reliabilityVersion. rb_threshold MUST equal
+# threshold.json of the [difference.rubrat] model (dev's rule); rb_version
+# "" is that model's version, the last path component of its prefix. An
+# unscored trigger (sources.rb or xsources.rb null) carries neither, and
+# its reliability is null.
 rb_threshold = 0.5134
 rb_version = ""
 
@@ -506,7 +518,8 @@ sextractor_interp_type = "ALL"
 [difference]
 # The brightest sources kept per difference image and sign, by fluxfit /
 # fluxerr; -1 is no cap, keeping every source, as dev, which caps
-# nothing; 0 keeps none (Russ Laher, 2026-11-06). Both signs load: the
+# nothing (dev's value); 0 keeps none; below -1 is refused (rapid_docs
+# decision-negative-sources, Russ Laher, 2026-11-06). Both signs load: the
 # positive and the negative SFFT PSF-fit catalogs, as dev's
 # loadPSFCatIntoDBSourcesTable.py. The packet stage's [packet] max_alerts
 # is the one cap on what alerts (Emily, 2026-11-06).
@@ -587,8 +600,11 @@ saturation_level = 100000.0
 zprefimg = ""
 
 [difference.zogy]
-# [ZOGY]. false skips ZOGY: no ZOGY difference image, S_corr image or
-# catalogs, and their two outcome bits are never set (dev f8cda2ee).
+# dev's [ZOGY] of the ini. false skips ZOGY: no ZOGY difference image,
+# S_corr image or catalogs, and their two outcome bits are never set; dev's
+# run_zogy (f8cda2ee), true as dev's (rapid_docs decision-run-zogy). ZOGY's
+# catalogs are diagnostics: nothing published comes from them (rapid_docs
+# decision-sfft-only-registered).
 run_zogy = true
 # Gain matching's fallback x/y RMS when too few sources match.
 astrometric_uncert_x = 0.05
@@ -724,13 +740,15 @@ filter_size = 3
 lower_median = false
 
 [difference.sources_database_prefilter]
-# The sources' cuts of dev's [DATABASE_PREFILTER]
-# (loadPSFCatIntoDBSourcesTable.py, rapid_pipeline_subs.py
+# The sources' cuts of dev's [DATABASE_PREFILTER] (the ini; applied by
+# loadPSFCatIntoDBSourcesTable.py through modules/utils/rapid_pipeline_subs.py
 # prefilter_database_records at c931b001), applied by source_set to both of
-# SFFT's PSF-fit catalogs before the max_sources cap, in the difference job
-# and the import. Kept apart from the xsources' thresholds below, where dev
-# reads one section for both, so either can change without the other
-# (rapid_docs decisions.md, sources-prefilter, Russ Laher, 2026-11-07).
+# SFFT's PSF-fit catalogs after the fit-position bounds and before the
+# max_sources cap, in the difference job and the import. Kept apart from the
+# xsources' thresholds below, where dev reads one section for both, so either
+# can change without the other (rapid_docs decision-sources-prefilter, Russ
+# Laher, 2026-11-07). The sumrat value is dev's; the rb value is dev's; the
+# S/N is new, shipped off.
 # A source is kept when its sumrat is above this, finite (a null sumrat is
 # rejected, where dev passes it), and its nearest pixel is at least 2 px
 # from the image edge (dev's XSources loader, 57559572, a module constant);
@@ -748,26 +766,33 @@ rb_prefilter_threshold = 0.0
 snr_prefilter_threshold = ""
 
 [difference.xsources_database_prefilter]
-# [DATABASE_PREFILTER], the xsources' cuts. A run body stored before the
-# split has the shared [difference.database_prefilter] instead, which the
-# stages read in its place (rapid_docs decisions.md, sources-prefilter).
+# The xsources' cuts of dev's [DATABASE_PREFILTER] (the ini; applied by
+# loadSECatIntoDBSourcesTable.py, d2657f7d), all three at dev's values. A
+# run body stored before the split has the shared
+# [difference.database_prefilter] instead, which the stages read in its
+# place (rapid_docs decision-sources-prefilter). The xsources
+# (rapidpipe.science.difference.xsources) are cut as dev's loader cuts them
+# (rapid_docs decision-xsources): a source is dropped when it is not inside
+# the image by more than 2 px from its edge, or its finite sumrat is at or
+# below sumrat_prefilter_threshold, its finite rb score at or below
+# rb_prefilter_threshold, or its finite S/N in the 3 px aperture
+# (FLUX_APER_1 / FLUXERR_APER_1) at or below snr_prefilter_threshold; a
+# missing value is never cut. The PSF fits of xsources run only on the
+# sources that pass the sumrat and S/N cuts (extra_catalog_cols
+# photutils_cols_prefilter_only), and the packets are made from the xsources
+# that pass (rapid_docs decision-packets-from-xsources). "" is no such cut.
 sumrat_prefilter_threshold = 0.4
-# xsources (rapidpipe.science.difference.xsources), as dev's XSources loader
-# (loadSECatIntoDBSourcesTable.py, d2657f7d) cuts them: a source is dropped
-# when its finite sumrat is at or below sumrat_prefilter_threshold, its
-# finite rb score at or below rb_prefilter_threshold, or its finite S/N in
-# the 3 px aperture (FLUX_APER_1 / FLUXERR_APER_1) at or below
-# snr_prefilter_threshold; a missing value is never cut (rapid_docs
-# decisions.md, xsources). The PSF fits of xsources run only on the sources
-# that pass the sumrat and S/N cuts (extra_catalog_cols
-# photutils_cols_prefilter_only). "" is no such cut.
 rb_prefilter_threshold = 0.0
 # 5.0 is dev's [DATABASE_PREFILTER] snr_prefilter_threshold (ini, XSources
 # only); "" from bf1bf83c, an initial test, is reverted (Ben, 2026-11-08).
 snr_prefilter_threshold = 5.0
 
 [difference.extra_catalog_cols]
-# [EXTRA_CATALOG_COLS]: nneg and nbad, the negative and the non-finite
+# Ports dev's [EXTRA_CATALOG_COLS] of the ini (compute_extra_cols_sxtractor
+# and compute_extra_cols_photutils, modules/utils/rapid_pipeline_subs.py), the
+# xsources' extra columns (rapid_docs decision-xsources); the values are
+# dev's. The rb columns are RuBR-AT's, set in [difference.rubrat].
+# nneg and nbad, the negative and the non-finite
 # pixels of an unfiltered stamp of this side [pixels], odd.
 nneg_nbad_stamp_size = 5
 # sumrat, nneg and nbad are measured after a local background (photutils
@@ -796,11 +821,13 @@ photutils_cols_num_processes = 2
 photutils_cols_prefilter_only = true
 
 [difference.rubrat]
-# [RUBRAT]: the RuBR-AT real/bogus classifier (modules/rubrat, dev's
-# compute_rb; rapidpipe.science.difference.realbogus) scores every source of
-# SFFT's positive and negative PSF-fit catalogs, as dev's, rb_score and
-# rb_label, a column of each catalog and of `sources` (rb, rblabel); the model is SFFT-trained, and
-# ZOGY's catalogs are not scored. The model is
+# dev's [RUBRAT] of the ini: the RuBR-AT real/bogus classifier (modules/rubrat,
+# dev's compute_rb; rapidpipe.science.difference.realbogus) scores every source
+# of SFFT's positive and negative PSF-fit catalogs and of the xsources, as
+# dev's, rb_score and rb_label, a column of each catalog, of `sources` (rb,
+# rblabel) and of `xsources` (rb, rblabel); ZOGY's catalogs are not scored
+# (rapid_docs decision-reliability-scored, decision-negative-sources,
+# decision-xsources). The model is
 # a prefix holding SHA256SUMS and the three files below, each verified. New,
 # not dev's (dev: s3_prefix): model_prefix, a full s3:// or file:// prefix,
 # set by --set for a run; "" (shipped) reads the bucket from the SSM
