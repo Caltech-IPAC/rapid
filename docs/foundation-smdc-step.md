@@ -245,7 +245,7 @@ idempotent write (Ben, 2026-10-24 14:02 UTC).
 From 2026-10-24 19:22 UTC each step is one task run unattended beside
 others, with its pull requests as its record. Every run named is CLEAN by `check_run.sh` but run 83
 (failed on purpose), runs 137 and 138 (failed on PR 465's
-regression) and run 158 (FAIL on the consumer only: the gate holds all but one of its sets). A row whose finding a later row superseded says so.
+regression), run 158 (FAIL on the consumer only: the gate holds all but one of its sets) and run 171 (abandoned on a failed Gaia import). A row whose finding a later row superseded says so.
 
 | step | what stands | runs | where |
 |---|---|---|---|
@@ -301,6 +301,7 @@ regression) and run 158 (FAIL on the consumer only: the gate holds all but one o
 | rapid-python-stasis | the image's environment, rapid_systems' rapid-python RPM, is STASIS's shape (rapid_systems 494): conda-forge python 3.13 and pip, everything else one hash-pinned pip lock of 261 packages compiled against the newest non-rc STASIS delivery's pins (`ROMANDP-1.1.0+26Q4_B23`) on the Roman stack list's 28 names, two overrides (`sip_tpv>=2`, `astrocut>=1.4`), relocked weekly; 449 → 284 locked packages, envhouse 2.61 → 0.85 GB. `rebuild` at `bf1bf83c` built on `base-42418415958-1` (`rapid-python-2026.11.07-2`: python 3.13.18, onnxruntime 1.31.1, sip_tpv 2.0), the import gate passing; `rapid-rebuild:105` (`sha256:241af5ab…`), 3.90 GB against `:104`'s 4.02 GB (ECR 2,055.3 MB against 2,054.7 MB); epoch 4040101's difference published on m6a.2xlarge in 5 min 52 s, 916 of 917 and 742 of 742 rows scored, `sources.rb` on all 727, `rb_s` 21.5 s, peak RSS 19.4 GB; the loop stopped before the packet as run 166's | 167 | this PR; rapid_systems 494 |
 | rapid-python-314-live | the first pipeline job on python 3.14 (rapid_systems 495: conda-forge python 3.14, the same 261-package lock): `rebuild` at `0613b2ea` built on the newest base, `base-42441425467-1` (`sha256:48af6eec…`, `rapid-python-2026.11.07-3`: python 3.14.10, numpy 2.5.2, astropy 8.0.1, onnxruntime 1.31.1, galsim 2.8.5, romancal 1.1.0, sip_tpv 2.0), the import gate passing; `rapid-rebuild:107` (`sha256:3ea2d6c4…`), 3.93 GB against `:106`'s 3.90 GB (ECR 2,068.0 MB against 2,055.3 MB); run 167's layers and run 168's packet switches: epoch 4040101's difference published on m6a.2xlarge in 4 min 13 s, 916 of 917 and 742 of 742 rows scored, `sources.rb` on all 727, `rb_s` 21.9 s, peak RSS 19,404,936 KiB against run 167's 19,423,976; the packet job sent 338; `check_run.sh` CLEAN | 170 | this PR; rapid_systems 495 |
 | licence-audit | the public repository's per-component licence table and the purge set for the switch to `rebuild` (rapid_docs log post 2026-11-08: 28 paths here, one `rapid-cmodules` spec edit in rapid_systems, nothing deleted now); `c/common/numericalrecipes/selectkthvalue.c`, Numerical Recipes' `select` in structure, rewritten as Hoare's quickselect: `bkgest` built before and after with the `rapid-cmodules` spec's lines writes data arrays byte-equal and headers equal but `DATE` on run 12 difference job 1895's science image and resampled reference, 2.9 → 1.9 s per image; `rapid-cmodules` 1.0.0-8 pinned to `f1eae15e` | 12 (inputs) | PRs 551, 552; rapid_systems 499; rapid_docs 178 |
+| stage-timing | each step's seconds the packet and difference stages time are top-level manifest metrics, so `job_metrics` carries them (PR 550; each defined in its stage's docstring): packet `packet_read_s` (the one new timer), `packet_forced_s`, `packet_matching_s`, `packet_cutouts_s`, `packet_assembly_s`; difference `refpsf_s` and `gzip_s` (timed, now written) beside `pixel_columns_s`, `rb_s`, `xsources_s`; the SFFT solve and the catalogs are untimed. `rapid-rebuild:108` (`3d9ed5f5`, image `rebuild-3d9ed5f5…-48af6eec`, `sha256:33ffd98b…`), the Exercise arc's revision. Run 170's shape on `r00342-inj1` epoch 4040101: the difference job 252 s (170: 253 s): `rb_s` 23.3, `xsources_s` 15.0, `refpsf_s` 9.4, `gzip_s` 8.2, `pixel_columns_s` 4.3, about 192 s untimed; the packet job 21 s (170: 22 s), 338 packets: `packet_cutouts_s` 8.2, `packet_forced_s` 5.8, `packet_read_s` 2.3, `packet_assembly_s` 2.1, `packet_matching_s` 0.8. Against run 170: `sources` 727, `xsources` 435, forced rows 336, the packets index 338, external 4 and the rb summaries equal; the Avro records equal but `diaForcedSourceId` (derived from the image's row id) and `diffimages` but `rfid` and the gzip checksum (FITS `DATE`); `check_run.sh` CLEAN. Run 171 holds a failed Gaia import (an unset `AWS_DEFAULT_REGION`) and was abandoned | 172 | PR 550; this PR |
 
 ## Current procedure
 
@@ -405,15 +406,18 @@ prefilter off, Russ's test value, which no proof measured), itself
 superseded by `rapid-rebuild:106` (`1f75f8e8`, PR 547, image
 `rebuild-1f75f8e8…-a448c68e`, python 3.13; runs 168, 169), and `:106`
 by `rapid-rebuild:107` (`0613b2ea`, PR 548, image
-`rebuild-0613b2ea…-48af6eec`, python 3.14), the newest a proof ran on
-(run 170, rapid-python-314-live).
+`rebuild-0613b2ea…-48af6eec`, python 3.14; run 170), and `:107` by
+`rapid-rebuild:108` (`3d9ed5f5`, PR 550, image
+`rebuild-3d9ed5f5…-48af6eec`), the newest a proof ran on and the
+Exercise arc's revision (run 172, stage-timing).
 
 **A run.** One dataset name and one live run per proof; a run's bindings
 are its dataset's alone; two loops never run under one run at once. The
 steps are the loop page's: `rp run create` with `--revision` the full
 sha, `--overlay` the dataset's `rapidpipe/settings/datasets/*.toml`, and
 `--set` the source root and the reference bound; the live binding by
-`rp official change`; the dataset's Gaia import by `rp job local`; then
+`rp official change`; the dataset's Gaia import by `rp job local`, with
+`AWS_DEFAULT_REGION` exported (the catalog store refuses without it); then
 
 ```sh
 timeout 5400 $PY -m rapidpipe.cli.main loop --run $RUN --filters F146 --scas 8 \
