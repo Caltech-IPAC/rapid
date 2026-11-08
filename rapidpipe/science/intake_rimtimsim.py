@@ -118,6 +118,10 @@ def model(header: fits.Header, stem: str) -> _Node:
         raise ConversionError(f"{stem}: BUNIT {header.get('BUNIT')!r}, not DN")
     if "ZPTMAG" not in header:
         raise ConversionError(f"{stem}: no ZPTMAG")
+    if not float(header["ZPTMAG"]) > 0:
+        # dev's converter wrote 0.0 for every filter but F213 and F087 and said nothing
+        # (smdc f6e517a0 added the warning); a zero zero point is no zero point.
+        raise ConversionError(f"{stem}: ZPTMAG {header['ZPTMAG']!r}, not positive")
     exptime = float(header["EXPTIME"])
     start = Time(float(header["MJD-OBS"]), format="mjd", scale="utc")
     own = {key.lower().replace("-", "_"): header[key] for key in header
