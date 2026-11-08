@@ -299,6 +299,7 @@ regression) and run 158 (FAIL on the consumer only: the gate holds all but one o
 | sfft-block-base (2026-11-07) | dev's socsims `[difference.sfft]` block on the GBTDS and RimTimSim overlays (Ben's ruling 2026-11-07, sfft-singular), no ZOGY fallback (`diff_flavor` retired); on `rapid-rebuild:103` (`63243090`, `sha256:fc38d659…`), one epoch each, a fresh dataset and run apiece, against the latest row for the sample: GBTDS gb3 2014201 completes (157 failed), core +0.0529, ring −0.0177, difference 5,324 s against ZOGY 139's −0.0485, −0.0386, 889 s; RimTimSim F213 4571 completes (156 failed), core +0.0510, ring +0.0907, 32,132 of 123,630 positive candidates above S/N 20, difference 8,317 s against ZOGY 124's −0.0694, −0.0339, 2,643 s; HLWAS null 4040101 core −0.0030, ring −0.0013, 293 packets against SFFT 153's +0.0005, −0.0074, 86 and ZOGY 150's −0.0010, +0.0017, 181; OpenUniverse 28737 detected 12 of 56, false positives 1,989, core −0.0068, ring −0.0017 against ZOGY 125's 4, 493, −0.0202, +0.0136; flight 1049 e4 core +0.0106, ring −0.0163, usable 0.781, 813 packets against ZOGY 126's +0.0013, −0.0050, 0.781, 328; every count rose with the tip's uncapped two-sign sources (PR 529) and `max_alerts` 2000 (PR 531), so counts do not compare with the earlier rows; `check_run.sh`'s reader query had failed on every run since field-children (PR 536); run 161 (flight) failed its packet job on `external`'s key, rerun as 165 | 160, 161, 162, 163, 164, 165 | PRs 535, 536; rapid_docs 169 |
 | rapid-onnx | the RuBR-AT classifier runs in the difference job's process on onnxruntime 1.31.1, the model the checkpoint's ONNX export (`rubrat-onnx/2026-10-06_canonical9_seed42`, the inputs bucket being write-once), loaded once per job; the TensorFlow sidecar layer and its lock gone, no TensorFlow or Keras in the image (5.62 → 4.02 GB, ECR 2,688 → 2,055 MB); sip_tpv from the installed 1.1. Parity on run 152's candidates against the sidecar: labels equal on all 917 positive and 742 negative rows, max score difference 1.6e-6. On `rapid-rebuild:104` (`12db1a28`, `sha256:5cdc0f65…`) epoch 4040101's difference published, 1,315 and 1,270 rows scored, `rb_s` 33.0 s on m6a.2xlarge; the loop stopped before the packet (the dataset has no NED or LVS row) | 166 | PRs 539, 542; rapid_systems 491, 492; rapid_docs 172 |
 | rapid-python-stasis | the image's environment, rapid_systems' rapid-python RPM, is STASIS's shape (rapid_systems 494): conda-forge python 3.13 and pip, everything else one hash-pinned pip lock of 261 packages compiled against the newest non-rc STASIS delivery's pins (`ROMANDP-1.1.0+26Q4_B23`) on the Roman stack list's 28 names, two overrides (`sip_tpv>=2`, `astrocut>=1.4`), relocked weekly; 449 → 284 locked packages, envhouse 2.61 → 0.85 GB. `rebuild` at `bf1bf83c` built on `base-42418415958-1` (`rapid-python-2026.11.07-2`: python 3.13.18, onnxruntime 1.31.1, sip_tpv 2.0), the import gate passing; `rapid-rebuild:105` (`sha256:241af5ab…`), 3.90 GB against `:104`'s 4.02 GB (ECR 2,055.3 MB against 2,054.7 MB); epoch 4040101's difference published on m6a.2xlarge in 5 min 52 s, 916 of 917 and 742 of 742 rows scored, `sources.rb` on all 727, `rb_s` 21.5 s, peak RSS 19.4 GB; the loop stopped before the packet as run 166's | 167 | this PR; rapid_systems 494 |
+| rapid-python-314-live | the first pipeline job on python 3.14 (rapid_systems 495: conda-forge python 3.14, the same 261-package lock): `rebuild` at `0613b2ea` built on the newest base, `base-42441425467-1` (`sha256:48af6eec…`, `rapid-python-2026.11.07-3`: python 3.14.10, numpy 2.5.2, astropy 8.0.1, onnxruntime 1.31.1, galsim 2.8.5, romancal 1.1.0, sip_tpv 2.0), the import gate passing; `rapid-rebuild:107` (`sha256:3ea2d6c4…`), 3.93 GB against `:106`'s 3.90 GB (ECR 2,068.0 MB against 2,055.3 MB); run 167's layers and run 168's packet switches: epoch 4040101's difference published on m6a.2xlarge in 4 min 13 s, 916 of 917 and 742 of 742 rows scored, `sources.rb` on all 727, `rb_s` 21.9 s, peak RSS 19,404,936 KiB against run 167's 19,423,976; the packet job sent 338; `check_run.sh` CLEAN | 170 | this PR; rapid_systems 495 |
 
 ## Current procedure
 
@@ -321,10 +322,13 @@ imported and drained CLEAN through `loop` under
 86/86). The four teammate hosts move onto their roles from the shared
 one at their next running swap. The rapid environment is rapid_systems'
 rapid-python RPM at `/opt/rapid/conda/envs/rapid`, the image's from its
-`base-*`: conda-forge python 3.13 and pip, the rest one hash-pinned pip
+`base-*`: conda-forge python 3.14 and pip, the rest one hash-pinned pip
 lock against the newest STASIS delivery's pins on the Roman stack
-list, relocked weekly (rapid_systems 494, row rapid-python-stasis); a
-host takes a new one in the Thursday maintenance window.
+list, relocked weekly (rapid_systems 494 and 495, rows
+rapid-python-stasis and rapid-python-314-live); a host takes a new one
+in the Thursday maintenance window. The first job on 3.14 is run 170 on
+`rapid-rebuild:107`, base `base-42441425467-1`
+(`rapid-python-2026.11.07-3`, python 3.14.10).
 
 ```sh
 unset AWS_PROFILE            # the workstation's own instance role
@@ -398,8 +402,10 @@ publishes the SFFT default and supersedes both; `rapid-rebuild:95`
 `rapid-rebuild:105` (`bf1bf83c`, run 167; it ships the `xsources`' S/N
 prefilter off, Russ's test value, which no proof measured), itself
 superseded by `rapid-rebuild:106` (`1f75f8e8`, PR 547, image
-`rebuild-1f75f8e8…-a448c68e`), the newest a proof ran on (run 168,
-rapid-xpath-baseline task 2).
+`rebuild-1f75f8e8…-a448c68e`, python 3.13; runs 168, 169), and `:106`
+by `rapid-rebuild:107` (`0613b2ea`, PR 548, image
+`rebuild-0613b2ea…-48af6eec`, python 3.14), the newest a proof ran on
+(run 170, rapid-python-314-live).
 
 **A run.** One dataset name and one live run per proof; a run's bindings
 are its dataset's alone; two loops never run under one run at once. The
