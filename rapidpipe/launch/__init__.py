@@ -77,6 +77,8 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     values = {**(environment_extra or {}), "RAPIDPIPE_OUTPUTS_ROOT": root}
     if os.environ.get("RAPID_DB_SECRET_ID"):
         values["RAPID_DB_SECRET_ID"] = os.environ["RAPID_DB_SECRET_ID"]
+    if os.environ.get("RAPID_EXP_ORT_THREADS"):    # exp/xsources-rb's thread arm (ort-threads-batch)
+        values["RAPID_EXP_ORT_THREADS"] = os.environ["RAPID_EXP_ORT_THREADS"]
     environment = [{"name": k, "value": v} for k, v in values.items()]
     prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX") or "rapid"
     overrides = {"command": ["job", "run", "--job", str(job_id)], "environment": environment}

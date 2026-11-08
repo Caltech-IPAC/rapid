@@ -877,6 +877,7 @@ def run(job: JobContext) -> None:
                   reformatted_science_image=reformatted_science_image_filename,
                   gain_times_exptime=sca_gain * inputs.exptime, thresh=thresh)
     rb = None if rb_model is None else (rb_classifier, realbogus.filter_of(w(science_image_filename)))
+    _PROBE.clear()
     sfft_names, sfft_catalogs = _run_sfft(
         science_image_filename=science_image_filename,
         scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
@@ -976,6 +977,7 @@ def run(job: JobContext) -> None:
                        n_xsources_read=sum(xsources_record["read"].values()),
                        n_xsources_fitted=sum(xsources_record["fitted"].values()),
                        xsources_s=xsources_record["seconds"])
+    metrics.update(_probe_metrics())
     residual_stars = _quality_metrics(
         metrics, found, thresh=thresh, candidates=candidates, sources=sources,
         catalog=catalog, in_footprint=in_footprint,
@@ -1540,7 +1542,7 @@ def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: 
             path = work_dir / f"xsources_{sign}_rb.parquet"
             pq.write_table(xsources.rb_input(extra), path)
             summary = _score_rb(classifier, filter_name, path, work_dir / science,
-                                work_dir / reference, work_dir / image)
+                                work_dir / reference, work_dir / image, probe="xsrb")
             scored = pq.read_table(path, columns=["rb_score", "rb_label"])
             extra["rb_score"] = scored.column("rb_score").to_numpy(zero_copy_only=False).astype(float)
             extra["rb_label"] = scored.column("rb_label").to_numpy(zero_copy_only=False).astype(float)
@@ -1593,8 +1595,57 @@ def xsources_set(found: dict[str, Any], settings: dict[str, Any], key: dict, pid
     return xsources.xsources_table(parts), record
 
 
+#: exp/xsources-rb's Batch probe (ort-threads-batch), not a metric of ``rebuild``: per
+#: ``_score_rb`` phase, process CPU seconds, wall seconds and the container cgroup's
+#: ``cpu.stat`` deltas across the calls, merged into the job's metrics by :func:`_probe_metrics`.
+_PROBE: dict[str, float] = {}
+
+
+def _cgroup_cpu() -> dict[str, float]:
+    """The container cgroup's CPU counters: cgroup v2 ``cpu.stat`` (usec), else v1's (ns)."""
+    v2 = Path("/sys/fs/cgroup/cpu.stat")
+    if v2.exists():
+        stat = dict(line.split() for line in v2.read_text().splitlines())
+        return {"usage_s": int(stat.get("usage_usec", 0)) / 1e6, "nr_periods": int(stat.get("nr_periods", 0)),
+                "nr_throttled": int(stat.get("nr_throttled", 0)),
+                "throttled_s": int(stat.get("throttled_usec", 0)) / 1e6}
+    v1 = Path("/sys/fs/cgroup/cpu/cpu.stat")
+    if v1.exists():
+        stat = dict(line.split() for line in v1.read_text().splitlines())
+        usage = Path("/sys/fs/cgroup/cpuacct/cpuacct.usage")
+        return {"usage_s": int(usage.read_text()) / 1e9 if usage.exists() else -1.0,
+                "nr_periods": int(stat.get("nr_periods", 0)), "nr_throttled": int(stat.get("nr_throttled", 0)),
+                "throttled_s": int(stat.get("throttled_time", 0)) / 1e9}
+    return {}
+
+
+def _cgroup_limits() -> dict[str, float]:
+    """The CFS quota and period (``cpu.max``; v1's ``cfs_quota_us``), -1 for no quota; the
+    CPU weight or shares; the CPUs the process sees and may run on."""
+    out = {"cpu_count": float(os.cpu_count() or 0), "cpu_affinity": float(len(os.sched_getaffinity(0)))}
+    v2 = Path("/sys/fs/cgroup/cpu.max")
+    if v2.exists():
+        quota, period = v2.read_text().split()
+        out.update(cgroup_cpu_quota_us=-1.0 if quota == "max" else float(quota), cgroup_cpu_period_us=float(period))
+        weight = Path("/sys/fs/cgroup/cpu.weight")
+        if weight.exists():
+            out["cgroup_cpu_weight"] = float(weight.read_text())
+    elif Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").exists():
+        out.update(cgroup_cpu_quota_us=float(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text()),
+                   cgroup_cpu_period_us=float(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text()),
+                   cgroup_cpu_shares=float(Path("/sys/fs/cgroup/cpu/cpu.shares").read_text()))
+    return out
+
+
+def _probe_metrics() -> dict[str, float]:
+    """The probe's metrics: each phase's counters (``rb_*`` for SFFT's catalogs, ``xsrb_*``
+    for the xsources'), the limits, and ``RAPID_EXP_ORT_THREADS`` (0 unset)."""
+    return {**{k: round(v, 3) for k, v in _PROBE.items()}, **_cgroup_limits(),
+            "exp_ort_threads": float(os.environ.get("RAPID_EXP_ORT_THREADS") or 0)}
+
+
 def _score_rb(classifier, filter_name: str, catalog: Path, science: Path, reference: Path,
-              difference: Path) -> dict[str, Any]:
+              difference: Path, probe: str = "rb") -> dict[str, Any]:
     """``classifier``'s scored catalog in place of ``catalog``
     (:func:`rapidpipe.science.difference.realbogus.add_rb_columns`); its summary, with the
     call's seconds.
@@ -1603,10 +1654,15 @@ def _score_rb(classifier, filter_name: str, catalog: Path, science: Path, refere
     selects nothing (a mismatch raises ``RuntimeError``).
     """
     output = catalog.with_name(catalog.stem + "_rubrat.parquet")
+    cpu0, cg0 = time.process_time(), _cgroup_cpu()
     start = time.perf_counter()
     summary = realbogus.add_rb_columns(catalog, output, science, reference, difference,
                                        filter_name, classifier)
     seconds = round(time.perf_counter() - start, 3)
+    cpu1, cg1 = time.process_time(), _cgroup_cpu()
+    for name, value in [("wall_s", seconds), ("cpu_s", cpu1 - cpu0)] + [
+            (f"cg_{k}", cg1[k] - cg0[k]) for k in cg1]:
+        _PROBE[f"{probe}_{name}"] = _PROBE.get(f"{probe}_{name}", 0.0) + value
     before = pq.read_table(catalog, columns=["id"]).column("id")
     after = pq.read_table(output, columns=["id"]).column("id")
     if not before.equals(after):
