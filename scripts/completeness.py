@@ -136,9 +136,9 @@ def match(truth: pd.DataFrame, sources: pd.DataFrame, radius_arcsec: float) -> p
 
 def join(matched: pd.DataFrame, sources: pd.DataFrame, packets: pd.DataFrame) -> pd.DataFrame:
     """Left joins: a truth row's detection, then its packet; ``detected``, ``alerted``, ``sent``,
-    ``flux_ratio``, ``flags``."""
+    ``flux_ratio``, ``flags``, ``rb``."""
     src = sources.rename(columns={"ra": "src_ra", "dec": "src_dec"})[
-        ["job", "sid", "fluxfit", "flags", "in_field", "src_ra", "src_dec"]]
+        ["job", "sid", "fluxfit", "flags", "rb", "in_field", "src_ra", "src_dec"]]
     pk = packets.rename(columns={"job": "packet_job", "source_job": "job"})[
         ["job", "sid", "packet_job", "object_job", "aid", "sent", "trigger_mjd"]]
     out = matched.merge(src, on=["job", "sid"], how="left").merge(pk, on=["job", "sid"], how="left")
@@ -276,10 +276,10 @@ def detections_sql(settings: dict) -> str:
     """The run's official detections' query, one ``%s`` the run: the catalog its packets are made
     from (``[packet] alert_catalog``; ``"sources"`` for a body without the key), so a packet's
     ``(source_job, sid)`` joins its trigger. An xsource's ``sid`` is its ``xsid``, its ``fluxfit``
-    :data:`XSOURCE_FLUX` and its ``flags`` SExtractor's."""
+    :data:`XSOURCE_FLUX` and its ``flags`` SExtractor's; ``rb`` is the set's RuBR-AT score."""
     x = "x" if settings.get("packet", {}).get("alert_catalog", "sources") == "xsources" else ""
     flux = XSOURCE_FLUX if x else "s.fluxfit"
-    return (f"SELECT s.job, s.{x}sid AS sid, s.expid, s.sca, s.ra, s.dec, {flux} AS fluxfit, s.flags,"
+    return (f"SELECT s.job, s.{x}sid AS sid, s.expid, s.sca, s.ra, s.dec, {flux} AS fluxfit, s.flags, s.rb,"
             " s.field = d.field AS in_field"
             f" FROM {x}sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
             " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
@@ -323,7 +323,8 @@ def load(conn, run_id: int) -> dict:
                    (sorted({int(j) for j in packets["job"]}),)):
             read_sets[r["job"]].add(r["source_job"])
     if not len(sources):
-        sources = pd.DataFrame(columns=["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags", "in_field"])
+        sources = pd.DataFrame(columns=["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags", "rb",
+                                        "in_field"])
     if not len(packets):
         packets = pd.DataFrame(columns=["job", "source_job", "sid", "object_job", "aid", "expid", "sca",
                                         "trigger_mjd", "filename", "byte_offset", "byte_length", "sent"])
