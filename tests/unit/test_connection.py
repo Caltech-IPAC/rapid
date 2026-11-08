@@ -198,6 +198,7 @@ class _FakeSsm:
 
 def _connect_with(connect_fn, clock, **kwargs):
     kwargs.setdefault("ssm_client", _FakeSsm(error_code="ParameterNotFound"))
+    kwargs.setdefault("jitter", False)  # exact waits; the default is asserted by its own test
     return conn_mod.connect(
         endpoint=conn_mod.Endpoint("h", "5432", "d"),
         credentials=conn_mod.Credentials("u", "p"),
@@ -260,6 +261,21 @@ def test_backoff_is_bounded_by_the_cap(monkeypatch):
 
     # 1.0, 3.0, 5.0 (capped from 9.0), 5.0 (capped), 5.0 (capped)
     assert clock.sleeps == [1.0, 3.0, 5.0, 5.0, 5.0]
+
+
+def test_jitter_is_on_by_default_so_a_burst_of_callers_desynchronizes(monkeypatch):
+    _clear_pg_env(monkeypatch)
+    clock = _Clock()
+
+    with conn_mod.connect(endpoint=conn_mod.Endpoint("h", "5432", "d"),
+                          credentials=conn_mod.Credentials("u", "p"),
+                          connect_fn=_recording_connect_fn([], fail_times=1),
+                          sleep=clock.sleep, clock=clock, backoff_initial=4.0,
+                          ssm_client=_FakeSsm(error_code="ParameterNotFound"),
+                          random_func=lambda lo, hi: lo + hi):  # deterministic stand-in: lo + hi
+        pass
+
+    assert clock.sleeps == [0 + 4.0]
 
 
 def test_jitter_true_samples_within_zero_and_delay(monkeypatch):
