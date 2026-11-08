@@ -24,6 +24,14 @@ per epoch the truth rows, detected and false positives (packets on sources
 not in the truth), each run's mean and highest false positives per epoch,
 and detected per magnitude bin. Exits 2 when one run's dataset has a truth
 and the other's has none, naming them.
+
+The drift gate, ``--spread F``: F (TOML) gives each of :data:`DRIFT`'s columns
+its spread, ``column = [low, high]``, the lowest and highest a sample of runs
+recorded (a column equal across the sample is ``[v, v]``, compared for
+equality). Each run's row is printed beside the spread, and run B's is the one
+judged: a value outside its spread, or absent, is **red**, and the script
+exits 1. The nightly drift run passes the previous day's run as A and its own
+as B (rapid_docs, the drift page).
 """
 
 from __future__ import annotations
@@ -60,6 +68,11 @@ NULL_COLUMNS = [
 ]
 SIGNED = {"core", "ring"}
 
+#: The drift gate's columns: over the shared epochs, the median packets, core, ring and difference
+#: seconds per epoch (the null table's), the injected sources detected by a source scoring at least
+#: ``[packet] rb_threshold``, and the mean false positives per epoch (``completeness.false_positives``).
+DRIFT = ["packets", "core", "ring", "detected at the threshold", "false positives", "difference s"]
+
 
 def shared(a: dict, b: dict) -> tuple[list, list, list]:
     """The epochs of both, of ``a`` only and of ``b`` only, sorted; ``a`` and ``b`` keyed by (expid, SCA)."""
@@ -89,6 +102,42 @@ def null_table(runs: dict, epochs: list) -> str:
             got = [rows[e][i] for e in epochs if rows[e][i] is not None]
             medians.append(statistics.median(got) if got else None)
         lines.append(f"| median | {run} | " + " | ".join(_cell(h, v) for h, v in zip(heads, medians)) + " |")
+    return "\n".join(lines)
+
+
+def drift_row(rows: dict, epochs: list, measured: dict | None, threshold: float | None) -> dict:
+    """One run's :data:`DRIFT` row from its null rows over ``epochs`` and, for an injected run, its
+    ``completeness.measure``; a column the run cannot give is ``None``."""
+    heads = [h for h, _ in NULL_COLUMNS]
+
+    def median(heading):
+        got = [rows[e][heads.index(heading)] for e in epochs if rows[e][heads.index(heading)] is not None]
+        return statistics.median(got) if got else None
+
+    row = {c: median(c) for c in ("packets", "core", "ring", "difference s")}
+    row["detected at the threshold"] = row["false positives"] = None
+    if measured is not None:
+        r = measured["rows"]
+        if threshold is not None:
+            row["detected at the threshold"] = int((r["detected"] & (r["rb"].astype(float) >= threshold)).sum())
+        row["false positives"] = float(completeness.false_positives(measured["ep"]).mean())
+    return row
+
+
+def red(row: dict, spread: dict) -> list[str]:
+    """The columns of ``row`` outside ``spread`` (``{column: [low, high]}``, inclusive) or absent."""
+    return [c for c, (low, high) in spread.items() if row.get(c) is None or not low <= row[c] <= high]
+
+
+def gate_table(drift: dict, spread: dict, judged: int) -> str:
+    """Each run's drift row beside the spread, the judged run's verdict per column."""
+    runs = list(drift)
+    lines = ["| column | " + " | ".join(f"run {r}" for r in runs) + " | spread | run " + str(judged) + " |",
+             "|---|" + "---|" * (len(runs) + 2)]
+    bad = red(drift[judged], spread)
+    for c, (low, high) in spread.items():
+        lines.append(f"| {c} | " + " | ".join(_cell(c, drift[r].get(c)) for r in runs)
+                     + f" | {_cell(c, low)} to {_cell(c, high)} | {'RED' if c in bad else 'green'} |")
     return "\n".join(lines)
 
 
@@ -124,7 +173,16 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("--run-a", type=int, required=True)
     p.add_argument("--run-b", type=int, required=True)
+    p.add_argument("--spread", type=Path, help="the drift gate's spread (TOML): judge run B, exit 1 on red")
     a = p.parse_args(argv)
+    spread = None
+    if a.spread:
+        import tomllib
+
+        spread = tomllib.loads(a.spread.read_text())
+        unknown = set(spread) - set(DRIFT)
+        if unknown:
+            p.error(f"{a.spread}: not a drift column: {sorted(unknown)}")
     from rapidpipe.db.connection import connect
 
     jobs, data, rows = {}, {}, {}
@@ -143,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
           f" {len(epochs)} shared epochs")
     print(f"unshared: run {a.run_a} only {only_a or 'none'}; run {a.run_b} only {only_b or 'none'}")
     if not epochs:
-        return 0
+        return 1 if spread else 0
     table = {}
     for run in (a.run_a, a.run_b):
         diff = inspect_run.by_stage(rows[run]).get("difference", {})
@@ -152,18 +210,27 @@ def main(argv: list[str] | None = None) -> int:
                                    "packets": packets.get(e, 0)}) for e in epochs}
     print("\n" + null_table(table, epochs))
     files = {run: completeness.truth_files(data[run]["intake"]) for run in (a.run_a, a.run_b)}
-    if not any(files.values()):
-        return 0
-    if not all(files.values()):
+    measured = {run: None for run in files}
+    if not all(files.values()) and any(files.values()):
         have = [r for r, f in files.items() if f]
         lack = [r for r, f in files.items() if not f]
         print(f"run {have[0]}'s dataset has a truth and run {lack[0]}'s has none: not an injected pair",
               file=sys.stderr)
         return 2
-    measured = {run: completeness.measure(data[run], files[run], epochs=set(epochs), with_history=False)
-                for run in (a.run_a, a.run_b)}
-    print("\n" + injected_tables(measured))
-    return 0
+    if all(files.values()):
+        measured = {run: completeness.measure(data[run], files[run], epochs=set(epochs), with_history=False)
+                    for run in (a.run_a, a.run_b)}
+        print("\n" + injected_tables(measured))
+    if spread is None:
+        return 0
+    drift = {}
+    for run in (a.run_a, a.run_b):
+        body = data[run]["run"]["settings"].get("settings", data[run]["run"]["settings"])
+        drift[run] = drift_row(table[run], epochs, measured[run], body.get("packet", {}).get("rb_threshold"))
+    print("\n" + gate_table(drift, spread, a.run_b))
+    bad = red(drift[a.run_b], spread)
+    print(f"\nDrift gate run {a.run_b} against run {a.run_a}: {'RED ' + ', '.join(bad) if bad else 'GREEN'}")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

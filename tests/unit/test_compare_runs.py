@@ -3,7 +3,8 @@
 Contracts: only epochs both runs have are compared, an epoch in one run only
 is returned as unshared; one epoch's columns are its difference job's
 metrics, its packet count and the registration offset's hypotenuse, a metric
-the job did not record a dash, never zero.
+the job did not record a dash, never zero; the drift gate calls a value outside
+its spread, or absent, red.
 """
 
 from __future__ import annotations
@@ -39,3 +40,12 @@ def test_one_epochs_columns_come_from_its_metrics_and_packets():
     assert sparse[0] == 271.0 and sparse[3] == 0 and sparse[6] is None
     table = compare_runs.null_table({113: {(4040101, 8): sparse}}, [(4040101, 8)])
     assert "| 4040101 sca 8 | 113 | 271 | — | — | 0 | — | — | — | — |" in table.splitlines()
+
+
+def test_a_value_outside_the_spread_is_red():
+    spread = {"packets": [266, 338], "core": [-2.6e-05, -2.6e-05], "difference s": [226.1, 350.5]}
+    row = {"packets": 338, "core": -2.6e-05, "difference s": 252.4}
+    assert compare_runs.red(row, spread) == []
+    assert compare_runs.red({**row, "packets": 339}, spread) == ["packets"]
+    assert compare_runs.red({**row, "core": -2.5e-05}, spread) == ["core"]   # a [v, v] spread is equality
+    assert compare_runs.red({**row, "difference s": None}, spread) == ["difference s"]
