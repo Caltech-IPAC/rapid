@@ -33,8 +33,9 @@ at a time.
 
 This module provides persistence only: it imports no stage module.
 
-Ported, trimmed and adapted from the smdc branch's
-``database/modules/utils/rapid_db_connect.py`` (kept: explicit
+Ported, trimmed and adapted from the retired smdc branch's
+``database/modules/utils/rapid_db_connect.py`` (the branch was deleted
+on 2026-11-08; the smdc references below are provenance; kept: explicit
 endpoint/credentials interface, Secrets Manager resolution, connect
 timeout, ``application_name``, bounded retry with backoff and jitter,
 TCP keepalives; dropped: the two named pooler "lanes", the SET ROLE
