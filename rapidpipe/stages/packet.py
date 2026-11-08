@@ -17,8 +17,8 @@ dataset (the run's). Recorded inputs at launch, every one an ``input`` row:
   :data:`rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS` are
   cleared, so a source in a bright footprint is a trigger and its packet
   carries the bit in ``psfFitFlags``) that the difference job made a
-  member of an object are the triggers; `dev`'s 2,000-per-chip cap is not
-  ported (plan, Part 2). A trigger in several objects takes the lowest
+  member of an object are the triggers, cut to the ``[packet] max_alerts``
+  of highest |S/N| (shipped 2,000, `dev`'s per-chip cap; -1 keeps all). A trigger in several objects takes the lowest
   ``aid`` (`dev`'s rule).
 - ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
 - ``catalogs``: the dataset's catalog copies, at most one per name among

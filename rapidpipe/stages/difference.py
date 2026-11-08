@@ -1,5 +1,5 @@
 # ported-from: pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py @ d6aac515
-"""``difference``: one epoch's L2 image minus its reference, ZOGY then SFFT, as `dev` does it.
+"""``difference``: one epoch's L2 image minus its reference, SFFT published and ZOGY beside it, as `dev` does it.
 
 Ported from `origin/dev`'s ``pipeline/awsBatchSubmitJobs_runSingleSciencePipeline.py``
 (its science only: the S3 transfers, the job-config parsing and the
@@ -20,8 +20,9 @@ medians) -> NaN replacement and artifact repair -> subpixel offset of the
 reference by the medians -> ZOGY -> coverage mask, NaN restore, negation
 -> difference uncertainty -> SExtractor and Photutils catalogs, positive
 and negative. SFFT and the naive subtraction follow ZOGY and run as `dev`
-runs them (``[sfft] run_sfft``, ``[naive_diffimage] naive_diffimage_flag``).
-``[zogy] run_zogy = false`` skips ZOGY, its images and catalogs, as `dev`'s
+runs them (``[difference.sfft] run_sfft``, ``[difference.naive_diffimage]
+naive_diffimage_flag``).
+``[difference.zogy] run_zogy`` (shipped true) false skips ZOGY, its images and catalogs, as `dev`'s
 ``[ZOGY] run_zogy`` (f8cda2ee) does; the manifest's ``zogy_source_counts``
 is then null and ZOGY's two outcome bits are never set.
 SFFT is the published differencer: only its positive difference image is
@@ -888,7 +889,8 @@ def run(job: JobContext) -> None:
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         _run_naive(**common)
 
-    # Rows: SFFT's positive difference image and positive PSF-fit catalog, the only ones registered.
+    # Rows: SFFT's positive difference image, the only one registered, and its positive and
+    # negative PSF-fit catalogs.
     published_image, published_unc, published_psf = (
         sfft_names["diffimage"], sfft_names["diffimage_unc"], sfft_names["diffpsf"])
     published_catalogs = sfft_catalogs

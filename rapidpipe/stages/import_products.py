@@ -325,7 +325,7 @@ def _fid(filter_name: str) -> int:
 
 def _sources(settings: dict, prefilter: dict, difference: Path, key: dict, pid: int,
              mjdobs: float, naxis1: int, naxis2: int) -> tuple[pa.Table, dict]:
-    """Both PSF-fit catalogs' capped source sets: dev's position bounds and prefilter, then the brightest by flux_fit / flux_err.
+    """Both PSF-fit catalogs' source sets: dev's position bounds and prefilter, then, unless ``max_sources`` is -1, the brightest per sign by flux_fit / flux_err.
 
     Parameters
     ----------
