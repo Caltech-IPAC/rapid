@@ -193,6 +193,7 @@ def test_publishers_beyond_the_pool_into_overlapping_fields_never_wait_holding_i
         watcher.join(10)
         bystander.join(10)
 
+    print({**seen, "outcomes": outcomes})                    # the evidence, shown on a failure
     assert seen["max_waiting"] == 0, f"{seen['max_waiting']} server connections waited on field locks"
     assert seen["max_idle_hold"] < IDLE_HOLD_LIMIT, \
         f"a field-lock holder left its connection idle {seen['max_idle_hold']:.1f} s"
