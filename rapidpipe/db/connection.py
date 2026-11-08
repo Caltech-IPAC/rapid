@@ -499,7 +499,7 @@ def connect(
     keepalives_interval: int = KEEPALIVES_INTERVAL_S,
     keepalives_count: int = KEEPALIVES_COUNT,
     tcp_user_timeout: int = TCP_USER_TIMEOUT_MS,
-    jitter: bool = False,
+    jitter: bool = True,
     sleep=time.sleep,
     clock=time.monotonic,
     connect_fn=None,
@@ -554,9 +554,12 @@ def connect(
     growing by ``backoff_multiplier`` each time. The first refusal of a
     call logs the maintenance lock once (:func:`maintenance_lock_holder`),
     so a job's log names the window run that closed the database.
-    ``jitter=True`` applies full jitter (a random duration in
-    ``[0, delay]`` in place of ``delay`` itself) so many callers retrying
-    off the same event do not stay synchronized. All of these are
+    Jitter is on by default (``jitter=False`` turns it off, for a test
+    that asserts exact waits): full jitter, a random duration in
+    ``[0, delay]`` in place of ``delay`` itself, so many callers retrying
+    off the same event do not stay synchronized. The smdc branch measured
+    the alternative on 2026-09-10: a 1,000-job start burst whose clients
+    retried on one schedule lost 218 jobs at startup. All of these are
     ordinary keyword arguments a caller overrides the same way it
     overrides ``connect_timeout``. ``sleep``, ``clock``, ``connect_fn``
     and ``random_func`` are injection points for tests; nothing in
