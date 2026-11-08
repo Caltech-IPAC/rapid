@@ -1,7 +1,7 @@
 """The closed-form Roman sky tessellation: its constants and the access class's contract.
 
 Ported from the smdc branch's ``database/modules/utils/test/test_roman_tessellation.py``
-(commit a2ba8ec9; the branch is retired) as pytest. Two of its classes are not
+(the branch was retired and deleted on 2026-11-08) as pytest. Two of its classes are not
 carried: the byte-parity check against rapid_systems' copy of the generator
 (rapid_systems deleted that copy on 2026-10-13, 532d2f80, so this repository's
 is the one source) and the equivalence battery against the legacy 1.4 GiB
