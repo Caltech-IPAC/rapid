@@ -47,6 +47,7 @@ Three things differ from `dev`:
 from __future__ import annotations
 
 import logging
+import os
 import warnings
 from pathlib import Path
 from typing import Any, Sequence
@@ -330,6 +331,104 @@ def _fit_chunk(index: np.ndarray) -> dict[str, np.ndarray]:
     return out
 
 
+def _fit_batched(index: np.ndarray, max_iterations: int = 100) -> dict[str, np.ndarray]:
+    """exp/xsources-rb's fit-batching lead, not a setting (``RAPID_EXP_FIT_BATCH=1``): every
+    source of ``index`` fitted at once by one vectorised Levenberg-Marquardt over (flux, x, y).
+
+    The same 5 x 5 boxes (``overlap_slices``' trim), masked pixels, 1 / error weights, initial
+    aperture flux and model (``ImagePSF``: flux times the PSF's cubic spline, zero off its
+    grid) as :func:`_fit_chunk`'s PSFPhotometry, but the spline's own derivatives for the
+    Jacobian where photutils' TRF takes finite differences, so the results agree to the fit's
+    tolerance, not to the bit. Errors are the covariance's ``inv(J'WJ) * chi2 / (n - 3)``, as
+    astropy's; ``reduced_chi2`` is ``chi2 / (n - 3)``; ``flags`` and ``cfit`` are NaN.
+    """
+    from photutils.aperture import CircularAperture
+    from scipy.interpolate import RectBivariateSpline
+
+    inputs = _FIT_INPUTS
+    data, mask, error = inputs["data"], inputs["mask"], inputs["error"]
+    psf = inputs["psf"]
+    ny_img, nx_img = data.shape
+    psf_ny, psf_nx = psf.shape
+    spline = RectBivariateSpline(np.arange(psf_nx), np.arange(psf_ny), psf.T, kx=3, ky=3, s=0)
+    cx, cy = (psf_nx - 1) / 2, (psf_ny - 1) / 2
+    index = np.asarray(index, dtype=int)
+    x0, y0 = inputs["x0"][index], inputs["y0"][index]
+    fy, fx = inputs["fit_shape"]
+    n = len(index)
+
+    flux0, _ = CircularAperture(np.column_stack([x0, y0]), r=inputs["aperture_radius"]).do_photometry(
+        data, mask=mask)
+    # overlap_slices' centre pixel: the position rounded half up, the box trimmed at the edge.
+    xs = np.ceil(x0 - fx / 2).astype(int)[:, None] + np.arange(fx)[None, :]
+    ys = np.ceil(y0 - fy / 2).astype(int)[:, None] + np.arange(fy)[None, :]
+    yy = np.broadcast_to(ys[:, :, None], (n, fy, fx)).reshape(n, -1)
+    xx = np.broadcast_to(xs[:, None, :], (n, fy, fx)).reshape(n, -1)
+    inside = (xx >= 0) & (xx < nx_img) & (yy >= 0) & (yy < ny_img)
+    xc, yc = np.clip(xx, 0, nx_img - 1), np.clip(yy, 0, ny_img - 1)
+    w = np.where(inside & ~mask[yc, xc], 1.0 / error[yc, xc], 0.0)
+    d = data[yc, xc]
+    npix = (w > 0).sum(axis=1)
+
+    def model(p):
+        return model_at(p, slice(None))
+
+    def model_at(p, k):
+        u = xx[k] - p[:, 1:2] + cx
+        v = yy[k] - p[:, 2:3] + cy
+        off = (u < 0) | (u > psf_nx - 1) | (v < 0) | (v > psf_ny - 1)
+        s = np.where(off, 0.0, spline.ev(u.ravel(), v.ravel()).reshape(u.shape))
+        su = np.where(off, 0.0, spline.ev(u.ravel(), v.ravel(), dx=1).reshape(u.shape))
+        sv = np.where(off, 0.0, spline.ev(u.ravel(), v.ravel(), dy=1).reshape(u.shape))
+        jac = np.stack([s, -p[:, 0:1] * su, -p[:, 0:1] * sv], axis=-1)
+        return p[:, 0:1] * s, jac
+
+    p = np.column_stack([flux0, x0, y0]).astype(float)
+    good = np.isfinite(p).all(axis=1) & (npix > 3)
+    lam = np.full(n, 1e-3)
+    m, jac = model(p)
+    chi2 = (((d - m) * w) ** 2).sum(axis=1)
+    active = good.copy()
+    for _ in range(max_iterations):
+        k = np.flatnonzero(active)
+        if not len(k):
+            break
+        r = (d[k] - m[k]) * w[k]
+        jw = jac[k] * w[k][:, :, None]
+        jtj = np.einsum("npi,npj->nij", jw, jw)
+        g = np.einsum("npi,np->ni", jw, r)
+        diag = np.einsum("nii->ni", jtj)
+        a = jtj + lam[k][:, None, None] * (diag[:, :, None] * np.eye(3)[None])
+        try:
+            step = np.linalg.solve(a, g[:, :, None])[:, :, 0]
+        except np.linalg.LinAlgError:
+            step = np.einsum("nij,nj->ni", np.linalg.pinv(a), g)
+        trial = p[k] + step
+        m_t, jac_t = model_at(trial, k)
+        chi2_t = (((d[k] - m_t) * w[k]) ** 2).sum(axis=1)
+        better = np.isfinite(chi2_t) & (chi2_t <= chi2[k])
+        small = (np.abs(step) <= 1e-8 * (np.abs(p[k]) + 1e-8)).all(axis=1)
+        kb = k[better]
+        p[kb], m[kb], jac[kb], chi2[kb] = trial[better], m_t[better], jac_t[better], chi2_t[better]
+        lam[k] = np.where(better, lam[k] / 10, lam[k] * 10)
+        active[k] = ~(better & small) & (lam[k] < 1e10) & ~(np.abs(step[:, 1:]) < 1e-10).all(axis=1)
+
+    jw = jac * w[:, :, None]
+    jtj = np.einsum("npi,npj->nij", jw, jw)
+    dof = np.maximum(npix - 3, 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cov = np.linalg.pinv(jtj) * (chi2 / dof)[:, None, None]
+    sig = np.sqrt(np.abs(np.diagonal(cov, axis1=1, axis2=2)))
+    nan = np.full(n, np.nan)
+    out = {"id": index.astype(np.int64) + 1,
+           "x_fit": np.where(good, p[:, 1], nan), "y_fit": np.where(good, p[:, 2], nan),
+           "x_err": np.where(good, sig[:, 1], nan), "y_err": np.where(good, sig[:, 2], nan),
+           "flux_fit": np.where(good, p[:, 0], nan), "flux_err": np.where(good, sig[:, 0], nan),
+           "reduced_chi2": np.where(good, chi2 / dof, nan), "n_pixels_fit": npix.astype(float),
+           "flags": nan, "cfit": nan}
+    return out
+
+
 def photutils_columns(data: np.ndarray, error: np.ndarray, psf: np.ndarray, x0, y0, *,
                       fwhm: float, fit_shape: Sequence[int], aperture_radius: float,
                       snap_radius: int = 1, xy_bounds=None,
@@ -424,7 +523,9 @@ def photutils_columns(data: np.ndarray, error: np.ndarray, psf: np.ndarray, x0, 
                    "aperture_radius": aperture_radius, "xy_bounds": xy_bounds, "x0": x0, "y0": y0}
     processes = max(1, min(int(num_processes), len(index)))
     try:
-        if processes > 1:
+        if os.environ.get("RAPID_EXP_FIT_BATCH") == "1":
+            chunks = [_fit_batched(index)]
+        elif processes > 1:
             import multiprocessing
             from concurrent.futures import ProcessPoolExecutor
 

@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -157,6 +158,22 @@ class OnnxSession:
         return {name: np.concatenate([part[k] for part in parts]) for k, name in enumerate(self.outputs)}
 
 
+def _experiment_session_options(onnxruntime):
+    """exp/xsources-rb's thread lead, not a setting: ``RAPID_EXP_ORT_THREADS`` sets the
+    session's intra- and inter-op thread counts (unset: onnxruntime's default, one intra-op
+    thread per core it counts, 16 on a 16-vCPU host whatever the affinity), and
+    ``RAPID_EXP_ORT_SPIN=0`` stops its pool threads spinning while they wait."""
+    options = onnxruntime.SessionOptions()
+    threads = os.environ.get("RAPID_EXP_ORT_THREADS")
+    if threads:
+        options.intra_op_num_threads = int(threads)
+        options.inter_op_num_threads = int(threads)
+    if os.environ.get("RAPID_EXP_ORT_SPIN") == "0":
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    return options
+
+
 @dataclass(frozen=True)
 class _Input:
     name: str
@@ -186,7 +203,8 @@ class OnnxClassifier(RealBogusClassifier):
             raise FileNotFoundError(f"Model not found: {self.checkpoint}")
         self.scaler = FeatureZScore(self.feature_scaler_path)
         self.model = OnnxSession(onnxruntime.InferenceSession(
-            str(self.checkpoint), providers=["CPUExecutionProvider"]))
+            str(self.checkpoint), sess_options=_experiment_session_options(onnxruntime),
+            providers=["CPUExecutionProvider"]))
         image = next((i for i in self.model.inputs if i.name == "images"), None)
         if image is None or len(image.shape) != 4 or image.shape[-1] != 3:
             raise ValueError("Model does not expose the RuBR-AT images input")
