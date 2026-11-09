@@ -27,6 +27,17 @@ from its own truth rows (RA and Dec quadratic in ``x``, ``y``; affine under
 twelve rows) and evaluated
 there; with ``crpix_shift`` ``[0, 0]`` the truth's own RA/Dec is used.
 
+A difference image sees a source's change against the reference, not its
+light: the bins are of ``mag_diff``, the AB magnitude of ``|f - f_ref|``,
+``f_ref`` the mean flux of the same source over its truth rows before the
+run's ``[reference.selection] before_mjd`` (the epochs the reference is
+stacked from, equal weights assumed), zero for a source with none. An
+``inject_dataset.py`` truth has no rows in the reference epochs, so its
+``mag_diff`` is its ``mag_ab``; `dev`'s socsims fake sources are in every
+epoch, the reference's too, so theirs is the change (``inf`` where none).
+``flux_ratio`` is a detection's flux, negative from the negative catalog
+(``isdiffpos`` false), over ``dnps_diff``, the signed change in DN/s.
+
 Purity, per magnitude bin of the packets' own magnitudes (``zp - 2.5
 log10(fluxfit)``, ``zp`` the epoch's truth zero point): packets on injected
 sources, on sources carrying the bright-footprint flag (``flags & 16384``,
@@ -109,6 +120,20 @@ def corrected_positions(truth: pd.DataFrame, shift: tuple[float, float]) -> pd.D
     return truth
 
 
+def difference_flux(truth: pd.DataFrame, before_mjd: float | None) -> pd.DataFrame:
+    """``mag_diff``, ``dnps_diff``: each truth row's change against its source's mean flux over the
+    truth rows before ``before_mjd`` (none, or no bound: the row's own magnitude and ``dnps``)."""
+    truth = truth.copy()
+    f = 10 ** (-0.4 * truth["mag_ab"])
+    early = truth["mjd"] < before_mjd if before_mjd is not None else pd.Series(False, index=truth.index)
+    ref = f[early].groupby(truth.loc[early, "src_id"]).mean()
+    df = f - truth["src_id"].map(ref).fillna(0.0)
+    with np.errstate(divide="ignore"):
+        truth["mag_diff"] = -2.5 * np.log10(df.abs())
+    truth["dnps_diff"] = df * 10 ** (0.4 * truth["zp"])
+    return truth
+
+
 def match(truth: pd.DataFrame, sources: pd.DataFrame, radius_arcsec: float) -> pd.DataFrame:
     """Each truth row's nearest source of its (expid, sca) within the radius: ``job``, ``sid``,
     ``offset_arcsec`` (NaN columns when none)."""
@@ -152,10 +177,10 @@ def join(matched: pd.DataFrame, sources: pd.DataFrame, packets: pd.DataFrame) ->
     return out
 
 
-def bins(rows: pd.DataFrame, by: list[str] | None = None) -> pd.DataFrame:
-    """Per magnitude bin (and ``by``): injected, detected, alerted, sent, the fractions, the median
+def bins(rows: pd.DataFrame, by: list[str] | None = None, mag: str = "mag_ab") -> pd.DataFrame:
+    """Per bin of ``mag`` (and ``by``): injected, detected, alerted, sent, the fractions, the median
     offset and flux ratio of the detections."""
-    rows = rows.assign(mag_bin=np.floor(rows["mag_ab"] / BIN) * BIN)
+    rows = rows.assign(mag_bin=np.floor(rows[mag] / BIN) * BIN)
     keys = (by or []) + ["mag_bin"]
     g = rows.groupby(keys)
     table = pd.DataFrame({
@@ -284,7 +309,7 @@ def detections_sql(settings: dict, expids: bool = False) -> str:
     x = "x" if settings.get("packet", {}).get("alert_catalog", "sources") == "xsources" else ""
     flux = XSOURCE_FLUX if x else "s.fluxfit"
     return (f"SELECT s.job, s.{x}sid AS sid, s.expid, s.sca, s.ra, s.dec, {flux} AS fluxfit, s.flags, s.rb,"
-            " s.field = d.field AS in_field"
+            " s.field = d.field AS in_field, s.isdiffpos"
             f" FROM {x}sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
             " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
             " JOIN diffimages d ON d.pid = s.pid" + (" WHERE s.expid = ANY(%s)" if expids else ""))
@@ -347,12 +372,13 @@ def load(conn, run_id: int, expids: set[int] | None = None) -> dict:
             read_sets[r["job"]].add(r["source_job"])
     if not len(sources):
         sources = pd.DataFrame(columns=["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags", "rb",
-                                        "in_field"])
+                                        "in_field", "isdiffpos"])
     if not len(packets):
         packets = pd.DataFrame(columns=["job", "source_job", "sid", "object_job", "aid", "expid", "sca",
                                         "trigger_mjd", "filename", "byte_offset", "byte_length", "sent"])
-    return {"run": run, "intake": intake, "shift": shift, "sources": sources, "packets": packets,
-            "diffs": diffs, "metrics": metrics, "read_sets": read_sets}
+    before_mjd = body.get("reference", {}).get("selection", {}).get("before_mjd")
+    return {"run": run, "intake": intake, "shift": shift, "before_mjd": before_mjd, "sources": sources,
+            "packets": packets, "diffs": diffs, "metrics": metrics, "read_sets": read_sets}
 
 
 def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] | None = None,
@@ -372,6 +398,7 @@ def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] 
 
     truth = pd.concat([pd.read_parquet(get(f) if f.startswith("s3://") else f) for f in files],
                       ignore_index=True)
+    truth = difference_flux(truth, data.get("before_mjd"))
     sources, packets, metrics = data["sources"], data["packets"], data["metrics"]
     diffs = {k for k in data["diffs"] if (expids is None or k[0] in expids) and (epochs is None or k in epochs)}
     truth, sources, packets = keep(truth), keep(sources), keep(packets)
@@ -382,6 +409,9 @@ def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] 
     unprocessed = sorted(epochs_in_truth - diffs)
     truth = truth[[k in processed for k in zip(truth["expid"], truth["sca"])]].reset_index(drop=True)
     rows = join(match(corrected_positions(truth, data["shift"]), sources, radius), sources, packets)
+    rows = rows.merge(sources[["job", "sid", "isdiffpos"]], on=["job", "sid"], how="left")
+    signed = rows["fluxfit"].where(rows["isdiffpos"].fillna(True).astype(bool), -rows["fluxfit"])
+    rows["flux_ratio"] = signed / rows["dnps_diff"]
     packets = packets.merge(sources[["job", "sid", "fluxfit", "flags"]].rename(columns={"job": "source_job"}),
                             on=["source_job", "sid"], how="left")
     zp = truth.groupby(["expid", "sca"])["zp"].median().to_dict()
@@ -404,7 +434,8 @@ def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] 
     if with_history and rows["alerted"].any():
         want = packets[[(int(j), int(s)) in injected_keys for j, s in zip(packets["source_job"], packets["sid"])]]
         hist = history(rows, _records(want.to_dict("records")), data["read_sets"])
-    return {"truth": truth, "rows": rows, "table": bins(rows), "per_sca": bins(rows, ["sca"]),
+    return {"truth": truth, "rows": rows, "table": bins(rows, mag="mag_diff"),
+            "per_sca": bins(rows, ["sca"], mag="mag_diff"),
             "pur": purity_bins(classed), "ep": ep, "packets": packets, "held_sets": held_sets,
             "hist": hist, "processed": processed, "unprocessed": unprocessed}
 
@@ -451,6 +482,9 @@ def main(argv: list[str] | None = None) -> int:
           f" published epochs; {len(unprocessed)} truth epochs without a difference image"
           f"{' ' + str(unprocessed[:5]) if unprocessed else ''}; crpix_shift {list(shift)};"
           f" radius {a.radius} arcsec")
+    print(f"binned by the change against the reference (before_mjd {data['before_mjd']}):"
+          f" {int((rows['mag_diff'] != rows['mag_ab']).sum())} of {len(rows)} rows differ from their mag_ab,"
+          f" {int(np.isinf(rows['mag_diff']).sum())} unchanged (mag_diff inf)")
     print(f"packet sets {packets['job'].nunique()}, {len(held_sets)} not sent (held or owed)"
           f"{' ' + str(held_sets[:10]) if held_sets else ''}")
     print("\ncompleteness per magnitude bin")

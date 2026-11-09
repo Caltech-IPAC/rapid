@@ -6,7 +6,8 @@ packet on an injected source is classed injected, one on a bright-flagged
 source bright, the rest other; the shift through the corrected WCS moves
 the truth by the translation; an earlier alerted epoch absent from a later
 packet's history is missing when the packet read its source set and late
-when it did not.
+when it did not; a source in the reference epochs is binned by its change
+against their mean, one injected after the bound by its own magnitude.
 """
 
 from __future__ import annotations
@@ -78,6 +79,22 @@ def test_shift_moves_the_truth_by_the_translation():
     moved = completeness.corrected_positions(truth, (0.12, -0.99))
     assert np.allclose((moved["ra_c"] - truth["ra"]) / PX, -0.12, atol=1e-6)
     assert np.allclose((moved["dec_c"] - truth["dec"]) / PX, 0.99, atol=1e-6)
+
+
+def test_a_source_in_the_reference_epochs_is_binned_by_its_change_against_them():
+    zp = 26.861
+    rows = [{"src_id": s, "mjd": m, "mag_ab": mag, "zp": zp} for s, m, mag in [
+        (0, 1.0, 20.0), (0, 2.0, 20.0), (0, 5.0, 19.0),     # in the reference at 20, brightens to 19
+        (1, 1.0, 22.0), (1, 5.0, 22.0),                      # static: no change to see
+        (2, 5.0, 24.0)]]                                     # injected after the bound only
+    t = completeness.difference_flux(pd.DataFrame(rows), 3.0).set_index(["src_id", "mjd"])
+    change = 10 ** (-0.4 * 19.0) - 10 ** (-0.4 * 20.0)
+    assert np.isclose(t.loc[(0, 5.0), "mag_diff"], -2.5 * np.log10(change))
+    assert np.isclose(t.loc[(0, 5.0), "dnps_diff"], change * 10 ** (0.4 * zp))
+    assert np.isinf(t.loc[(1, 5.0), "mag_diff"])
+    assert np.isclose(t.loc[(2, 5.0), "mag_diff"], 24.0)
+    unbounded = completeness.difference_flux(pd.DataFrame(rows), None)
+    assert np.allclose(unbounded["mag_diff"], unbounded["mag_ab"])
 
 
 def test_history_missing_against_late():
