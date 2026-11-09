@@ -13,6 +13,11 @@ from sfft.CustomizedPacket import Customized_Packet
 from sfft.utils.SFFTSolutionReader import Realize_MatchingKernel
 from sfft.utils.DeCorrelationCalculator import DeCorrelation_Calculator
 
+# rapid: the subtraction pass without its two (2*GKerHW+1, N0, N1) kernel-phase stacks, same pixels
+# (memory-diet: 15,005 -> about 5,300 MiB of anon in SFFT on a 4088 x 4088 frame).
+import sfft_lowmem
+sfft_lowmem.install()
+
 #SFFT kernel-fitting settings, should include these in a config file eventually
 ForceConv = 'REF'
 GKerHW = 9
