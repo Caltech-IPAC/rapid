@@ -2,7 +2,10 @@
 
 Contracts: the directory is removed once its upload has succeeded; a stage
 that raises leaves it where it was, for a person; the uploaded manifest's
-``metrics`` carry ``peak_rss_kib``, beside the stage's own.
+``metrics`` carry ``peak_rss_kib`` and the container cgroup's memory
+peaks, beside the stage's own; the anon and file peaks are the largest
+``memory.stat`` values sampled while the stage ran, and a peak whose file
+is absent is absent.
 """
 
 from __future__ import annotations
@@ -68,6 +71,7 @@ def workdirs(monkeypatch, tmp_path):
     monkeypatch.setattr(local, "put", lambda directory, prefix: None)
     monkeypatch.setattr(local, "publish", lambda conn, job, attempt, prefix: {"published": True})
     monkeypatch.setattr(local, "instance_type", lambda: None)
+    monkeypatch.setattr(local, "CGROUP", tmp_path / "no-cgroup")
     return made
 
 
@@ -111,3 +115,50 @@ def test_the_uploaded_manifest_carries_the_peak_memory_beside_the_stages_metrics
 
     local.run_job(connect, 5, ROOT, with_metrics)
     assert uploaded["metrics"] == {"n": 3, "peak_rss_kib": 150}
+
+
+def write_cgroup(root: Path, anon: int, file: int, peak: int | None = None) -> None:
+    root.mkdir(exist_ok=True)
+    (root / "memory.stat").write_text(f"anon {anon}\nfile {file}\nkernel 7\n")
+    if peak is not None:
+        (root / "memory.peak").write_text(f"{peak}\n")
+
+
+def test_the_manifest_carries_the_largest_cgroup_values_seen_and_memory_peak(workdirs, monkeypatch,
+                                                                            tmp_path):
+    import json
+
+    root = tmp_path / "cgroup"
+    write_cgroup(root, anon=600, file=20)
+    monkeypatch.setattr(local, "CGROUP", root)
+    uploaded = {}
+    monkeypatch.setattr(local, "put", lambda directory, prefix: uploaded.update(
+        json.loads((Path(directory) / "manifest.json").read_text())))
+
+    def shrink_anon_grow_file(job):
+        write_a_file(job)
+        write_cgroup(root, anon=40, file=300, peak=900)
+        job.write_manifest([("t", "out.parquet")])
+
+    local.run_job(connect, 5, ROOT, shrink_anon_grow_file)
+    assert {k: v for k, v in uploaded["metrics"].items() if k.startswith("cgroup")} == {
+        "cgroup_anon_peak_bytes": 600, "cgroup_file_peak_bytes": 300, "cgroup_memory_peak_bytes": 900}
+
+
+def test_the_sampler_sees_a_peak_that_rises_and_falls_inside_the_stage(tmp_path):
+    import time
+
+    write_cgroup(tmp_path, anon=10, file=1)
+    with local.CgroupMemory(root=tmp_path, interval=0.01) as memory:
+        write_cgroup(tmp_path, anon=700, file=1)
+        deadline = time.monotonic() + 5
+        while memory.anon != 700 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        write_cgroup(tmp_path, anon=10, file=1)
+    assert memory.peaks()["cgroup_anon_peak_bytes"] == 700
+
+
+def test_no_cgroup_files_record_no_cgroup_peaks(tmp_path):
+    with local.CgroupMemory(root=tmp_path / "absent") as memory:
+        pass
+    assert memory.peaks() == {}
