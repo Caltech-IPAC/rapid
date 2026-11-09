@@ -52,7 +52,9 @@ Usage::
 
 ``--expids`` restricts every count to those epochs (truth, sources, packets
 and the per-epoch metrics), so a sample is compared with the same epochs of
-a larger run, never with its whole footprint.
+a larger run, never with its whole footprint; the sources and packets are
+restricted in the query itself, so a sample of a 60 M-row run costs the
+sample's memory, not the run's.
 
 Without ``--truth`` it reads every Parquet under the dataset's
 ``catalog/`` prefix, the run's ``[intake] source_root`` with its last
@@ -273,24 +275,31 @@ XSOURCE_FLUX = ("CASE WHEN s.fluxfit IS NOT NULL AND s.snrfit IS NOT NULL AND s.
                 " AND s.fluxfit <> 'NaN' AND s.snrfit <> 'NaN' THEN s.fluxfit ELSE s.fluxap1 END")
 
 
-def detections_sql(settings: dict) -> str:
-    """The run's official detections' query, one ``%s`` the run: the catalog its packets are made
-    from (``[packet] alert_catalog``; ``"sources"`` for a body without the key), so a packet's
-    ``(source_job, sid)`` joins its trigger. An xsource's ``sid`` is its ``xsid``, its ``fluxfit``
-    :data:`XSOURCE_FLUX` and its ``flags`` SExtractor's; ``rb`` is the set's RuBR-AT score."""
+def detections_sql(settings: dict, expids: bool = False) -> str:
+    """The run's official detections' query, one ``%s`` the run (a second, the expid list, when
+    ``expids``): the catalog its packets are made from (``[packet] alert_catalog``; ``"sources"``
+    for a body without the key), so a packet's ``(source_job, sid)`` joins its trigger. An
+    xsource's ``sid`` is its ``xsid``, its ``fluxfit`` :data:`XSOURCE_FLUX` and its ``flags``
+    SExtractor's; ``rb`` is the set's RuBR-AT score."""
     x = "x" if settings.get("packet", {}).get("alert_catalog", "sources") == "xsources" else ""
     flux = XSOURCE_FLUX if x else "s.fluxfit"
     return (f"SELECT s.job, s.{x}sid AS sid, s.expid, s.sca, s.ra, s.dec, {flux} AS fluxfit, s.flags, s.rb,"
             " s.field = d.field AS in_field"
             f" FROM {x}sources_of(ARRAY(SELECT o.job FROM official o JOIN jobs j ON j.id = o.job"
             " WHERE o.closed_at IS NULL AND o.product = 'sources' AND j.run = %s)) s"
-            " JOIN diffimages d ON d.pid = s.pid")
+            " JOIN diffimages d ON d.pid = s.pid" + (" WHERE s.expid = ANY(%s)" if expids else ""))
 
 
-def load(conn, run_id: int) -> dict:
+#: Rows a server-side cursor hands over per round trip when ``load`` reads a run's catalogs.
+CHUNK = 500_000
+
+
+def load(conn, run_id: int, expids: set[int] | None = None) -> dict:
     """A run's rows this script reads: ``run`` (dataset, settings), ``shift``, ``sources``,
     ``packets``, ``diffs`` (the (expid, SCA) with an official difference image), the difference
-    jobs' ``metrics`` and the packet jobs' ``read_sets``."""
+    jobs' ``metrics`` and the packet jobs' ``read_sets``. ``expids`` restricts the two catalogs
+    in the database (a GBTDS run's 60 M xsources never leave the server for a sample), and each
+    arrives through a server-side cursor in :data:`CHUNK`-row frames, never as one list of dicts."""
     import psycopg2.extras
 
     def q(sql, params=()):
@@ -300,17 +309,30 @@ def load(conn, run_id: int) -> dict:
         conn.commit()
         return rows
 
+    def frame(name, sql, params=()):
+        parts = []
+        with conn.cursor(name=f"completeness_{name}") as cur:
+            cur.itersize = CHUNK
+            cur.execute(sql, params)
+            while chunk := cur.fetchmany(CHUNK):
+                parts.append(pd.DataFrame.from_records(chunk, columns=[c[0] for c in cur.description]))
+        conn.commit()
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+    sample = (sorted(int(e) for e in expids),) if expids is not None else ()
     (run,) = q("SELECT dataset, settings FROM runs WHERE id = %s", (run_id,))
     intake = run["settings"]["settings"]["intake"] if "settings" in run["settings"] else run["settings"]["intake"]
     shift = tuple(float(v) for v in intake.get("crpix_shift", [0.0, 0.0]))
     body = run["settings"]["settings"] if "settings" in run["settings"] else run["settings"]
-    sources = pd.DataFrame(q(detections_sql(body), (run_id,)))
-    packets = pd.DataFrame(q(
+    sources = frame("sources", detections_sql(body, expids is not None), (run_id, *sample))
+    packets = frame(
+        "packets",
         "SELECT p.job, p.source_job, p.sid, p.object_job, p.aid, p.expid, p.sca, p.trigger_mjd,"
         " p.filename, p.byte_offset, p.byte_length, j.kafka_published_at IS NOT NULL AS sent"
         " FROM packets_of(ARRAY(SELECT o.job FROM official o JOIN jobs r ON r.id = o.job"
         " WHERE o.closed_at IS NULL AND o.product = 'packets' AND r.run = %s)) p"
-        " JOIN jobs j ON j.id = p.job", (run_id,)))
+        " JOIN jobs j ON j.id = p.job" + (" WHERE p.expid = ANY(%s)" if expids is not None else ""),
+        (run_id, *sample))
     diffs = {(r["expid"], r["sca"]) for r in q(
         "SELECT expid, sca FROM diffimages_official WHERE run = %s", (run_id,))}
     metrics = pd.DataFrame(q(
@@ -407,11 +429,11 @@ def main(argv: list[str] | None = None) -> int:
 
     from rapidpipe.db.connection import connect
 
+    expids = {int(e) for e in a.expids.split(",")} if a.expids else None
     with connect(application_name="completeness") as conn:
-        data = load(conn, a.run)
+        data = load(conn, a.run, expids)
     files = truth_files(data["intake"], a.truth)
-    m = measure(data, files, a.radius, {int(e) for e in a.expids.split(",")} if a.expids else None,
-                with_history=not a.no_history)
+    m = measure(data, files, a.radius, expids, with_history=not a.no_history)
     run, shift, truth, rows, packets = data["run"], data["shift"], m["truth"], m["rows"], m["packets"]
     table, per_sca, pur, ep, hist = m["table"], m["per_sca"], m["pur"], m["ep"], m["hist"]
     processed, unprocessed, held_sets = m["processed"], m["unprocessed"], m["held_sets"]
