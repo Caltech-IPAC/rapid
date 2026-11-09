@@ -97,7 +97,7 @@ import psycopg2
 from rapidpipe import __version__
 from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
-from rapidpipe.cli import outage_probe
+from rapidpipe.cli import ort_bench, outage_probe
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
 from rapidpipe.products import storage
@@ -267,6 +267,14 @@ def _build_parser() -> argparse.ArgumentParser:
                               help="Seconds each in-flight transaction holds, at most 30 (default 3).")
     probe_parser.add_argument("--stall", type=float, default=2.0,
                               help="Seconds beyond a step's own work that count as a disturbance (default 2).")
+
+    bench = subparsers.add_parser("ort-bench", help="exp/ort-settings' scoring bench (rapidpipe.cli.ort_bench).")
+    for name in ("inputs", "model", "out", "work", "record", "barrier"):
+        bench.add_argument(f"--{name}", default="")
+    bench.add_argument("--threads", default="1")
+    bench.add_argument("--rows", type=int, default=0)
+    bench.add_argument("--worker", action="store_true")
+    bench.add_argument("--profile", action="store_true")
 
     return parser
 
@@ -564,6 +572,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _foundation_command(args)
         if args.command == "outage-probe":
             return outage_probe.command(args)
+        if args.command == "ort-bench":
+            return ort_bench.main(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary
         code = exit_code(exc)
         if isinstance(exc, CommandExit):
