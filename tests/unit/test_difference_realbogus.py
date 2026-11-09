@@ -202,3 +202,22 @@ def test_the_onnx_classifier_feeds_the_sessions_inputs_by_name_and_scores_with_i
     np.testing.assert_allclose(scored["rb_score"].to_numpy()[:4], expected, rtol=1e-6)
     assert scored["rb_label"].tolist() == [int(v >= 0.5) for v in expected] + [-1]
     assert scored["rb_status"].tolist()[4] == "centroid_outside_image"
+
+
+def test_the_job_s_vcpus_are_the_ecs_container_limit_in_units_of_1024_and_1_without_it(tmp_path):
+    """The session's threads follow the container's ``Limits.CPU`` at the metadata endpoint,
+    never the host's core count; without the endpoint the shipped ask, 1."""
+    metadata = tmp_path / "container.json"
+    metadata.write_text(json.dumps({"Limits": {"CPU": 5120, "Memory": 16384}}))
+    assert realbogus.job_vcpus({"ECS_CONTAINER_METADATA_URI_V4": metadata.as_uri()}) == (5, "ecs")
+    metadata.write_text(json.dumps({"Limits": {"CPU": 0}}))
+    assert realbogus.job_vcpus({"ECS_CONTAINER_METADATA_URI_V4": metadata.as_uri()}) == (1, "default")
+    assert realbogus.job_vcpus({}) == (1, "default")
+
+
+def test_the_session_runs_on_the_job_s_vcpus_one_inter_op_thread_and_no_spinning():
+    onnxruntime = pytest.importorskip("onnxruntime")
+    options = realbogus.session_options(onnxruntime, 3)
+    assert (options.intra_op_num_threads, options.inter_op_num_threads) == (3, 1)
+    assert options.get_session_config_entry("session.intra_op.allow_spinning") == "0"
+    assert options.execution_mode == onnxruntime.ExecutionMode.ORT_SEQUENTIAL

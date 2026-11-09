@@ -148,7 +148,17 @@ wall clock: ``refpsf_s``, the reference PSF's measurement (or the science
 PSF's copy under ``reference_psf = "science"``); ``pixel_columns_s``, the
 pixel columns of both SFFT catalogs; ``rb_s``, the real/bogus calls on both
 SFFT PSF-fit catalogs; ``xsources_s``, the xsources' extra columns and
-their real/bogus scores, both signs; ``gzip_s``, the trim, the published
+their real/bogus scores, both signs; the classifier's session and its four
+calls (``rb_psf_positive``, ``rb_psf_negative``, ``rb_xs_positive``,
+``rb_xs_negative``; :func:`rb_metrics`): ``rb_vcpus``, the job's vCPUs it
+runs on, ``rb_vcpus_from_ecs`` 1 where that count is Batch's,
+``rb_intra_op_threads``, ``rb_inter_op_threads``,
+``rb_graph_optimization_level``, ``rb_sequential`` and ``rb_batch_size``;
+per call ``<call>_rows``, the sources fed to the model, ``<call>_runs``,
+its session ``run`` calls (every batch ``rb_batch_size`` rows but the
+last), ``<call>_ort_s``, the seconds in them, and ``<call>_s``, the call's
+wall clock; ``rb_score_ms``, the four calls' wall clock per scored source,
+and ``rb_ort_ms``, the session's per row; ``gzip_s``, the trim, the published
 images gzipped and the rest removed (the SFFT solve and the catalogs are
 not timed); ``n_objects_read``,
 ``n_objects_founded``, ``n_memberships`` and ``n_sources_out_of_field``,
@@ -893,6 +903,11 @@ def run(job: JobContext) -> None:
         sfft_catalogs.rb_negative.update(model=rb_model.prefix, version=rb_model.version)
         metrics["n_rb_scored_negative"] = sfft_catalogs.rb_negative["scored"]
         metrics["rb_s"] = metrics.get("rb_s", 0.0) + sfft_catalogs.rb_negative["call_seconds"]
+    if rb is not None:
+        metrics.update(rb_metrics(rb_classifier, {
+            "psf_positive": sfft_catalogs.rb, "psf_negative": sfft_catalogs.rb_negative,
+            **{f"xs_{sign}": summary
+               for sign, summary in (sfft_catalogs.xsources or {}).get("rb", {}).items()}}))
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         _run_naive(**common)
 
@@ -1524,12 +1539,13 @@ def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: 
     dict
         ``catalogs`` and ``extra`` by sign (:func:`xsources.extra_columns`,
         ``rb_score`` and ``rb_label`` added when scored), ``fitted`` and
-        ``scored`` counts by sign, the image's ``naxis`` and the ``seconds``.
+        ``scored`` counts by sign, each scored sign's :func:`_score_rb` summary
+        as ``rb``, the image's ``naxis`` and the ``seconds``.
     """
     start = time.perf_counter()
     error = fits.getdata(work_dir / uncertainty_image, 0)
     psf_data = fits.getdata(work_dir / psf_image, 0)
-    out: dict[str, Any] = {"catalogs": {}, "extra": {}, "fitted": {}, "scored": {}}
+    out: dict[str, Any] = {"catalogs": {}, "extra": {}, "fitted": {}, "scored": {}, "rb": {}}
     for sign, (catalog_name, image) in signs.items():
         catalog = xsources.read_catalog(work_dir / catalog_name)
         data = fits.getdata(work_dir / image, 0)
@@ -1545,6 +1561,7 @@ def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: 
             extra["rb_score"] = scored.column("rb_score").to_numpy(zero_copy_only=False).astype(float)
             extra["rb_label"] = scored.column("rb_label").to_numpy(zero_copy_only=False).astype(float)
             out["scored"][sign] = summary["scored"]
+            out["rb"][sign] = summary
             path.unlink()
         out["catalogs"][sign] = catalog
         out["extra"][sign] = extra
@@ -1603,17 +1620,44 @@ def _score_rb(classifier, filter_name: str, catalog: Path, science: Path, refere
     selects nothing (a mismatch raises ``RuntimeError``).
     """
     output = catalog.with_name(catalog.stem + "_rubrat.parquet")
+    before_counts = dict(classifier.model.counts)
     start = time.perf_counter()
     summary = realbogus.add_rb_columns(catalog, output, science, reference, difference,
                                        filter_name, classifier)
     seconds = round(time.perf_counter() - start, 3)
+    session = {k: classifier.model.counts[k] - before_counts[k] for k in before_counts}
     before = pq.read_table(catalog, columns=["id"]).column("id")
     after = pq.read_table(output, columns=["id"]).column("id")
     if not before.equals(after):
         raise RuntimeError(f"{output.name}: {len(after)} ids, {catalog.name} {len(before)}, "
                            "not the same in order")
     os.replace(output, catalog)
-    return {**summary, "call_seconds": seconds}
+    return {**summary, "call_seconds": seconds, "ort_rows": session["rows"],
+            "ort_runs": session["runs"], "ort_seconds": round(session["seconds"], 3)}
+
+
+def rb_metrics(classifier, calls: dict[str, dict[str, Any] | None]) -> dict[str, float]:
+    """The classifier's session settings and each scoring call's rows, session runs and
+    seconds (:func:`_score_rb`'s summaries by call; ``None`` for a call not made), as the
+    job's metrics (the module docstring names them)."""
+    out = {f"rb_{k}": float(v) for k, v in classifier.settings.items()}
+    scored = seconds = ort_seconds = rows = 0.0
+    for name, summary in calls.items():
+        if summary is None:
+            continue
+        out.update({f"rb_{name}_rows": float(summary["ort_rows"]),
+                    f"rb_{name}_runs": float(summary["ort_runs"]),
+                    f"rb_{name}_ort_s": summary["ort_seconds"],
+                    f"rb_{name}_s": summary["call_seconds"]})
+        scored += summary["scored"]
+        seconds += summary["call_seconds"]
+        ort_seconds += summary["ort_seconds"]
+        rows += summary["ort_rows"]
+    if scored:
+        out["rb_score_ms"] = round(1000 * seconds / scored, 3)
+    if rows:
+        out["rb_ort_ms"] = round(1000 * ort_seconds / rows, 3)
+    return out
 
 
 def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_image,
