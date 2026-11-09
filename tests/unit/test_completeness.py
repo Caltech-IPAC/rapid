@@ -93,3 +93,81 @@ def test_history_missing_against_late():
     h = completeness.history(rows, records, read).set_index("packet_job")
     assert h.loc[61, ["expected", "present", "missing", "late"]].tolist() == [1, 0, 1, 0]
     assert h.loc[62, ["expected", "present", "missing", "late"]].tolist() == [2, 1, 0, 1]
+
+
+class _Cursor:
+    """A psycopg2 cursor stand-in: records each query, serves its rows in fetchmany chunks."""
+
+    def __init__(self, log, rows_for, name=None, **kw):
+        self.log, self.rows_for, self.name, self.description = log, rows_for, name, None
+        self._rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=()):
+        self.log.append((self.name, sql, params))
+        cols, rows = self.rows_for(sql)
+        self.description = [(c,) for c in cols]
+        self._rows = list(rows)
+
+    def fetchall(self):
+        rows, self._rows = self._rows, []
+        return rows
+
+    def fetchmany(self, n):
+        rows, self._rows = self._rows[:n], self._rows[n:]
+        return rows
+
+
+class _Conn:
+    def __init__(self, rows_for):
+        self.log, self.rows_for = [], rows_for
+
+    def cursor(self, name=None, cursor_factory=None):
+        return _Cursor(self.log, self.rows_for, name)
+
+    def commit(self):
+        pass
+
+
+def test_load_restricts_the_catalogs_in_sql_and_reads_them_through_a_named_cursor(monkeypatch):
+    import sys, types
+    monkeypatch.setitem(sys.modules, "psycopg2", types.SimpleNamespace(extras=types.SimpleNamespace(RealDictCursor=None)))
+    monkeypatch.setitem(sys.modules, "psycopg2.extras", sys.modules["psycopg2"].extras)
+    monkeypatch.setattr(completeness, "CHUNK", 2)
+    settings = {"packet": {"alert_catalog": "xsources"}, "intake": {"source_root": "s3://b/d/l2/"}}
+
+    def rows_for(sql):
+        if sql.startswith("SELECT dataset"):
+            return ["dataset", "settings"], [{"dataset": "d", "settings": settings}]
+        if "sources_of" in sql:
+            cols = ["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags", "rb", "in_field"]
+            return cols, [(50, i, 4001, 8, 10.0, 0.0, 1.0, 0, 0.5, True) for i in range(5)]
+        if "packets_of" in sql:
+            cols = ["job", "source_job", "sid", "object_job", "aid", "expid", "sca", "trigger_mjd",
+                    "filename", "byte_offset", "byte_length", "sent"]
+            return cols, [(60, 50, 1, 50, 901, 4001, 8, 61592.0, "f", 0, 10, True)]
+        return ["expid", "sca", "metric", "value"], []
+
+    conn = _Conn(rows_for)
+    data = completeness.load(conn, 187, {4001, 4002})
+    # the two catalogs went through a named (server-side) cursor, assembled from CHUNK-row fetches
+    named = {name: (sql, params) for name, sql, params in conn.log if name}
+    assert set(named) == {"completeness_sources", "completeness_packets"}
+    for sql, params in named.values():
+        assert "expid = ANY(%s)" in sql and params == (187, [4001, 4002])
+    assert "xsources_of" in named["completeness_sources"][0]
+    assert len(data["sources"]) == 5 and list(data["sources"]["sid"]) == [0, 1, 2, 3, 4]
+    assert list(data["sources"].columns)[:3] == ["job", "sid", "expid"]
+    assert len(data["packets"]) == 1 and bool(data["packets"]["sent"][0])
+    # the small queries stay plain; without --expids the catalogs are unrestricted
+    assert all(name is None for name, sql, _ in conn.log if "runs WHERE" in sql)
+    conn.log.clear()
+    completeness.load(conn, 187, None)
+    for name, sql, params in conn.log:
+        if name:
+            assert "ANY" not in sql and params == (187,)
