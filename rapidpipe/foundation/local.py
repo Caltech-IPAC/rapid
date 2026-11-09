@@ -34,6 +34,7 @@ import resource
 import shutil
 import tempfile
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,7 @@ from psycopg2.extras import RealDictCursor
 
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation import attempts as submissions
+from rapidpipe.foundation import steps
 from rapidpipe.foundation.official import NotFound
 from rapidpipe.foundation.prefix import attempts, local_path, put
 from rapidpipe.foundation.publish import publish
@@ -146,11 +148,23 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     memory (:class:`CgroupMemory`): ``cgroup_anon_peak_bytes`` and
     ``cgroup_file_peak_bytes``, the largest ``memory.stat`` ``anon`` and
     ``file`` sampled through the stage, and ``cgroup_memory_peak_bytes``,
-    ``memory.peak`` as the stage ended; each absent where its file is. A job already published returns at once with
+    ``memory.peak`` as the stage ended; each absent where its file is.
+    Beside them, for the throughput report (throughput-metrics): the
+    stage's named steps (:mod:`rapidpipe.foundation.steps`, ``step_<name>_s``
+    and ``s3_read_bytes``), the upload of the attempt's files as
+    ``step_s3_write_s`` and ``s3_write_bytes`` (``s3://`` only, the manifest
+    itself not counted), ``startup_s`` (:func:`startup_seconds`: the process's
+    start to this call, the imports before the job, outside
+    ``container_seconds``), ``cgroup_cpu_s`` and ``cgroup_cpu_wall_s``
+    (:class:`CgroupCpu`: the container's CPU seconds and the wall seconds of
+    the same interval, from the stage's start to the manifest's upload) and
+    ``host_vcpus`` (the CPUs this process may run on: Batch sets no cpuset,
+    so the host's, never the job's reservation). A job already published returns at once with
     ``published`` false and no file touched. The job row records
     ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
     which the job definition sets; none for a checkout) and the instance
-    type (:func:`instance_type`) before the stage, clearing a reason an
+    type (:func:`instance_type`) before the stage, and its Batch attempt entry
+    the instance id beside the type, clearing a reason an
     earlier attempt's failure left in ``refusal``,
     ``ended`` and ``exit_code`` after it; a stage or publication that raises
     leaves the job ``failed`` and the exception propagates. The row records
@@ -163,6 +177,8 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     the job id and the reason are logged and the stage's exception still
     propagates.
     """
+    startup = startup_seconds()
+    steps.reset()
     with connect() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT j.state, j.stage, j.scope, j.run, j.published_attempt, j.refusal,"
@@ -193,6 +209,7 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
                 " refusal = NULL, image_digest = %s, instance_type = %s",
                 (os.environ.get("RAPID_IMAGE_DIGEST"), machine))
         _record_attempt(conn, job_id, {"started": submissions.now(), "instance_type": machine,
+                                       "instance_id": instance_id(),
                                        "availability_zone": availability_zone(),
                                        "batch_attempt": os.environ.get("AWS_BATCH_JOB_ATTEMPT")})
 
@@ -201,12 +218,25 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
         survey=job["survey"], dataset=job["dataset"], settings=job["settings"],
         inputs=inputs, attempt=attempt, prefix=prefix, connect=connect, workdir=workdir)
     try:
+        cpu = CgroupCpu()
         with CgroupMemory() as memory:
             stage_run(context)  # no connection held while the stage computes
         peak = _peak_rss_kib()
-        _record_metrics(context.path / "manifest.json",
-                        {"peak_rss_kib": peak["self"] + peak["children"], **memory.peaks()})
-        put(context.path, prefix)
+        manifest = context.path / "manifest.json"
+        fixed = {"peak_rss_kib": peak["self"] + peak["children"], **memory.peaks(),
+                 "host_vcpus": len(os.sched_getaffinity(0)),
+                 **({"startup_s": round(startup, 3)} if startup is not None else {})}
+
+        def record() -> None:
+            _record_metrics(manifest, {**fixed, **steps.metrics(), **cpu.used()})
+
+        if workdir is None:
+            put(context.path, prefix, before_last=record)
+        else:
+            with steps.step("s3_write"):
+                steps.add("s3_write_bytes", sum(f.stat().st_size for f in context.path.rglob("*")
+                                                if f.is_file() and f != manifest))
+                put(context.path, prefix, before_last=record)
         if workdir is not None:
             shutil.rmtree(workdir)
         with connect() as conn:
@@ -234,12 +264,12 @@ def _peak_rss_kib() -> dict[str, int]:
             (("self", resource.RUSAGE_SELF), ("children", resource.RUSAGE_CHILDREN))}
 
 
-def _record_metrics(manifest: Path, metrics: dict[str, int]) -> None:
-    """Add ``metrics`` (``peak_rss_kib``, the cgroup peaks) to the manifest's ``metrics``."""
+def _record_metrics(manifest: Path, metrics: dict[str, float]) -> None:
+    """Add ``metrics`` (``peak_rss_kib``, the cgroup peaks, the steps) to the manifest's ``metrics``."""
     if not manifest.exists():
         return
     body = json.loads(manifest.read_text())
-    body.setdefault("metrics", {}).update({k: int(v) for k, v in metrics.items()})
+    body.setdefault("metrics", {}).update(metrics)
     manifest.write_text(json.dumps(body, indent=1))
 
 
@@ -299,6 +329,44 @@ class CgroupMemory:
         return {k: v for k, v in out.items() if v is not None}
 
 
+class CgroupCpu:
+    """The container cgroup's CPU seconds from construction to :meth:`used`, beside the wall's.
+
+    ``cpu.stat`` ``usage_usec`` counts every process in the container, the
+    toolkit's binaries included. Outside cgroup v2 the file is absent and so
+    are both numbers, never zero.
+    """
+
+    def __init__(self, root: Path | None = None):
+        self.root = root or CGROUP
+        self.start, self.wall = self._usage(), time.perf_counter()
+
+    def _usage(self) -> int | None:
+        try:
+            fields = dict(line.split() for line in (self.root / "cpu.stat").read_text().splitlines())
+            return int(fields["usage_usec"])
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def used(self) -> dict[str, float]:
+        """``cgroup_cpu_s`` and ``cgroup_cpu_wall_s`` so far; empty where ``cpu.stat`` is not."""
+        now = self._usage()
+        if self.start is None or now is None:
+            return {}
+        return {"cgroup_cpu_s": round((now - self.start) / 1e6, 3),
+                "cgroup_cpu_wall_s": round(time.perf_counter() - self.wall, 3)}
+
+
+def startup_seconds(proc: Path = Path("/proc")) -> float | None:
+    """Seconds from this process's start to now, from ``/proc``; ``None`` off Linux."""
+    try:
+        ticks = int((proc / "self" / "stat").read_text().rsplit(")", 1)[1].split()[19])
+        uptime = float((proc / "uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return uptime - ticks / os.sysconf("SC_CLK_TCK")
+
+
 #: The EC2 instance metadata service (IMDSv2): a session token, then one read.
 _IMDS = "http://169.254.169.254/latest"
 
@@ -328,6 +396,12 @@ def availability_zone() -> str | None:
     """The availability zone this process runs in, read as :func:`instance_type` reads the type;
     only inside a Batch container (``AWS_BATCH_JOB_ID`` set), ``None`` elsewhere."""
     return instance_type(item="placement/availability-zone") if os.environ.get("AWS_BATCH_JOB_ID") else None
+
+
+def instance_id() -> str | None:
+    """The EC2 instance id, as :func:`availability_zone` reads the zone: the host the report groups
+    co-tenants by; only inside a Batch container."""
+    return instance_type(item="instance-id") if os.environ.get("AWS_BATCH_JOB_ID") else None
 
 
 def _record_attempt(conn, job_id: int, fields: dict) -> None:

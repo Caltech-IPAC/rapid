@@ -180,6 +180,7 @@ from psycopg2.extras import RealDictCursor
 from rapidpipe.foundation.children import set_children
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import cache_dir, get, is_staged
+from rapidpipe.foundation.steps import step
 from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
@@ -992,20 +993,23 @@ def _best_effort(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
 
 def run(job: JobContext) -> None:
     t0 = time.perf_counter()
-    read = _read(job)
+    with step("read"):
+        read = _read(job)
     read_s = time.perf_counter() - t0
-    summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
-                        sync_seed=f"{job.job}/{job.attempt}",
-                        reliability=reliability(job.settings))
+    with step("write_set"):
+        summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
+                            sync_seed=f"{job.job}/{job.attempt}",
+                            reliability=reliability(job.settings))
     # A source set with no triggers is a set of no packets, validly; one with triggers is not.
-    job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
-                        ("external", "external.parquet")],
-                       empty_ok=() if read.triggers else ("packets",), packet=summary, reads=read.reads,
-                       metrics={"n_packets": summary["packets"],
-                                "n_packets_snr_gt20": summary["packets_snr_gt20"],
-                                "n_packets_bright_footprint": summary["packets_bright_footprint"],
-                                "packet_read_s": round(read_s, 3),
-                                **{f"packet_{k}": v for k, v in summary["timing_s"].items()}})
+    with step("manifest"):
+        job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
+                            ("external", "external.parquet")],
+                           empty_ok=() if read.triggers else ("packets",), packet=summary, reads=read.reads,
+                           metrics={"n_packets": summary["packets"],
+                                    "n_packets_snr_gt20": summary["packets_snr_gt20"],
+                                    "n_packets_bright_footprint": summary["packets_bright_footprint"],
+                                    "packet_read_s": round(read_s, 3),
+                                    **{f"packet_{k}": v for k, v in summary["timing_s"].items()}})
 
 
 def reliability(settings: dict) -> tuple[float, str]:
@@ -1034,46 +1038,49 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     timing = {}
 
     t0 = time.perf_counter()
-    window = [i for i in read.images
-              if trigger_mjd - float(settings["forced_window_days"]) <= i.mjdobs
-              <= trigger_mjd + TRIGGER_EPSILON_DAYS]
-    aids = sorted({read.aid_of[s.sid] for s in read.triggers})
-    positions = [fp.Position(aid, *read.objects[aid][:2]) for aid in aids]
-    forced_rows, measured = measure_forced(window, positions, read.reuse, time_proc)
-    for row in forced_rows:                      # filed under its object's field, as reused rows are
-        row["field"] = read.field_of[row["aid"]]
-    forced_rows.sort(key=lambda r: (r["aid"], r["mjdobs"], r["rid"]))
+    with step("forced"):
+        window = [i for i in read.images
+                  if trigger_mjd - float(settings["forced_window_days"]) <= i.mjdobs
+                  <= trigger_mjd + TRIGGER_EPSILON_DAYS]
+        aids = sorted({read.aid_of[s.sid] for s in read.triggers})
+        positions = [fp.Position(aid, *read.objects[aid][:2]) for aid in aids]
+        forced_rows, measured = measure_forced(window, positions, read.reuse, time_proc)
+        for row in forced_rows:                      # filed under its object's field, as reused rows are
+            row["field"] = read.field_of[row["aid"]]
+        forced_rows.sort(key=lambda r: (r["aid"], r["mjdobs"], r["rid"]))
     timing["forced_s"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    ra = [s.ra for s in read.triggers]
-    dec = [s.dec for s in read.triggers]
-    n_triggers = len(read.triggers)
-    matches: dict[str, list] = {kind: [None] * n_triggers for kind in CATALOG_KINDS}
-    records: dict[str, dict] = {}
-    if read.triggers:
-        for kind, catalog in read.catalogs.items():
-            matches[kind], records[kind] = _best_effort(
-                catalog, read.trigger_image.corners, trigger_mjd, ra, dec, settings)
-    gaia, ned, lvs = (matches[kind] for kind in CATALOG_KINDS)
-    refcat = load_refcat(str(read.refcat_path)) if read.refcat_path else None
-    refs = (match_refcat(ra, dec, refcat, radius_arcsec=float(settings["refcat_radius_arcsec"]),
-                         n_max=int(settings["refcat_max_matches"]))
-            if refcat is not None and read.triggers else [None] * len(read.triggers))
+    with step("matching"):
+        ra = [s.ra for s in read.triggers]
+        dec = [s.dec for s in read.triggers]
+        n_triggers = len(read.triggers)
+        matches: dict[str, list] = {kind: [None] * n_triggers for kind in CATALOG_KINDS}
+        records: dict[str, dict] = {}
+        if read.triggers:
+            for kind, catalog in read.catalogs.items():
+                matches[kind], records[kind] = _best_effort(
+                    catalog, read.trigger_image.corners, trigger_mjd, ra, dec, settings)
+        gaia, ned, lvs = (matches[kind] for kind in CATALOG_KINDS)
+        refcat = load_refcat(str(read.refcat_path)) if read.refcat_path else None
+        refs = (match_refcat(ra, dec, refcat, radius_arcsec=float(settings["refcat_radius_arcsec"]),
+                             n_max=int(settings["refcat_max_matches"]))
+                if refcat is not None and read.triggers else [None] * len(read.triggers))
     timing["matching_s"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    half = int(settings["stamp_half_width"])
-    stamps = {}
-    for kind, stamp_path in (
-            ("difference", read.trigger_image.diff),
-            ("science", read.trigger_image.diff.with_name(
-                neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
-            ("template", read.trigger_image.diff.with_name(
-                neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name)))):
-        stamps[kind] = load_fits_image(_plain(stamp_path))
-        if stamps[kind][0] is None:  # the trigger's own images are required, not optional
-            raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
+    with step("cutouts"):
+        half = int(settings["stamp_half_width"])
+        stamps = {}
+        for kind, stamp_path in (
+                ("difference", read.trigger_image.diff),
+                ("science", read.trigger_image.diff.with_name(
+                    neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
+                ("template", read.trigger_image.diff.with_name(
+                    neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name)))):
+            stamps[kind] = load_fits_image(_plain(stamp_path))
+            if stamps[kind][0] is None:  # the trigger's own images are required, not optional
+                raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
     timing["cutouts_s"] = time.perf_counter() - t0
 
     forced_by_aid: dict[int, list[dict]] = {}
@@ -1081,65 +1088,68 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         forced_by_aid.setdefault(row["aid"], []).append(row)
 
     t0 = time.perf_counter()
-    schema = load_schema()
-    name = f"{read.key['expid']}-{read.key['sca']}-{read.key['fid']}.avro"
-    (path / "packets").mkdir()
-    avro = path / "packets" / name
-    order, external = [], []
-    cutout_s = 0.0
-    with avro.open("wb") as stream:
-        container = AlertContainer(stream, schema, sync_marker=sync_marker_for(sync_seed))
-        for source, gaia_matches, ned_matches, lvs_matches, ref_matches in zip(
-                read.triggers, gaia, ned, lvs, refs):
-            aid = read.aid_of[source.sid]
-            ra0, dec0, sums = read.objects[aid]
-            prv, count = history((read.source_job, source), read.members.get(aid, []),
-                                 float(settings["prv_window_days"]))
-            stats = sums.statistics()
-            obj = ObjectRecord(aid=aid, ra0=ra0, dec0=dec0, nsources=count,
-                               stdevra=None if math.isnan(stats["stdevra"]) else stats["stdevra"],
-                               stdevdec=None if math.isnan(stats["stdevdec"]) else stats["stdevdec"])
-            c0 = time.perf_counter()
-            cutouts = Cutouts(**{kind: extract_stamp(pixels, source.xfit + 1.0, source.yfit + 1.0,
-                                                     header=header, half_width=half)
-                                 for kind, (pixels, header) in stamps.items()})
-            cutout_s += time.perf_counter() - c0
-            lo = trigger_mjd - float(settings["forced_window_days"])
-            forced = [_forced_phot(r) for r in forced_by_aid.get(aid, [])
-                      if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
-            alert = assemble_alert(source, obj, prv, ss_matches=None, ref_matches=ref_matches,
-                                   ned_matches=ned_matches, lvs_matches=lvs_matches,
-                                   gaia_matches=gaia_matches,
-                                   cutouts=cutouts, forced=forced, time_proc=time_proc,
-                                   reliability=reliability)
-            container.write(alert)
-            container.flush()  # one record per block: the index's locator is exact
-            order.append((source, aid))
-            for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches)):
-                external.extend({"catid": str(m.source_id) if kind == "gaia" else m.prefname,
-                                 "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
-                                 "source_job": read.source_job, "sid": source.sid,
-                                 "catalog_job": read.catalogs[kind].job} for m in found or ())
+    with step("assembly"):
+        schema = load_schema()
+        name = f"{read.key['expid']}-{read.key['sca']}-{read.key['fid']}.avro"
+        (path / "packets").mkdir()
+        avro = path / "packets" / name
+        order, external = [], []
+        cutout_s = 0.0
+        with avro.open("wb") as stream:
+            container = AlertContainer(stream, schema, sync_marker=sync_marker_for(sync_seed))
+            for source, gaia_matches, ned_matches, lvs_matches, ref_matches in zip(
+                    read.triggers, gaia, ned, lvs, refs):
+                aid = read.aid_of[source.sid]
+                ra0, dec0, sums = read.objects[aid]
+                prv, count = history((read.source_job, source), read.members.get(aid, []),
+                                     float(settings["prv_window_days"]))
+                stats = sums.statistics()
+                obj = ObjectRecord(aid=aid, ra0=ra0, dec0=dec0, nsources=count,
+                                   stdevra=None if math.isnan(stats["stdevra"]) else stats["stdevra"],
+                                   stdevdec=None if math.isnan(stats["stdevdec"]) else stats["stdevdec"])
+                c0 = time.perf_counter()
+                with step("cutouts"):
+                    cutouts = Cutouts(**{kind: extract_stamp(pixels, source.xfit + 1.0, source.yfit + 1.0,
+                                                             header=header, half_width=half)
+                                         for kind, (pixels, header) in stamps.items()})
+                cutout_s += time.perf_counter() - c0
+                lo = trigger_mjd - float(settings["forced_window_days"])
+                forced = [_forced_phot(r) for r in forced_by_aid.get(aid, [])
+                          if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
+                alert = assemble_alert(source, obj, prv, ss_matches=None, ref_matches=ref_matches,
+                                       ned_matches=ned_matches, lvs_matches=lvs_matches,
+                                       gaia_matches=gaia_matches,
+                                       cutouts=cutouts, forced=forced, time_proc=time_proc,
+                                       reliability=reliability)
+                container.write(alert)
+                container.flush()  # one record per block: the index's locator is exact
+                order.append((source, aid))
+                for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches)):
+                    external.extend({"catid": str(m.source_id) if kind == "gaia" else m.prefname,
+                                     "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
+                                     "source_job": read.source_job, "sid": source.sid,
+                                     "catalog_job": read.catalogs[kind].job} for m in found or ())
     timing["cutouts_s"] += cutout_s
     timing["assembly_s"] = time.perf_counter() - t0 - cutout_s
 
-    with avro.open("rb") as stream:
-        blocks = [(b.offset, b.size, b.num_records) for b in fastavro.block_reader(stream)]
-    if len(blocks) != len(order) or any(n != 1 for *_, n in blocks):
-        raise RuntimeError(f"{avro}: {len(blocks)} blocks for {len(order)} records")
-    url = prefix + f"packets/{name}"
-    index = [{"dataset": dataset, "expid": read.key["expid"], "sca": read.key["sca"],
-              "fid": read.key["fid"], "object_job": read.object_job[aid], "aid": aid,
-              "field": read.field_of[aid],
-              "source_job": read.source_job, "sid": source.sid, "trigger_mjd": source.mjdobs,
-              "band": source.band, "schema_version": VERSION, "filename": url,
-              "byte_offset": offset, "byte_length": size}
-             for (source, aid), (offset, size, _) in zip(order, blocks)]
+    with step("index"):
+        with avro.open("rb") as stream:
+            blocks = [(b.offset, b.size, b.num_records) for b in fastavro.block_reader(stream)]
+        if len(blocks) != len(order) or any(n != 1 for *_, n in blocks):
+            raise RuntimeError(f"{avro}: {len(blocks)} blocks for {len(order)} records")
+        url = prefix + f"packets/{name}"
+        index = [{"dataset": dataset, "expid": read.key["expid"], "sca": read.key["sca"],
+                  "fid": read.key["fid"], "object_job": read.object_job[aid], "aid": aid,
+                  "field": read.field_of[aid],
+                  "source_job": read.source_job, "sid": source.sid, "trigger_mjd": source.mjdobs,
+                  "band": source.band, "schema_version": VERSION, "filename": url,
+                  "byte_offset": offset, "byte_length": size}
+                 for (source, aid), (offset, size, _) in zip(order, blocks)]
 
-    for rows, schema, filename in ((index, INDEX_SCHEMA, "packets.parquet"),
-                                   (forced_rows, FORCED_SCHEMA, "forced.parquet"),
-                                   (external, EXTERNAL_SCHEMA, "external.parquet")):
-        pq.write_table(pa.Table.from_pylist(rows, schema=schema), path / filename)
+        for rows, schema, filename in ((index, INDEX_SCHEMA, "packets.parquet"),
+                                       (forced_rows, FORCED_SCHEMA, "forced.parquet"),
+                                       (external, EXTERNAL_SCHEMA, "external.parquet")):
+            pq.write_table(pa.Table.from_pylist(rows, schema=schema), path / filename)
     return {"avro": f"packets/{name}", "avro_bytes": avro.stat().st_size,
             "flags_zero": read.flags_zero, "packets": len(order),
             "triggers_dropped_by_cap": read.capped,

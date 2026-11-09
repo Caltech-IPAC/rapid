@@ -90,6 +90,7 @@ import pyarrow.parquet as pq
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.foundation.steps import step
 from rapidpipe.science.difference.sextractor import parse_ascii_text_sextractor_catalog
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.reference import awaicgen, catalog, header, infobits, measure, prep
@@ -332,8 +333,9 @@ def run(job: JobContext) -> None:
     settings = job.settings["reference"]
     rtid = int(job.scope["field"])
     checked = check_settings(settings)
-    unit_filter, rows, rfid = _read(job)
-    coadded, not_coadded = read_frames(rows, unit_filter, checked)
+    with step("read_inputs"):
+        unit_filter, rows, rfid = _read(job)
+        coadded, not_coadded = read_frames(rows, unit_filter, checked)
     kit = toolkit()
     paths = settings["paths"]
 
@@ -355,19 +357,21 @@ def run(job: JobContext) -> None:
         # Per-frame preparation (dev: refimage_generation subdirectory).
         prepared: list[prep.PreparedFrame] = []
         jdstart, jdend, total_exptime = 999999999.0, 0.0, 0.0
-        for frame in coadded:
-            shutil.copyfile(frame.path, scratch / frame.name)
-            result = prep.reformat_frame(
-                scratch, frame.name, awaicgen_dict, checked.sca_gain, checked.sca_readout_noise)
-            total_exptime += result.exptime
-            jdstart, jdend = min(jdstart, result.jd), max(jdend, result.jd)
-            prepared.append(result)
+        with step("prepare"):
+            for frame in coadded:
+                shutil.copyfile(frame.path, scratch / frame.name)
+                result = prep.reformat_frame(
+                    scratch, frame.name, awaicgen_dict, checked.sca_gain, checked.sca_readout_noise)
+                total_exptime += result.exptime
+                jdstart, jdend = min(jdstart, result.jd), max(jdend, result.jd)
+                prepared.append(result)
         prep.write_list_files(scratch, awaicgen_dict, prepared, checked.max_frames)
         zprefimg = prepared[-1].zprefimg
 
         args = awaicgen.build_awaicgen_command_line_args(awaicgen_dict, paths["awaicgen"])
         started = time.monotonic()
-        exit_code = int(kit.runner.run(args, cwd=scratch))
+        with step("awaicgen"):
+            exit_code = int(kit.runner.run(args, cwd=scratch))
         awaicgen_seconds = time.monotonic() - started
         names = {role: awaicgen_dict[key] for role, key in (
             ("image", "awaicgen_output_mosaic_image_file"),
@@ -384,14 +388,16 @@ def run(job: JobContext) -> None:
     def o(name: str) -> Path:
         return out_dir / name
 
-    measurements = measure.measure_mosaic(
-        o(names["image"]), o(names["coverage"]), o(names["uncertainty"]),
-        sextractor_satur_level=float(settings["sextractor_refimage"]["sextractor_satur_level"]),
-        seed=checked.seed)
+    with step("measure"):
+        measurements = measure.measure_mosaic(
+            o(names["image"]), o(names["coverage"]), o(names["uncertainty"]),
+            sextractor_satur_level=float(settings["sextractor_refimage"]["sextractor_satur_level"]),
+            seed=checked.seed)
 
-    catalog_name, sex_exit = catalog.generate_reference_image_catalog(
-        kit.runner, out_dir, settings["sextractor_refimage"], paths["cfg_path"],
-        names["image"], names["uncertainty"], executable=paths["sextractor"])
+    with step("catalog"):
+        catalog_name, sex_exit = catalog.generate_reference_image_catalog(
+            kit.runner, out_dir, settings["sextractor_refimage"], paths["cfg_path"],
+            names["image"], names["uncertainty"], executable=paths["sextractor"])
     _require_output(o(catalog_name), "SExtractor", sex_exit)
     try:
         fwhm = catalog.fwhm_statistics(o(catalog_name), paths["cfg_path"] + "/" + catalog.PARAMS_FILE,
