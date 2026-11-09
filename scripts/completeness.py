@@ -252,14 +252,15 @@ def _records(conn_rows: list[dict]) -> dict:
 
 def truth_files(intake: dict, truth: list | None = None) -> list[str]:
     """The truth Parquet files: ``truth`` when given, else every Parquet under the dataset's
-    ``catalog/`` prefix (the run's ``[intake] source_root`` with its last component replaced);
-    an empty list when that prefix holds none, a dataset ``inject_dataset.py`` did not write."""
+    ``catalog/`` prefix (the run's ``[intake] source_root`` with its last component, ``l2/``,
+    replaced, or beside the files of a flat root, ``socsims_truth.py``'s); an empty list when that
+    prefix holds none, a dataset neither ``inject_dataset.py`` nor ``socsims_truth.py`` wrote."""
     if truth:
         return [str(f) for f in truth]
     from rapidpipe.products import storage
 
     root = intake["source_root"].rstrip("/")
-    catalog = root.rsplit("/", 1)[0] + "/catalog/"
+    catalog = (root.rsplit("/", 1)[0] if root.endswith("/l2") else root) + "/catalog/"
     bucket, _, prefix = catalog.removeprefix("s3://").partition("/")
     client = storage.s3_client()
     return [f"s3://{bucket}/{o['Key']}" for o in client.list_objects_v2(
