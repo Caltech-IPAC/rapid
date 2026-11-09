@@ -5,7 +5,8 @@ files before the bound are copied byte for byte and files after it
 injected, under their own names; the truth table has one row per source
 per injected epoch, the same sources in every epoch of a pointing; an
 object already under the destination is skipped, never rewritten; the
-dry run writes nothing.
+dry run writes nothing; the start MJD is the file's own ``start_time``,
+read from its ASDF tree without its blocks.
 """
 
 from __future__ import annotations
@@ -30,7 +31,15 @@ BOUND = 61591.4
 
 
 class OnceS3(FakeS3):
-    """FakeS3 whose put_object honours If-None-Match: * as S3 does."""
+    """FakeS3 whose put_object honours If-None-Match: * and get_object a Range, as S3 does."""
+
+    def get_object(self, *, Bucket, Key, **kw):
+        out = super().get_object(Bucket=Bucket, Key=Key)
+        if rng := kw.get("Range"):
+            lo, hi = (int(v) for v in rng.removeprefix("bytes=").split("-"))
+            out["Body"] = type(out["Body"])(out["Body"].read()[lo:hi + 1])
+            self.ranges.append((lo, hi))
+        return out
 
     def put_object(self, *, Bucket, Key, Body, **kw):
         if kw.get("IfNoneMatch") == "*" and (Bucket, Key) in self._objects:
@@ -124,7 +133,7 @@ def test_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     for s in STEMS:
         s3.seed("pub", f"l2/{s}_cal.asdf", b"x")
     monkeypatch.setattr(inject_dataset, "list_stems", lambda client, root, sel: STEMS)
-    monkeypatch.setattr(inject_dataset, "sidecar_mjd", lambda client, root, s: MJDS[s])
+    monkeypatch.setattr(inject_dataset, "header_mjd", lambda client, root, s: MJDS[s])
 
     class Paged:
         def paginate(self, **kw):
@@ -140,3 +149,21 @@ def test_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     assert s3._objects == before and not (tmp_path / "t.parquet").exists()
     out = capsys.readouterr().out
     assert out.count(" inject mjd") == 3 and out.count(" copy mjd") == 3
+
+
+def test_start_mjd_from_the_files_own_tree_not_its_blocks(tmp_path):
+    import asdf
+    from astropy.time import Time
+
+    stem = "r0104901001001002001_0004_wfi02_f158"
+    start = Time("2026-10-24T11:02:24.623", scale="utc")
+    path = tmp_path / "f.asdf"
+    asdf.AsdfFile({"roman": {"meta": {"exposure": {"start_time": start}},
+                             "data": np.zeros((1024, 1024), np.float32)}}).write_to(path)
+    s3 = OnceS3()
+    s3.ranges = []
+    s3.seed("priv", f"flight-1049/{stem}_cal.asdf", path.read_bytes())
+    mjd = inject_dataset.header_mjd(s3, "s3://priv/flight-1049/", stem, chunk=64)
+    assert mjd == start.mjd
+    assert len(s3.ranges) > 1                                  # the tree read in pieces
+    assert s3.ranges[-1][1] < path.stat().st_size // 100           # the 4 MB block never fetched
