@@ -32,6 +32,17 @@ Keras are not in the pipeline environment (rapid_docs ``decisions.md``,
 job and scores every catalog with it; :func:`main` is the hand tool over
 one job directory's files.
 
+New, not `dev`'s (ort-settings, rapid_docs exercise 2026-11 "onnxruntime
+settings"): the session runs on the job's own vCPUs (:func:`session_options`):
+``intra_op_num_threads`` is the vCPU count Batch gave the container
+(:func:`job_vcpus`, 1 where none is found, never the host's core count),
+``inter_op_num_threads`` 1 and the pool does not spin; graph optimisation
+stays onnxruntime's default ``ORT_ENABLE_ALL`` and execution
+``ORT_SEQUENTIAL``. onnxruntime's default, one pool thread per host core,
+cost run 187 66.6 ms per score against 46.5 at one thread
+(ort-threads-batch). :class:`OnnxSession` counts its ``run`` calls, rows
+and seconds, which the stage records per scoring call.
+
 The model is a directory of four files (``SHA256SUMS`` beside the three
 `dev`'s ``[RUBRAT]`` names) at the prefix :func:`model_prefix` resolves:
 ``[difference.rubrat] model_prefix`` when set, else the bucket the SSM
@@ -45,7 +56,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -137,23 +150,62 @@ def filter_of(l2_image: Path) -> str:
     return str(value)
 
 
+def job_vcpus(environ=os.environ, timeout: float = 2.0) -> tuple[int, str]:
+    """The vCPUs Batch gave this container and where the count came from.
+
+    The ECS container metadata endpoint (``ECS_CONTAINER_METADATA_URI_V4``,
+    set in every Batch container on EC2) reports the container's CPU limit in
+    units of 1,024 per vCPU, ``Limits.CPU``; that is the job's ``VCPU`` ask.
+    The cgroup does not carry it: ``cpu.max`` is ``max`` and ``cpu.weight``
+    100 in a 1-vCPU and a 16-vCPU Batch container alike (runs 189, 197).
+    Without the endpoint (a local job), or where it reports no limit, the
+    count is 1, the shipped ask: ``(1, "default")``.
+    """
+    uri = environ.get("ECS_CONTAINER_METADATA_URI_V4")
+    if uri:
+        with urllib.request.urlopen(uri, timeout=timeout) as response:
+            units = json.load(response).get("Limits", {}).get("CPU") or 0
+        if units >= 1024:
+            return int(units) // 1024, "ecs"
+    return 1, "default"
+
+
+def session_options(onnxruntime, vcpus: int):
+    """The session's options on ``vcpus`` vCPUs: that many intra-op threads, one inter-op,
+    no spinning, ``ORT_ENABLE_ALL`` and ``ORT_SEQUENTIAL``."""
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = int(vcpus)
+    options.inter_op_num_threads = 1
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+    options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+    return options
+
+
 class OnnxSession:
     """The two members of a Keras model that ``RealBogusClassifier`` reads, over an
-    ``onnxruntime.InferenceSession``: ``inputs`` (``.name``, ``.shape``) and ``predict``."""
+    ``onnxruntime.InferenceSession``: ``inputs`` (``.name``, ``.shape``) and ``predict``;
+    ``counts``, the session's ``run`` calls, rows and seconds so far."""
 
     def __init__(self, session):
         self.session = session
         self.inputs = [_Input(i.name, tuple(d if isinstance(d, int) else None for d in i.shape))
                        for i in session.get_inputs()]
         self.outputs = [o.name for o in session.get_outputs()]
+        self.counts = {"runs": 0, "rows": 0, "seconds": 0.0}
 
     def predict(self, inputs: dict[str, np.ndarray], batch_size: int, verbose: int = 0):
         """The outputs by name, ``inputs`` fed to the session's inputs by name in batches of
         ``batch_size``."""
         names = [i.name for i in self.inputs]
         n = len(inputs[names[0]])
+        start = time.perf_counter()
         parts = [self.session.run(None, {name: inputs[name][i:i + batch_size] for name in names})
                  for i in range(0, n, batch_size)]
+        self.counts["seconds"] += time.perf_counter() - start
+        self.counts["runs"] += len(parts)
+        self.counts["rows"] += n
         return {name: np.concatenate([part[k] for part in parts]) for k, name in enumerate(self.outputs)}
 
 
@@ -165,10 +217,12 @@ class _Input:
 
 class OnnxClassifier(RealBogusClassifier):
     """`dev`'s ``RealBogusClassifier`` on an ONNX model: its ``__init__``'s checks, and an
-    :class:`OnnxSession` on the CPU where it loads the Keras checkpoint."""
+    :class:`OnnxSession` on the CPU where it loads the Keras checkpoint, on ``vcpus``
+    threads (:func:`session_options`; ``None``: :func:`job_vcpus`). ``settings`` is what
+    the session runs with, as the stage records it."""
 
     def __init__(self, model: str | Path, feature_scaler: str | Path, *, threshold: float,
-                 survey_id: int, batch_size: int = 128) -> None:
+                 survey_id: int, batch_size: int = 128, vcpus: int | None = None) -> None:
         import onnxruntime
 
         if survey_id not in (0, 1):
@@ -185,8 +239,19 @@ class OnnxClassifier(RealBogusClassifier):
         if not self.checkpoint.is_file():
             raise FileNotFoundError(f"Model not found: {self.checkpoint}")
         self.scaler = FeatureZScore(self.feature_scaler_path)
+        source = "given"
+        if vcpus is None:
+            vcpus, source = job_vcpus()
+        options = session_options(onnxruntime, vcpus)
         self.model = OnnxSession(onnxruntime.InferenceSession(
-            str(self.checkpoint), providers=["CPUExecutionProvider"]))
+            str(self.checkpoint), sess_options=options, providers=["CPUExecutionProvider"]))
+        self.settings = {"vcpus": int(vcpus), "vcpus_from_ecs": float(source == "ecs"),
+                         "intra_op_threads": options.intra_op_num_threads,
+                         "inter_op_threads": options.inter_op_num_threads,
+                         "graph_optimization_level": int(options.graph_optimization_level),
+                         "sequential": float(options.execution_mode
+                                             == onnxruntime.ExecutionMode.ORT_SEQUENTIAL),
+                         "batch_size": self.batch_size}
         image = next((i for i in self.model.inputs if i.name == "images"), None)
         if image is None or len(image.shape) != 4 or image.shape[-1] != 3:
             raise ValueError("Model does not expose the RuBR-AT images input")
@@ -196,10 +261,10 @@ class OnnxClassifier(RealBogusClassifier):
 
 
 def load_classifier(model: Path, feats_scaler: Path, threshold_json: Path, survey_id: int,
-                    batch_size: int) -> OnnxClassifier:
+                    batch_size: int, vcpus: int | None = None) -> OnnxClassifier:
     """The classifier on the model's files (:data:`MODEL_FILES`)."""
     return OnnxClassifier(model, feats_scaler, threshold=load_validation_threshold(threshold_json),
-                          survey_id=int(survey_id), batch_size=int(batch_size))
+                          survey_id=int(survey_id), batch_size=int(batch_size), vcpus=vcpus)
 
 
 def summary_path(output: Path) -> Path:
@@ -286,8 +351,8 @@ def main(argv: Sequence[str] | None = None, load: Callable = load_classifier) ->
 
 __all__: Sequence[str] = (
     "CATALOG_COLUMNS", "FILTER_ALIASES", "MODEL_FILES", "Model", "OnnxClassifier", "OnnxSession",
-    "RB_COLUMNS", "add_rb_columns", "fetch_model", "load_classifier", "main", "model_prefix",
-    "score", "summary_path", "version_of",
+    "RB_COLUMNS", "add_rb_columns", "fetch_model", "job_vcpus", "load_classifier", "main",
+    "model_prefix", "score", "session_options", "summary_path", "version_of",
 )
 
 

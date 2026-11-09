@@ -444,17 +444,26 @@ def _write_psfcat_parquet(path: Path, peaks) -> None:
 
 class FakeRbClassifier:
     """`dev`'s ``RealBogusClassifier.score_arrays`` contract without TensorFlow: every source
-    scored ``1 - 1 / (1 + |flux_fit|)``, labelled at :attr:`threshold`; the calls recorded."""
+    scored ``1 - 1 / (1 + |flux_fit|)``, labelled at :attr:`threshold`; the calls recorded,
+    each one session run in ``model.counts`` as ``OnnxSession`` counts them."""
 
     threshold = 0.5
 
     def __init__(self):
+        from types import SimpleNamespace
+
         self.calls = []
+        self.model = SimpleNamespace(counts={"runs": 0, "rows": 0, "seconds": 0.0})
+        self.settings = {"vcpus": 1, "vcpus_from_ecs": 0.0, "intra_op_threads": 1,
+                         "inter_op_threads": 1, "graph_optimization_level": 99, "sequential": 1.0,
+                         "batch_size": 256}
 
     def score_arrays(self, science, reference, difference, detections, *, filter_name):
         import pandas as pd
 
         self.calls.append({"filter": filter_name, "rows": len(detections)})
+        self.model.counts["runs"] += 1
+        self.model.counts["rows"] += len(detections)
         score = 1.0 - 1.0 / (1.0 + np.abs(detections["flux_fit"].to_numpy()))
         return pd.DataFrame({"rb_score": score, "rb_valid": np.ones(len(score), bool),
                              "rb_label": (score >= self.threshold).astype(int),

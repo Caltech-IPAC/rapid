@@ -529,6 +529,24 @@ def test_the_classifier_is_loaded_once_from_the_fetched_model_and_scores_every_c
     assert len(classifier.calls) == 2 + len(d["xsources"]["scored"])
 
 
+def test_each_scoring_call_s_rows_and_session_runs_are_the_job_s_metrics(tmp_path, fakes, monkeypatch):
+    """The four scoring calls (both PSF-fit catalogs, both xsources signs) on the job's one
+    session: each its rows and session runs, and the session's settings, in the metrics."""
+    runner, catalog = fakes
+    classifier = FakeRbClassifier()
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog,
+        reference_psf=FakeReferencePsf(), rb_model=fake_rb_model,
+        rb_classifier=lambda model, rubrat: classifier))
+    prefix = run_difference(tmp_path, write_epoch(tmp_path / "inputs", vanished=True))
+    m = manifest(prefix)["metrics"]
+    calls = ["psf_positive", "psf_negative"] + [f"xs_{s}" for s in manifest(prefix)["difference"]["xsources"]["scored"]]
+    assert [m[f"rb_{c}_rows"] for c in calls] == [call["rows"] for call in classifier.calls]
+    assert all(m[f"rb_{c}_runs"] == 1 for c in calls)
+    assert m["rb_intra_op_threads"] == m["rb_vcpus"] == 1 and m["rb_inter_op_threads"] == 1
+    assert m["rb_score_ms"] >= 0
+
+
 def test_zogy_gets_the_reference_psf_measured_on_the_resampled_reference(
         tmp_path, files, fakes, refpsf):
     runner, _ = fakes
