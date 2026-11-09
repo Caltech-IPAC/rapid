@@ -1,6 +1,6 @@
 """Where one run's hours go, from its records alone: the throughput report (throughput-metrics).
 
-    scripts/throughput_report.py --run <id> --batch-records FILE [--out FILE]
+    scripts/throughput_report.py --run <id> --batch-records FILE [--out FILE] [--hosts N]
 
 Inputs, nothing else: the database's ``job_metrics`` view, the run's
 ``jobs`` rows (their ``attempts``, keyed by Batch job id) and
@@ -32,8 +32,9 @@ What it prints, in Markdown, for the run's published jobs:
   (time-weighted co-tenancy); moments with none are the host's idle share.
   A job's host-hours are split across its steps (or timers) in proportion
   to their seconds. The ranking by host-hours sits beside the vCPU one.
-- **Co-tenancy** per host and per instance type: mean and largest number
-  of jobs running at once while the host was occupied.
+- **Co-tenancy** per instance type and, for the ``--hosts`` longest-lived
+  hosts (default 20), per host: mean and largest number of jobs running at
+  once while the host was occupied.
 - **Queue wait** per stage, Batch's ``createdAt`` to ``startedAt``.
 - **Fixed against per-source cost**: a job's fixed seconds are its
   ``startup_s`` and the steps :data:`FIXED_STEPS` names (input reads, model
@@ -49,7 +50,9 @@ What it prints, in Markdown, for the run's published jobs:
 - **Leads**: the largest host-hour items and what the numbers say of idle
   hosts and queue wait, ranked.
 
-A metric a run's jobs did not write is printed "absent", never zero.
+A metric a run's jobs did not write is printed "absent", never zero; a
+published job with no ``container_seconds`` (its row's ``ended`` never
+written) is counted in the header and left out of every sum.
 The database is named as for every rapidpipe command; Batch and EC2 are
 read with the environment's AWS credentials.
 """
@@ -369,7 +372,7 @@ def leads(host: dict, host_vcpu_hours: float, job_vcpu_hours: float, waits: dict
     if host["idle"]:
         out.append(f"idle host time inside the span: {host['idle']:,.1f} host-h ({pct(host['idle'], total)})"
                    " - packing and scale-in, not code")
-    if host["other"]:
+    if host["other"] >= 0.001 * total:
         out.append(f"other runs' jobs on the same hosts: {host['other']:,.1f} host-h"
                    f" ({pct(host['other'], total)})")
     worst = max(((s, median(w)) for s, w in waits.items() if w), key=lambda x: x[1], default=None)
@@ -383,12 +386,16 @@ def leads(host: dict, host_vcpu_hours: float, job_vcpu_hours: float, waits: dict
 # ----------------------------------------------------------------------
 
 
-def render(run: dict, batch: dict, vcpus_by_type: dict) -> str:
+def render(run: dict, batch: dict, vcpus_by_type: dict, n_hosts: int = 20) -> str:
     jobs = published(run["jobs"])
+    unseconded = _count([j for j in run["jobs"].values() if j["state"] == "published"
+                         and "container_seconds" not in j.get("metrics", {})])
     lines = [f"# Throughput report: run {run['run']}", "",
              f"Dataset `{run['dataset']}`, survey {run['survey']}, revision `{run['revision']}`."
-             f" Published jobs: " + ", ".join(
-                 f"{s} {n}" for s, n in sorted(_count(jobs).items())) + ".", ""]
+             f" Published jobs with `container_seconds`: " + ", ".join(
+                 f"{s} {n}" for s, n in sorted(_count(jobs).items())) + "."
+             + (" Published without it (left out): " + ", ".join(
+                 f"{s} {n}" for s, n in sorted(unseconded.items())) + "." if unseconded else ""), ""]
 
     lines += ["## Job vCPU-hours, by the stage timers (the historical view)", ""]
     hours, total, _ = vcpu_hours(jobs, batch, "timers")
@@ -458,10 +465,11 @@ def render(run: dict, batch: dict, vcpus_by_type: dict) -> str:
         lines.append(f"| {kind or 'absent'} | {hs[0]['vcpus'] or 'absent'} | {len(hs)} |"
                      f" {sum(h['jobs'] for h in hs)} | {span:,.1f} | {sum(h['idle_h'] for h in hs):,.1f} |"
                      f" {mean:.1f} | {max(h['peak'] for h in hs)} |")
-    lines += ["", "<details><summary>Per host</summary>", "",
+    lines += ["", f"<details><summary>Per host, the {min(n_hosts, len(host['hosts']))} longest spans of"
+              f" {len(host['hosts'])}</summary>", "",
               "| Host | Type | Jobs (this run) | Span h | Idle h | Mean | Largest |",
               "|---|---|---|---|---|---|---|"]
-    for h in sorted(host["hosts"], key=lambda h: -h["span_h"]):
+    for h in sorted(host["hosts"], key=lambda h: -h["span_h"])[:n_hosts]:
         lines.append(f"| {h['host'][:12]} | {h['type'] or 'absent'} | {h['jobs']} ({h['run_jobs']}) |"
                      f" {h['span_h']:.2f} | {h['idle_h']:.2f} | {h['mean']:.1f} | {h['peak']} |")
     lines += ["", "</details>"]
@@ -524,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Batch's records of the run and its hosts' other jobs: read if present,"
                              " else fetched and written")
     parser.add_argument("--out", type=Path, help="the report's file (default: stdout)")
+    parser.add_argument("--hosts", type=int, default=20, help="per-host rows, the longest spans first")
     args = parser.parse_args(argv)
 
     from rapidpipe.db.connection import connect
@@ -544,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
             saved = {"run": args.run, "read": dt.datetime.now(dt.timezone.utc).isoformat(),
                      "batch": {**near, **batch}, "vcpus_by_type": instance_vcpus(types)}
             args.batch_records.write_text(json.dumps(saved, default=_json_default))
-    text = render(run, saved["batch"], saved["vcpus_by_type"])
+    text = render(run, saved["batch"], saved["vcpus_by_type"], args.hosts)
     if args.out:
         args.out.write_text(text)
     else:
