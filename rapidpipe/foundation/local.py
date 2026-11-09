@@ -33,6 +33,7 @@ import os
 import resource
 import shutil
 import tempfile
+import threading
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,7 +142,11 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     and of its largest finished child process (``children``, the toolkit's
     binaries), in KiB. Their sum as the stage ended is also written into the
     manifest's ``metrics`` as ``peak_rss_kib`` before publication, so
-    ``job_metrics`` holds every job's. A job already published returns at once with
+    ``job_metrics`` holds every job's, with the container's cgroup v2
+    memory (:class:`CgroupMemory`): ``cgroup_anon_peak_bytes`` and
+    ``cgroup_file_peak_bytes``, the largest ``memory.stat`` ``anon`` and
+    ``file`` sampled through the stage, and ``cgroup_memory_peak_bytes``,
+    ``memory.peak`` as the stage ended; each absent where its file is. A job already published returns at once with
     ``published`` false and no file touched. The job row records
     ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
     which the job definition sets; none for a checkout) and the instance
@@ -196,9 +201,11 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
         survey=job["survey"], dataset=job["dataset"], settings=job["settings"],
         inputs=inputs, attempt=attempt, prefix=prefix, connect=connect, workdir=workdir)
     try:
-        stage_run(context)  # no connection held while the stage computes
+        with CgroupMemory() as memory:
+            stage_run(context)  # no connection held while the stage computes
         peak = _peak_rss_kib()
-        _record_peak(context.path / "manifest.json", peak["self"] + peak["children"])
+        _record_metrics(context.path / "manifest.json",
+                        {"peak_rss_kib": peak["self"] + peak["children"], **memory.peaks()})
         put(context.path, prefix)
         if workdir is not None:
             shutil.rmtree(workdir)
@@ -227,13 +234,69 @@ def _peak_rss_kib() -> dict[str, int]:
             (("self", resource.RUSAGE_SELF), ("children", resource.RUSAGE_CHILDREN))}
 
 
-def _record_peak(manifest: Path, kib: int) -> None:
-    """Add ``peak_rss_kib`` (self plus the largest child, KiB, as the stage ended) to the manifest's ``metrics``."""
+def _record_metrics(manifest: Path, metrics: dict[str, int]) -> None:
+    """Add ``metrics`` (``peak_rss_kib``, the cgroup peaks) to the manifest's ``metrics``."""
     if not manifest.exists():
         return
     body = json.loads(manifest.read_text())
-    body.setdefault("metrics", {})["peak_rss_kib"] = int(kib)
+    body.setdefault("metrics", {}).update({k: int(v) for k, v in metrics.items()})
     manifest.write_text(json.dumps(body, indent=1))
+
+
+#: The container's own cgroup v2 directory (Batch's containers see their own at the root).
+CGROUP = Path("/sys/fs/cgroup")
+
+
+class CgroupMemory:
+    """The container cgroup's memory through a stage: ``memory.stat`` sampled every ``interval`` seconds.
+
+    ``anon`` (the anonymous working set, what the ask must hold) and
+    ``file`` (page cache, which the kernel reclaims under the limit) are
+    current values, so a thread keeps their largest sample; a peak shorter
+    than ``interval`` can be missed. ``memory.peak`` is the kernel's own
+    high-water mark of their sum and more, read once at the end. Outside
+    cgroup v2 (a laptop, cgroup v1) the files are absent and so are the peaks.
+    """
+
+    def __init__(self, root: Path | None = None, interval: float = 1.0):
+        self.root, self.interval = root or CGROUP, interval
+        self.anon = self.file = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample_until_stopped, daemon=True)
+
+    def __enter__(self) -> "CgroupMemory":
+        self.sample()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self._stop.set()
+        self._thread.join()
+        self.sample()
+        return False
+
+    def _sample_until_stopped(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.sample()
+
+    def sample(self) -> None:
+        """Read ``memory.stat`` once and keep the larger ``anon`` and ``file``."""
+        try:
+            fields = dict(line.split() for line in (self.root / "memory.stat").read_text().splitlines())
+        except (OSError, ValueError):
+            return
+        for name in ("anon", "file"):
+            if name in fields:
+                setattr(self, name, max(int(fields[name]), getattr(self, name) or 0))
+
+    def peaks(self) -> dict[str, int]:
+        """The metrics this stage recorded: the anon and file peaks and ``memory.peak``, bytes."""
+        out = {"cgroup_anon_peak_bytes": self.anon, "cgroup_file_peak_bytes": self.file}
+        try:
+            out["cgroup_memory_peak_bytes"] = int((self.root / "memory.peak").read_text())
+        except (OSError, ValueError):
+            pass
+        return {k: v for k, v in out.items() if v is not None}
 
 
 #: The EC2 instance metadata service (IMDSv2): a session token, then one read.
