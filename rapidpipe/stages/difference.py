@@ -626,6 +626,7 @@ def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: d
 def run(job: JobContext) -> None:
     settings = job.settings["difference"]
     check_settings(settings)
+    t_start = time.perf_counter()     # exp/xsources-rb's phase walls (instance-type-profile)
     inputs = read_inputs(job)
     kit = toolkit()
     seed = _seed(settings)
@@ -878,12 +879,14 @@ def run(job: JobContext) -> None:
                   gain_times_exptime=sca_gain * inputs.exptime, thresh=thresh)
     rb = None if rb_model is None else (rb_classifier, realbogus.filter_of(w(science_image_filename)))
     _PROBE.clear()
+    t_sfft = time.perf_counter()
     sfft_names, sfft_catalogs = _run_sfft(
         science_image_filename=science_image_filename,
         scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
         refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
         science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
         rb=rb, with_xsources=True, **common)
+    t_post = time.perf_counter()
     infobits |= sfft_catalogs.bits
     metrics["pixel_columns_s"] = sfft_catalogs.pixel_columns_s
     if sfft_catalogs.rb is not None:
@@ -978,6 +981,7 @@ def run(job: JobContext) -> None:
                        n_xsources_fitted=sum(xsources_record["fitted"].values()),
                        xsources_s=xsources_record["seconds"])
     metrics.update(_probe_metrics())
+    metrics.update(exp_prep_s=round(t_sfft - t_start, 3), exp_sfft_s=round(t_post - t_sfft, 3))
     residual_stars = _quality_metrics(
         metrics, found, thresh=thresh, candidates=candidates, sources=sources,
         catalog=catalog, in_footprint=in_footprint,
@@ -1004,6 +1008,7 @@ def run(job: JobContext) -> None:
                        n_xobjects_founded=xassociation["founded"],
                        n_xmemberships=xassociation["memberships"])
         outputs += [("xobjects", "xobjects.parquet"), ("xmemberships", "xmemberships.parquet")]
+    metrics["exp_post_s"] = round(time.perf_counter() - t_post, 3)
     job.write_manifest(
         outputs,
         empty_ok=("sources", "xsources"),       # a difference with nothing above the cut
@@ -1637,10 +1642,34 @@ def _cgroup_limits() -> dict[str, float]:
     return out
 
 
+def _cpu_metrics() -> dict[str, float]:
+    """The host CPU as the container sees it (instance-type-profile): threads per core
+    (``lscpu``'s, from cpu0's sibling list), whether the vendor is AMD, the CPUID family and
+    model, and the AVX-512 and AMX flags."""
+    out: dict[str, float] = {}
+    siblings = Path("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list")
+    if siblings.exists():
+        text = siblings.read_text().strip()
+        out["cpu_threads_per_core"] = float(sum(
+            int(b) - int(a) + 1 if "-" in part else 1
+            for part in text.split(",") for a, _, b in [part.partition("-")]))
+    try:
+        info = Path("/proc/cpuinfo").read_text().split("\n\n")[0]
+    except OSError:
+        return out
+    fields = dict((k.strip(), v.strip()) for k, _, v in (line.partition(":") for line in info.splitlines()))
+    flags = set(fields.get("flags", "").split())
+    out.update(cpu_vendor_amd=float(fields.get("vendor_id") == "AuthenticAMD"),
+               cpu_family=float(fields.get("cpu family", -1)), cpu_model=float(fields.get("model", -1)),
+               cpu_avx512f=float("avx512f" in flags), cpu_avx512_bf16=float("avx512_bf16" in flags),
+               cpu_amx=float("amx_tile" in flags))
+    return out
+
+
 def _probe_metrics() -> dict[str, float]:
     """The probe's metrics: each phase's counters (``rb_*`` for SFFT's catalogs, ``xsrb_*``
     for the xsources'), the limits, and ``RAPID_EXP_ORT_THREADS`` (0 unset)."""
-    return {**{k: round(v, 3) for k, v in _PROBE.items()}, **_cgroup_limits(),
+    return {**{k: round(v, 3) for k, v in _PROBE.items()}, **_cgroup_limits(), **_cpu_metrics(),
             "exp_ort_threads": float(os.environ.get("RAPID_EXP_ORT_THREADS") or 0)}
 
 

@@ -84,6 +84,11 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     overrides = {"command": ["job", "run", "--job", str(job_id)], "environment": environment}
     if memory_mib is not None:
         overrides["resourceRequirements"] = [{"type": "MEMORY", "value": str(int(memory_mib))}]
+    # exp/xsources-rb's alone arm (instance-type-profile): RAPID_EXP_VCPU="difference=16,packet=16"
+    # asks those stages for that many vCPU instead of the job definition's.
+    vcpu = dict(part.split("=") for part in os.environ.get("RAPID_EXP_VCPU", "").split(",") if part)
+    if stage in vcpu:
+        overrides.setdefault("resourceRequirements", []).append({"type": "VCPU", "value": vcpu[stage]})
     request = {"jobName": f"{prefix}-{stage}-{job_id}{name_suffix}", "jobQueue": queue,
                "jobDefinition": job_definition, "containerOverrides": overrides}
     if one_attempt:
