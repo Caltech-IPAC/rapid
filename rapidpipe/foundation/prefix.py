@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from rapidpipe.foundation import steps
 from rapidpipe.products import storage
 
 _cache: Path | None = None
@@ -72,28 +73,34 @@ def get(url: str, *, client: Any = None, unsigned: bool = False) -> Path:
     path = cache_dir() / bucket / key
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            s3 = client or (storage.s3_client(unsigned=True) if unsigned else storage.s3_client())
-            s3.download_file(bucket, key, str(path))
-        except Exception as exc:  # noqa: BLE001 - ClientError-shaped
-            if storage.is_not_found(exc):
-                raise FileNotFoundError(url) from exc
-            raise
+        with steps.step("s3_read"):
+            try:
+                s3 = client or (storage.s3_client(unsigned=True) if unsigned else storage.s3_client())
+                s3.download_file(bucket, key, str(path))
+            except Exception as exc:  # noqa: BLE001 - ClientError-shaped
+                if storage.is_not_found(exc):
+                    raise FileNotFoundError(url) from exc
+                raise
+        steps.add("s3_read_bytes", path.stat().st_size)
     return path
 
 
-def put(directory: Path, prefix: str, *, client: Any = None) -> None:
+def put(directory: Path, prefix: str, *, client: Any = None, before_last: Any = None) -> None:
     """Upload every file under ``directory`` to the ``s3://`` ``prefix``, ``manifest.json`` last.
 
     For a ``file://`` prefix, ``directory`` is the prefix itself and nothing moves.
+    ``before_last`` is called before the manifest's upload
+    (:func:`rapidpipe.products.storage.publish_dir`), and before returning for ``file://``.
     """
     if urlparse(prefix).scheme == "file":
         if local_path(prefix) != directory:
             raise ValueError(f"{directory} is not the file:// prefix {prefix}")
+        if before_last is not None:
+            before_last()
         return
     bucket, key = _bucket_key(prefix)
     storage.publish_dir(directory, storage.Location(kind="s3", bucket=bucket, prefix=key.strip("/")),
-                        client=client)
+                        client=client, before_last=before_last)
 
 
 def attempts(job_prefix: str, *, client: Any = None) -> set[int]:

@@ -7,7 +7,7 @@ names the last). Three writers add to an entry, each its own fields:
 - the submitter (``rapidpipe.launch.submit``): ``queue``, ``submitted``,
   ``why`` (``first`` or ``rerun``);
 - the job itself (``rapidpipe.foundation.local.run_job``, in a Batch
-  container): ``started``, ``instance_type``, ``availability_zone``,
+  container): ``started``, ``instance_type``, ``instance_id``, ``availability_zone``,
   ``batch_attempt``, then ``ended`` and ``outcome`` (``published`` or
   ``failed``);
 - the loop's reconcile, for a Batch job that ended with its row
