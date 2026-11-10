@@ -14,7 +14,7 @@ from sfft.utils.SFFTSolutionReader import Realize_MatchingKernel
 from sfft.utils.DeCorrelationCalculator import DeCorrelation_Calculator
 
 # rapid: the subtraction pass without its two (2*GKerHW+1, N0, N1) kernel-phase stacks, same pixels
-# (memory-diet: 15,005 -> about 5,300 MiB of anon in SFFT on a 4088 x 4088 frame).
+# (memory-diet: SFFT's subtraction 14,596 -> 1,965 MiB of anon on a 4089 x 4089 frame, the job 15,014 -> 6,238).
 import sfft_lowmem
 sfft_lowmem.install()
 

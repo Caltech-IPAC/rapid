@@ -2,8 +2,8 @@
 
 sfft 1.7.3's NumPy subtraction (``ElementalSFFTSubtract_Numpy.ESSN`` with a
 solution given) fills ``Kab_Wla`` and ``Kab_Wmb``, ``(2 * KerHW + 1, N0, N1)``
-complex128 each: on a 4088 x 4088 frame with ``GKerHW = 9`` that is
-2 x 19 x 267 MB, 9,690 MiB of the difference job's 15,005 MiB anon peak
+complex128 each: with ``GKerHW = 9`` that is
+2 x 19 x 255 MiB on 4089 x 4089, 9,695 MiB of the difference job's 15,005 MiB anon peak
 (run 212, job 66156). ``Kab_Wla[a]`` is ``Wl ** a`` and ``Wl`` depends on the
 row alone (``Wm``, the column alone), so here each stack is one column (one
 row) of those powers, computed by the same expressions, and the library's
