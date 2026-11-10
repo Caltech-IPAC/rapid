@@ -1,19 +1,16 @@
 """exp/ort-settings' scoring bench, never merged: the RuBR-AT scorer on one difference job's
 published inputs, alone and five copies at once in one container, with the kernel evidence.
 
-``rapidpipe ort-bench --inputs <job's diff/ prefix> --model <model prefix> --out <prefix>``
-runs, in order, each scorer a child process (``ort-bench --worker``):
+difference-vcpus' arms (rebased on ``rebuild`` 86656980): ``rapidpipe ort-bench --inputs <job's
+diff/ prefix> --model <model prefix> --out <prefix>`` runs, in order, each scorer a child
+process (``ort-bench --worker``):
 
-- ``kernel``: one scorer at one thread on the first 1,024 sources with onnxruntime's
-  profiler and its verbose log (the graph after optimisation, each kernel's op, provider,
-  input types and shapes; the NCHWc block size MLAS chose is the shapes' last dimension);
-- ``alone``: one scorer at one thread on every source, its main thread's instruction
-  pointer sampled by ``ptrace`` every 20 ms, each sample's library offset and 32 bytes;
-- ``packed``: five scorers at one thread at once, each its start and stop;
-- ``shipped_alone`` and ``shipped_packed``: the same at onnxruntime's default threads, the
-  shipped session (``rebuild`` before ort-settings);
+- ``alone`` and ``alone2t``: one scorer at one and at two intra-op threads;
+- ``packed8x1t_a``, ``packed8x2t_a``, ``packed8x2t_b``, ``packed8x1t_b``: eight scorers released
+  together at one and at two threads (a 16-vCPU host at 15,360 MiB holds eight differences),
+  the packed pair twice in alternating order, each scorer its start and stop;
 
-and writes ``bench.json`` (and the profile and log) under ``--out``. Scores of every arm are
+and writes ``bench.json`` (and the logs) under ``--out``. Scores of every arm are
 compared with the first's.
 """
 
@@ -59,7 +56,7 @@ def worker(args) -> int:
     model = work / "model"
     classifier = realbogus.load_classifier(model / "best.onnx", model / "canonical_9.json",
                                            model / "threshold.json", 0, 256,
-                                           vcpus=None if args.threads == "job" else 1)
+                                           vcpus=None if args.threads == "job" else int(args.threads) if args.threads.isdigit() else 1)
     if args.threads == "default":
         classifier.model = realbogus.OnnxSession(onnxruntime.InferenceSession(
             str(classifier.checkpoint), providers=["CPUExecutionProvider"]))
@@ -218,12 +215,11 @@ def bench(args) -> int:
     for name in ("cpu.max", "cpu.weight"):
         p = Path("/sys/fs/cgroup") / name
         result[f"cgroup_{name}"] = p.read_text().strip() if p.exists() else None
-    proc, record = _spawn(work, "kernel", "1", rows=1024, profile=True)
-    result["kernel"] = {"exit": proc.wait()}
-    if Path(record).exists():
-        result["kernel"].update(json.loads(Path(record).read_text()))
-    arms = [("alone", "1", 1, True), ("packed", "1", 5, False), ("job_alone", "job", 1, False),
-            ("shipped_alone", "default", 1, False), ("shipped_packed", "default", 5, False)]
+    # difference-vcpus: one and two threads, alone and eight at once (a 16-vCPU host's
+    # 15,360 MiB packing), the packed pair twice in alternating order.
+    arms = [("alone", "1", 1, False), ("alone2t", "2", 1, False),
+            ("packed8x1t_a", "1", 8, False), ("packed8x2t_a", "2", 8, False),
+            ("packed8x2t_b", "2", 8, False), ("packed8x1t_b", "1", 8, False)]
     for name, threads, copies, sample in arms:
         result[name] = _arm(work, name, threads, copies, sample, args.rows)
         print(json.dumps({name: result[name]["ms_per_score"], "overlap_s": result[name]["overlap_s"]}),
