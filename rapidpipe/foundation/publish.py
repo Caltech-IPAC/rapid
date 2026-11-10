@@ -110,8 +110,9 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     name, all or none, and when any is held roll back and try again after
     a jittered wait (never waiting on a lock while holding a connection);
     reconcile its catalogs; load each output into its table, or its
-    children by ``COPY``, with ``job`` set; record the attempt, manifest
-    and state; then,
+    children by ``COPY``, with ``job`` set; record the attempt, manifest,
+    state and ``ended`` (the commit's moment, which the caller moves to
+    its own end once the ``ANALYZE`` statements are done); then,
     inside a savepoint, bind the job's ``expects`` keys if its run is live
     for its survey and dataset, recording a refusal on the job instead
     when the binding is refused. ``ANALYZE`` every table it wrote to after
@@ -182,8 +183,10 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 execute_values(cur, "INSERT INTO job_inputs (job, kind, product, key, source_job)"
                                " VALUES %s", [(job_id, "input", r["product"], Json(r["key"]),
                                                r["source_job"]) for r in reads])
+            # ended with the state, so a host lost during the ANALYZEs below (a Spot reclaim)
+            # still leaves the published row an end; the caller's later write moves it to its own.
             cur.execute("UPDATE jobs SET state = 'published', published_attempt = %s,"
-                        " manifest = %s WHERE id = %s",
+                        " manifest = %s, ended = clock_timestamp() WHERE id = %s",
                         (attempt, Json({"prefix": prefix, **manifest}), job_id))
             loaded = {table: len(r) for table, r in rows.items()}
             group, refusal, live = _bind(cur, job_id, run, loaded,

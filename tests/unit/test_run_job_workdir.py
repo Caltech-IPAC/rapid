@@ -5,12 +5,17 @@ that raises leaves it where it was, for a person; the uploaded manifest's
 ``metrics`` carry ``peak_rss_kib`` and the container cgroup's memory
 peaks, beside the stage's own; the anon and file peaks are the largest
 ``memory.stat`` values sampled while the stage ran, and a peak whose file
-is absent is absent.
+is absent is absent; the throughput fields (throughput-metrics): the
+stage's steps, the upload's seconds and bytes (the manifest's own not
+counted), the container's CPU seconds beside the same interval's wall from
+``cpu.stat``, absent where ``cpu.stat`` is, the host's CPUs and the
+process's startup seconds.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 from pathlib import Path
 
 import pytest
@@ -68,7 +73,7 @@ def workdirs(monkeypatch, tmp_path):
 
     monkeypatch.setattr(local.tempfile, "mkdtemp", mkdtemp)
     monkeypatch.setattr(local, "attempts", lambda prefix: set())
-    monkeypatch.setattr(local, "put", lambda directory, prefix: None)
+    monkeypatch.setattr(local, "put", lambda directory, prefix, before_last=None: before_last())
     monkeypatch.setattr(local, "publish", lambda conn, job, attempt, prefix: {"published": True})
     monkeypatch.setattr(local, "instance_type", lambda: None)
     monkeypatch.setattr(local, "CGROUP", tmp_path / "no-cgroup")
@@ -104,9 +109,7 @@ def test_the_uploaded_manifest_carries_the_peak_memory_beside_the_stages_metrics
                                                                                 monkeypatch):
     import json
 
-    uploaded = {}
-    monkeypatch.setattr(local, "put", lambda directory, prefix: uploaded.update(
-        json.loads((Path(directory) / "manifest.json").read_text())))
+    uploaded = upload_into(monkeypatch)
     monkeypatch.setattr(local, "_peak_rss_kib", lambda: {"self": 100, "children": 50})
 
     def with_metrics(job):
@@ -114,7 +117,19 @@ def test_the_uploaded_manifest_carries_the_peak_memory_beside_the_stages_metrics
         job.write_manifest([("t", "out.parquet")], metrics={"n": 3})
 
     local.run_job(connect, 5, ROOT, with_metrics)
-    assert uploaded["metrics"] == {"n": 3, "peak_rss_kib": 150}
+    assert uploaded["metrics"]["n"] == 3 and uploaded["metrics"]["peak_rss_kib"] == 150
+
+
+def upload_into(monkeypatch) -> dict:
+    """The manifest as it is uploaded, last, after every other file."""
+    uploaded: dict = {}
+
+    def put(directory, prefix, before_last=None):
+        before_last()
+        uploaded.update(json.loads((Path(directory) / "manifest.json").read_text()))
+
+    monkeypatch.setattr(local, "put", put)
+    return uploaded
 
 
 def write_cgroup(root: Path, anon: int, file: int, peak: int | None = None) -> None:
@@ -131,9 +146,7 @@ def test_the_manifest_carries_the_largest_cgroup_values_seen_and_memory_peak(wor
     root = tmp_path / "cgroup"
     write_cgroup(root, anon=600, file=20)
     monkeypatch.setattr(local, "CGROUP", root)
-    uploaded = {}
-    monkeypatch.setattr(local, "put", lambda directory, prefix: uploaded.update(
-        json.loads((Path(directory) / "manifest.json").read_text())))
+    uploaded = upload_into(monkeypatch)
 
     def shrink_anon_grow_file(job):
         write_a_file(job)
@@ -162,3 +175,42 @@ def test_no_cgroup_files_record_no_cgroup_peaks(tmp_path):
     with local.CgroupMemory(root=tmp_path / "absent") as memory:
         pass
     assert memory.peaks() == {}
+
+
+def test_the_manifest_carries_the_steps_the_upload_the_cpu_and_the_host(workdirs, monkeypatch,
+                                                                        tmp_path):
+    from rapidpipe.foundation import steps
+
+    root = tmp_path / "cgroup"
+    root.mkdir()
+    (root / "cpu.stat").write_text("usage_usec 1000000\nuser_usec 900000\nsystem_usec 100000\n")
+    monkeypatch.setattr(local, "CGROUP", root)
+    uploaded = upload_into(monkeypatch)
+
+    def busy(job):
+        with steps.step("science"):
+            write_a_file(job)
+        (root / "cpu.stat").write_text("usage_usec 3500000\n")
+        job.write_manifest([("t", "out.parquet")])
+
+    local.run_job(connect, 5, ROOT, busy)
+    metrics = uploaded["metrics"]
+    assert metrics["step_science_s"] >= 0 and metrics["step_s3_write_s"] >= 0
+    assert metrics["s3_write_bytes"] == len(b"rows")
+    assert metrics["cgroup_cpu_s"] == 2.5 and metrics["cgroup_cpu_wall_s"] >= 0
+    assert metrics["host_vcpus"] >= 1 and metrics["startup_s"] > 0
+
+
+def test_no_cpu_stat_records_no_cpu_seconds(workdirs, monkeypatch):
+    uploaded = upload_into(monkeypatch)
+
+    def stage(job):
+        write_a_file(job)
+        job.write_manifest([("t", "out.parquet")])
+
+    local.run_job(connect, 5, ROOT, stage)
+    assert not {"cgroup_cpu_s", "cgroup_cpu_wall_s"} & set(uploaded["metrics"])
+
+
+def test_startup_seconds_is_absent_without_proc(tmp_path):
+    assert local.startup_seconds(tmp_path) is None

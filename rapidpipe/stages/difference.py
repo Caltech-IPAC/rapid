@@ -214,6 +214,7 @@ from astropy.wcs import WCS
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.foundation.steps import step
 from rapidpipe.products.diffimage import (
     INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT, catalog_outcome_bit)
 from rapidpipe.science.crossmatch.memory import associate_epoch
@@ -636,13 +637,15 @@ def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: d
 def run(job: JobContext) -> None:
     settings = job.settings["difference"]
     check_settings(settings)
-    inputs = read_inputs(job)
+    with step("read_inputs"):
+        inputs = read_inputs(job)
     kit = toolkit()
     seed = _seed(settings)
     # The real/bogus model is SFFT-trained; SFFT's catalog is the published one. Its classifier
     # is loaded once and scores every catalog of the job.
-    rb_model = kit.rb_model(settings["rubrat"])
-    rb_classifier = None if rb_model is None else kit.rb_classifier(rb_model, settings["rubrat"])
+    with step("rb_model_load"):
+        rb_model = kit.rb_model(settings["rubrat"])
+        rb_classifier = None if rb_model is None else kit.rb_classifier(rb_model, settings["rubrat"])
 
     paths = settings["paths"]
     cfg_path = paths["cfg_path"]
@@ -657,50 +660,54 @@ def run(job: JobContext) -> None:
     work_dir = job.path / paths["work_subdirectory"]
     work_dir.mkdir(parents=True, exist_ok=True)
     taken: set[str] = set()
-    staged = {name: _stage_input(path, work_dir, taken) for name, path in (
-        ("science", inputs.science_image), ("reference", inputs.reference_image),
-        ("coverage", inputs.reference_coverage), ("uncertainty", inputs.reference_uncertainty),
-        ("catalog", inputs.reference_catalog), ("science_psf", inputs.science_psf))}
-    science_image_filename = _unzip_science_image(work_dir, staged["science"])
+    with step("stage_inputs"):
+        staged = {name: _stage_input(path, work_dir, taken) for name, path in (
+            ("science", inputs.science_image), ("reference", inputs.reference_image),
+            ("coverage", inputs.reference_coverage), ("uncertainty", inputs.reference_uncertainty),
+            ("catalog", inputs.reference_catalog), ("science_psf", inputs.science_psf))}
+        science_image_filename = _unzip_science_image(work_dir, staged["science"])
 
     def w(name: str) -> Path:
         return work_dir / name
 
     # Image statistics for resizing (dev: HDU 1 of the delivered file).
-    stats_sci_img = statistics.fits_data_statistics_with_clipping(
-        w(science_image_filename), 3.0, 1, saturation_level_sciimage, seed=seed)
-    avg_sci_img = stats_sci_img["clippedavg"]
+    with step("reformat"):
+        stats_sci_img = statistics.fits_data_statistics_with_clipping(
+            w(science_image_filename), 3.0, 1, saturation_level_sciimage, seed=seed)
+        avg_sci_img = stats_sci_img["clippedavg"]
 
-    # Reformat and simple-model uncertainty (dev's OpenUniverse ZPTMAG fix is
-    # off by default and not ported).
-    reformatted_science_image_filename = science_image_filename.replace(".fits", "_reformatted.fits")
-    reformatted_science_uncert_image_filename = science_image_filename.replace(
-        ".fits", "_reformatted_unc.fits")
-    reformat.reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(
-        w(science_image_filename), sca_gain, sca_readout_noise, avg_sci_img,
-        w(reformatted_science_image_filename), w(reformatted_science_uncert_image_filename))
+        # Reformat and simple-model uncertainty (dev's OpenUniverse ZPTMAG fix is
+        # off by default and not ported).
+        reformatted_science_image_filename = science_image_filename.replace(".fits", "_reformatted.fits")
+        reformatted_science_uncert_image_filename = science_image_filename.replace(
+            ".fits", "_reformatted_unc.fits")
+        reformat.reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(
+            w(science_image_filename), sca_gain, sca_readout_noise, avg_sci_img,
+            w(reformatted_science_image_filename), w(reformatted_science_uncert_image_filename))
 
     # Science-image catalog and point-source FWHM; reference FWHM from its catalog.
     filename_sciimage_catalog = reformatted_science_image_filename.replace(".fits", "_secat.txt")
-    sextractor.generate_science_image_catalog(
-        kit.runner, work_dir, reformatted_science_image_filename,
-        reformatted_science_uncert_image_filename, cfg_path, settings["sextractor_sciimage"],
-        filename_sciimage_catalog, executable=paths["sextractor"])
-    fwhm_sci, _ = sextractor.fwhm_from_catalog(
-        w(filename_sciimage_catalog), cfg_path + "/rapidSexParamsSciImage.inp", "sci")
-    fwhm_ref, _ = sextractor.fwhm_from_catalog(
-        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", "ref")
+    with step("science_catalog"):
+        sextractor.generate_science_image_catalog(
+            kit.runner, work_dir, reformatted_science_image_filename,
+            reformatted_science_uncert_image_filename, cfg_path, settings["sextractor_sciimage"],
+            filename_sciimage_catalog, executable=paths["sextractor"])
+        fwhm_sci, _ = sextractor.fwhm_from_catalog(
+            w(filename_sciimage_catalog), cfg_path + "/rapidSexParamsSciImage.inp", "sci")
+        fwhm_ref, _ = sextractor.fwhm_from_catalog(
+            w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", "ref")
 
     # SWarp the reference bundle into the science image's distortion frame.
     # The reference (an awaicgen coadd) has no distortion: no PV conversion.
-    (sci_fits_file_with_pv, _ref_pv, _ref_cov_pv, _ref_unc_pv,
-     output_resampled_reference_image,
-     output_resampled_reference_cov_map,
-     output_resampled_reference_uncert_image) = \
-        resample.resample_reference_image_to_science_image_with_pv_distortion(
-            kit.runner, work_dir, reformatted_science_image_filename, 0,
-            staged["reference"], staged["coverage"], staged["uncertainty"],
-            0, False, settings["swarp"], executable=paths["swarp"], sip_to_pv=kit.sip_to_pv)
+    with step("resample"):
+        (sci_fits_file_with_pv, _ref_pv, _ref_cov_pv, _ref_unc_pv,
+         output_resampled_reference_image,
+         output_resampled_reference_cov_map,
+         output_resampled_reference_uncert_image) = \
+            resample.resample_reference_image_to_science_image_with_pv_distortion(
+                kit.runner, work_dir, reformatted_science_image_filename, 0,
+                staged["reference"], staged["coverage"], staged["uncertainty"],
+                0, False, settings["swarp"], executable=paths["swarp"], sip_to_pv=kit.sip_to_pv)
     for output in (output_resampled_reference_image, output_resampled_reference_cov_map,
                    output_resampled_reference_uncert_image):
         # SWarp has read the .head symlinks; they would publish as copies.
@@ -714,42 +721,46 @@ def run(job: JobContext) -> None:
     # subtract_from_reference, the resampled reference with the same bkgest.
     bkgest = settings["bkgest"]
     swarp_subtracts = settings["swarp"]["swarp_subtract_back"].strip().upper() != "N"
-    filename_bkg_subbed_science_image = background.subtract_background(
-        kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
-        sci_fits_file_with_pv, bkgest)
+    with step("background"):
+        filename_bkg_subbed_science_image = background.subtract_background(
+            kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
+            sci_fits_file_with_pv, bkgest)
     if not bkgest["subtract_from_reference"] and not swarp_subtracts:
         logger.warning("neither SWarp nor bkgest subtracts the reference-image background")
     if bkgest["subtract_from_reference"]:
         if swarp_subtracts:
             logger.warning("SWarp SUBTRACT_BACK is on, so bkgest only removes what SWarp left behind")
-        background.subtract_reference_background(
-            kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
-            output_resampled_reference_image, output_resampled_reference_cov_map, bkgest)
+        with step("background"):
+            background.subtract_reference_background(
+                kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
+                output_resampled_reference_image, output_resampled_reference_cov_map, bkgest)
 
     # The reference PSF, measured on the resampled, background-subtracted reference.
-    refpsf_record, metrics, measured_psf = _measure_reference_psf(
-        kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
-        w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"])
+    with step("refpsf"):
+        refpsf_record, metrics, measured_psf = _measure_reference_psf(
+            kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
+            w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"])
     metrics["refpsf_s"] = refpsf_record["seconds"]
     # The reference catalog's sky positions; the metrics' stars, the measurement's finder stars
     # or, under reference_psf = "science", the catalog's own (_catalog_stars).
-    reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
-        w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", REFERENCE_CATALOG_COLUMNS)
-    science_pixels = fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float)
-    reference_pixels = fits.getdata(w(output_resampled_reference_image), 0).astype(float)
-    found, stars_xy = measured_psf.found, measured_psf.stars_xy
-    if settings["reference_psf"] == "science":
-        found, stars_xy = _catalog_stars(
-            reference_sky, fits.getheader(w(filename_bkg_subbed_science_image), 0), reference_pixels)
-    # Registration, before the subpixel offset corrects it; the science stars' own width beside
-    # the ePSF's.
-    metrics.update(quality.registration(science_pixels, reference_pixels, stars_xy))
-    sci_star_sigma = quality.star_sigma(science_pixels, stars_xy)
-    if sci_star_sigma is not None:
-        metrics["sci_star_sigma_px"] = sci_star_sigma
-        if metrics["sci_psf_sigma_px"] > 0:
-            metrics["sci_star_psf_sigma_ratio"] = sci_star_sigma / metrics["sci_psf_sigma_px"]
-    del science_pixels, reference_pixels
+    with step("registration"):
+        reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
+            w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", REFERENCE_CATALOG_COLUMNS)
+        science_pixels = fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float)
+        reference_pixels = fits.getdata(w(output_resampled_reference_image), 0).astype(float)
+        found, stars_xy = measured_psf.found, measured_psf.stars_xy
+        if settings["reference_psf"] == "science":
+            found, stars_xy = _catalog_stars(
+                reference_sky, fits.getheader(w(filename_bkg_subbed_science_image), 0), reference_pixels)
+        # Registration, before the subpixel offset corrects it; the science stars' own width beside
+        # the ePSF's.
+        metrics.update(quality.registration(science_pixels, reference_pixels, stars_xy))
+        sci_star_sigma = quality.star_sigma(science_pixels, stars_xy)
+        if sci_star_sigma is not None:
+            metrics["sci_star_sigma_px"] = sci_star_sigma
+            if metrics["sci_psf_sigma_px"] > 0:
+                metrics["sci_star_psf_sigma_ratio"] = sci_star_sigma / metrics["sci_psf_sigma_px"]
+        del science_pixels, reference_pixels
 
     # Gain matching, with the reference zero point the reference was built on.
     zero_point, zero_point_source = _resolve_zero_point(settings, w(staged["reference"]))
@@ -757,58 +768,60 @@ def run(job: JobContext) -> None:
         ".fits", "_scigainmatchsexcat.txt")
     filename_refgainmatchsexcat_catalog = output_resampled_reference_image.replace(
         ".fits", "_refgainmatchsexcat.txt")
-    scalefac, dxrmsfin_measured, dyrmsfin_measured, dxmedianfin, dymedianfin = \
-        gainmatch.gain_match_science_and_reference_images(
-            kit.runner, work_dir,
-            filename_bkg_subbed_science_image, reformatted_science_uncert_image_filename,
-            filename_scigainmatchsexcat_catalog,
-            output_resampled_reference_image, output_resampled_reference_uncert_image,
-            filename_refgainmatchsexcat_catalog,
-            zero_point, settings["gainmatch"],
-            settings["sextractor_gainmatch"], fwhm_sci, fwhm_ref,
-            float(zogy_settings["astrometric_uncert_x"]),
-            float(zogy_settings["astrometric_uncert_y"]),
-            cfg_path, executable=paths["sextractor"])
+    with step("gainmatch"):
+        scalefac, dxrmsfin_measured, dyrmsfin_measured, dxmedianfin, dymedianfin = \
+            gainmatch.gain_match_science_and_reference_images(
+                kit.runner, work_dir,
+                filename_bkg_subbed_science_image, reformatted_science_uncert_image_filename,
+                filename_scigainmatchsexcat_catalog,
+                output_resampled_reference_image, output_resampled_reference_uncert_image,
+                filename_refgainmatchsexcat_catalog,
+                zero_point, settings["gainmatch"],
+                settings["sextractor_gainmatch"], fwhm_sci, fwhm_ref,
+                float(zogy_settings["astrometric_uncert_x"]),
+                float(zogy_settings["astrometric_uncert_y"]),
+                cfg_path, executable=paths["sextractor"])
     logger.info("scalefac,dxrmsfin,dyrmsfin,dxmedianfin,dymedianfin = %s %s %s %s %s",
                 scalefac, dxrmsfin_measured, dyrmsfin_measured, dxmedianfin, dymedianfin)
     scalefacref = 1. / scalefac
     metrics["scalefacref"] = float(scalefacref)
 
-    output_resampled_gainmatched_reference_image = output_resampled_reference_image.replace(
-        ".fits", "_gainmatched.fits")
-    scale_image_data(w(output_resampled_reference_image), scalefacref,
-                     w(output_resampled_gainmatched_reference_image))
-    output_resampled_gainmatched_reference_uncert_image = \
-        output_resampled_reference_uncert_image.replace(".fits", "_gainmatched.fits")
-    scale_image_data(w(output_resampled_reference_uncert_image), scalefacref,
-                     w(output_resampled_gainmatched_reference_uncert_image))
+    with step("sfft_inputs"):
+        output_resampled_gainmatched_reference_image = output_resampled_reference_image.replace(
+            ".fits", "_gainmatched.fits")
+        scale_image_data(w(output_resampled_reference_image), scalefacref,
+                         w(output_resampled_gainmatched_reference_image))
+        output_resampled_gainmatched_reference_uncert_image = \
+            output_resampled_reference_uncert_image.replace(".fits", "_gainmatched.fits")
+        scale_image_data(w(output_resampled_reference_uncert_image), scalefacref,
+                         w(output_resampled_gainmatched_reference_uncert_image))
 
-    # NaNs in ZOGY's input images become 0.0; extreme artifacts are repaired.
-    nan_indices_sciimage = repair.replace_nans_with_value(w(filename_bkg_subbed_science_image), 0.0)
-    if settings["sci_image"]["repair_extreme_artifact_pixels"]:
-        n_artifacts_repaired = repair.repair_extreme_artifact_pixels(
-            w(filename_bkg_subbed_science_image),
-            float(settings["sci_image"]["extreme_artifact_threshold"]))
-        logger.info("Number of extreme artifact pixels repaired in science image = %s",
-                    n_artifacts_repaired)
-    nan_indices_refimage = repair.replace_nans_with_value(
-        w(output_resampled_gainmatched_reference_image), 0.0)
+        # NaNs in ZOGY's input images become 0.0; extreme artifacts are repaired.
+        nan_indices_sciimage = repair.replace_nans_with_value(w(filename_bkg_subbed_science_image), 0.0)
+        if settings["sci_image"]["repair_extreme_artifact_pixels"]:
+            n_artifacts_repaired = repair.repair_extreme_artifact_pixels(
+                w(filename_bkg_subbed_science_image),
+                float(settings["sci_image"]["extreme_artifact_threshold"]))
+            logger.info("Number of extreme artifact pixels repaired in science image = %s",
+                        n_artifacts_repaired)
+        nan_indices_refimage = repair.replace_nans_with_value(
+            w(output_resampled_gainmatched_reference_image), 0.0)
 
-    # Statistics for ZOGY (dev: the reformatted science image, and the
-    # resampled reference before gain matching).
-    stats_sci_img = statistics.fits_data_statistics_with_clipping(
-        w(reformatted_science_image_filename), 3.0, 0, saturation_level_sciimage, seed=seed)
-    std_sci_img = stats_sci_img["clippedstd"]
-    stats_ref_img = statistics.fits_data_statistics_with_clipping(
-        w(output_resampled_reference_image), 3.0, 0, saturation_level_refimage, seed=seed)
-    std_ref_img = stats_ref_img["clippedstd"]
+        # Statistics for ZOGY (dev: the reformatted science image, and the
+        # resampled reference before gain matching).
+        stats_sci_img = statistics.fits_data_statistics_with_clipping(
+            w(reformatted_science_image_filename), 3.0, 0, saturation_level_sciimage, seed=seed)
+        std_sci_img = stats_sci_img["clippedstd"]
+        stats_ref_img = statistics.fits_data_statistics_with_clipping(
+            w(output_resampled_reference_image), 3.0, 0, saturation_level_refimage, seed=seed)
+        std_ref_img = stats_ref_img["clippedstd"]
 
-    repair.replace_nans_with_value(w(reformatted_science_uncert_image_filename), std_sci_img)
-    repair.replace_nans_with_value(w(output_resampled_gainmatched_reference_uncert_image), std_ref_img)
+        repair.replace_nans_with_value(w(reformatted_science_uncert_image_filename), std_sci_img)
+        repair.replace_nans_with_value(w(output_resampled_gainmatched_reference_uncert_image), std_ref_img)
 
-    # Subpixel offset of the reference by the measured medians.
-    offsets.apply_subpixel_orthogonal_offsets(
-        w(output_resampled_gainmatched_reference_image), dxmedianfin, dymedianfin)
+        # Subpixel offset of the reference by the measured medians.
+        offsets.apply_subpixel_orthogonal_offsets(
+            w(output_resampled_gainmatched_reference_image), dxmedianfin, dymedianfin)
 
     if "rimtimsim" in science_image_filename:
         psf.transpose_image_data(w(filename_sciimage_psf_normalized))
@@ -830,14 +843,15 @@ def run(job: JobContext) -> None:
             w(output_resampled_gainmatched_reference_uncert_image),
             std_sci_img, std_ref_img, scalefacref)
         logger.info("zogy_sn,zogy_sr = %s %s", zogy_sn, zogy_sr)
-        kit.runner.run(zogy.build_zogy_command(
-            python_cmd, paths["zogy_code"],
-            filename_bkg_subbed_science_image, output_resampled_gainmatched_reference_image,
-            filename_sciimage_psf_normalized, REFERENCE_PSF_NAME,
-            reformatted_science_uncert_image_filename,
-            output_resampled_gainmatched_reference_uncert_image,
-            zogy_sn, zogy_sr, zogy_astrometric_sigma, zogy_astrometric_sigma,
-            filename_diffimage, filename_diffpsf, filename_scorrimage), cwd=work_dir)
+        with step("zogy"):
+            kit.runner.run(zogy.build_zogy_command(
+                python_cmd, paths["zogy_code"],
+                filename_bkg_subbed_science_image, output_resampled_gainmatched_reference_image,
+                filename_sciimage_psf_normalized, REFERENCE_PSF_NAME,
+                reformatted_science_uncert_image_filename,
+                output_resampled_gainmatched_reference_uncert_image,
+                zogy_sn, zogy_sr, zogy_astrometric_sigma, zogy_astrometric_sigma,
+                filename_diffimage, filename_diffpsf, filename_scorrimage), cwd=work_dir)
 
         # Mask with the resampled coverage map, restore NaNs, negate.
         filename_diffimage_masked = filename_diffimage.replace(".fits", "_masked.fits")
@@ -864,19 +878,20 @@ def run(job: JobContext) -> None:
 
         # ZOGY's catalogs detect on S_corr, as dev's do.
         psfcat_table = settings["psfcat_diffimage"]
-        zogy_catalogs = _run_catalogs(
-            differencer="zogy", kit=kit, work_dir=work_dir, settings=settings,
-            positive={"detection": filename_scorrimage_masked, "input": filename_diffimage_masked,
-                      "catalog": filename_diffimage_masked.replace(".fits", ".txt")},
-            negative={"detection": filename_scorrimage_masked_negative,
-                      "input": filename_diffimage_masked_negative,
-                      "catalog": filename_diffimage_masked_negative.replace(".fits", ".txt")},
-            weight_image=filename_diffimage_unc_masked, psf_image=filename_diffpsf,
-            sky_coords_image=reformatted_science_image_filename,
-            psfcat_names={"catalog": psfcat_table["output_zogy_psfcat_filename"],
-                          "finder": psfcat_table["output_zogy_psfcat_finder_filename"],
-                          "residual": psfcat_table["output_zogy_psfcat_residual_filename"]},
-            override_weight_type_and_filter=True, write_parquet=True, overrides=None, seed=seed)
+        with step("zogy_catalogs"):
+            zogy_catalogs = _run_catalogs(
+                differencer="zogy", kit=kit, work_dir=work_dir, settings=settings,
+                positive={"detection": filename_scorrimage_masked, "input": filename_diffimage_masked,
+                          "catalog": filename_diffimage_masked.replace(".fits", ".txt")},
+                negative={"detection": filename_scorrimage_masked_negative,
+                          "input": filename_diffimage_masked_negative,
+                          "catalog": filename_diffimage_masked_negative.replace(".fits", ".txt")},
+                weight_image=filename_diffimage_unc_masked, psf_image=filename_diffpsf,
+                sky_coords_image=reformatted_science_image_filename,
+                psfcat_names={"catalog": psfcat_table["output_zogy_psfcat_filename"],
+                              "finder": psfcat_table["output_zogy_psfcat_finder_filename"],
+                              "residual": psfcat_table["output_zogy_psfcat_residual_filename"]},
+                override_weight_type_and_filter=True, write_parquet=True, overrides=None, seed=seed)
     infobits = zogy_catalogs.bits
 
     common = dict(kit=kit, work_dir=work_dir, settings=settings, seed=seed,
@@ -909,100 +924,107 @@ def run(job: JobContext) -> None:
             **{f"xs_{sign}": summary
                for sign, summary in (sfft_catalogs.xsources or {}).get("rb", {}).items()}}))
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
-        _run_naive(**common)
+        with step("naive"):
+            _run_naive(**common)
 
     # Rows: SFFT's positive difference image, the only one registered, and its positive and
     # negative PSF-fit catalogs.
     published_image, published_unc, published_psf = (
         sfft_names["diffimage"], sfft_names["diffimage_unc"], sfft_names["diffpsf"])
     published_catalogs = sfft_catalogs
-    correlation = noise.noise_correlation(fits.getdata(w(published_image), 0))
-    if correlation is not None:
-        metrics["noise_correlation"] = correlation
-    with fits.open(w(published_image)) as hdul:
-        header = hdul[0].header.copy()
-    parquet = published_catalogs.parquet["positive"]
-    if parquet is None:
-        logger.warning("no SFFT PSF-fit catalog: the source set is empty")
-    catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
-    # dev loads the negative difference image's PSF-fit catalog too, isdiffpos false.
-    negative_parquet = published_catalogs.parquet["negative"]
-    if negative_parquet is None:
-        logger.warning("no SFFT negative PSF-fit catalog: the set has no negative sources")
-    negative_catalog = pq.read_table(w(negative_parquet)) if negative_parquet else _EMPTY_CATALOG
+    with step("source_set"):
+        correlation = noise.noise_correlation(fits.getdata(w(published_image), 0))
+        if correlation is not None:
+            metrics["noise_correlation"] = correlation
+        with fits.open(w(published_image)) as hdul:
+            header = hdul[0].header.copy()
+        parquet = published_catalogs.parquet["positive"]
+        if parquet is None:
+            logger.warning("no SFFT PSF-fit catalog: the source set is empty")
+        catalog = pq.read_table(w(parquet)) if parquet else _EMPTY_CATALOG
+        # dev loads the negative difference image's PSF-fit catalog too, isdiffpos false.
+        negative_parquet = published_catalogs.parquet["negative"]
+        if negative_parquet is None:
+            logger.warning("no SFFT negative PSF-fit catalog: the set has no negative sources")
+        negative_catalog = pq.read_table(w(negative_parquet)) if negative_parquet else _EMPTY_CATALOG
 
     diagnostics = [p for c in (sfft_catalogs, zogy_catalogs) for p in c.parquet.values() if p]
-    published = trim(work_dir, images=[
-        published_image, published_unc,
-        output_resampled_reference_cov_map, published_psf,
-        filename_bkg_subbed_science_image,
-        output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME],
-        others=diagnostics)
+    with step("trim"):
+        published = trim(work_dir, images=[
+            published_image, published_unc,
+            output_resampled_reference_cov_map, published_psf,
+            filename_bkg_subbed_science_image,
+            output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME],
+            others=diagnostics)
     metrics["gzip_s"] = published["gzip_s"]
     filename_diffimage_published = published_image + ".gz"
-    centre, corners = image_centre_and_corners(WCS(header), header["NAXIS1"], header["NAXIS2"])
-    footprint = {"ra0": centre["ra"], "dec0": centre["dec"]}
-    for n, (ra, dec) in enumerate(corners, start=1):
-        footprint[f"ra{n}"], footprint[f"dec{n}"] = ra, dec
-    key = {"dataset": job.dataset, "expid": int(job.scope["expid"]),
-           "sca": int(job.scope["sca"]), "fid": int(job.scope["fid"])}
-    diffimage = {
-        "pid": inputs.pid, **key, "rid": inputs.rid, "rfid": inputs.rfid,
-        "field": tessellation_field(centre["ra"], centre["dec"]),
-        "jd": inputs.mjdobs + 2400000.5, **footprint,
-        "infobitssci": infobits, "infobitsref": inputs.infobits_reference,
-        "filename": job.prefix + w(filename_diffimage_published).relative_to(job.path).as_posix(),
-        "checksum": _md5_of_file(w(filename_diffimage_published)), "status": STATUS_GOOD,
-    }
-    set_options = dict(max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
-                       xy_fit_max_offset=settings["xy_fit_max_offset"], **sources_prefilter(settings))
-    sources, candidates = source_set(
-        catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"], **set_options)
-    # A negative source's sid follows the positive catalog's ids, so the two number apart.
-    offset = int(max(catalog.column("id").to_pylist(), default=0))
-    negative_sources, negative_candidates = source_set(
-        negative_catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
-        isdiffpos=False, sid_offset=offset, **set_options)
-    reference_xy, reference_sky_rows = _reference_on_grid(reference_sky, header)
-    sources, in_footprint = flag_bright_footprint(sources, reference_xy, reference_sky_rows,
-                                                  zero_point)
-    negative_sources, _ = flag_bright_footprint(negative_sources, reference_xy, reference_sky_rows,
-                                                zero_point)
-    pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
-                   job.path / "diffimages.parquet")
-    # [difference] skip_loading_sources_records: the set is declared with no rows, so its
-    # binding still opens (xsources are official through it) and nothing is associated; the
-    # quality metrics below are still the computed set's.
-    skip_sources = bool(settings.get("skip_loading_sources_records", False))
-    # A sign with no catalog maps from the all-float empty catalog: take the other's types.
-    schema = negative_sources.schema if negative_sources.num_rows and not sources.num_rows \
-        else sources.schema
-    both = pa.concat_tables([sources.cast(schema), negative_sources.cast(schema)])
-    loaded_sources = both.slice(0, 0) if skip_sources else both
-    pq.write_table(loaded_sources, job.path / "sources.parquet")
+    with step("source_set"):
+        centre, corners = image_centre_and_corners(WCS(header), header["NAXIS1"], header["NAXIS2"])
+        footprint = {"ra0": centre["ra"], "dec0": centre["dec"]}
+        for n, (ra, dec) in enumerate(corners, start=1):
+            footprint[f"ra{n}"], footprint[f"dec{n}"] = ra, dec
+        key = {"dataset": job.dataset, "expid": int(job.scope["expid"]),
+               "sca": int(job.scope["sca"]), "fid": int(job.scope["fid"])}
+        diffimage = {
+            "pid": inputs.pid, **key, "rid": inputs.rid, "rfid": inputs.rfid,
+            "field": tessellation_field(centre["ra"], centre["dec"]),
+            "jd": inputs.mjdobs + 2400000.5, **footprint,
+            "infobitssci": infobits, "infobitsref": inputs.infobits_reference,
+            "filename": job.prefix + w(filename_diffimage_published).relative_to(job.path).as_posix(),
+            "checksum": _md5_of_file(w(filename_diffimage_published)), "status": STATUS_GOOD,
+        }
+        set_options = dict(max_sources=settings.get("max_sources"), xy_fit_min=settings["xy_fit_min"],
+                           xy_fit_max_offset=settings["xy_fit_max_offset"], **sources_prefilter(settings))
+        sources, candidates = source_set(
+            catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"], **set_options)
+        # A negative source's sid follows the positive catalog's ids, so the two number apart.
+        offset = int(max(catalog.column("id").to_pylist(), default=0))
+        negative_sources, negative_candidates = source_set(
+            negative_catalog, key, inputs.pid, inputs.mjdobs, header["NAXIS1"], header["NAXIS2"],
+            isdiffpos=False, sid_offset=offset, **set_options)
+        reference_xy, reference_sky_rows = _reference_on_grid(reference_sky, header)
+        sources, in_footprint = flag_bright_footprint(sources, reference_xy, reference_sky_rows,
+                                                      zero_point)
+        negative_sources, _ = flag_bright_footprint(negative_sources, reference_xy, reference_sky_rows,
+                                                    zero_point)
+        pq.write_table(pa.Table.from_pylist([diffimage], schema=DIFFIMAGES_SCHEMA),
+                       job.path / "diffimages.parquet")
+        # [difference] skip_loading_sources_records: the set is declared with no rows, so its
+        # binding still opens (xsources are official through it) and nothing is associated; the
+        # quality metrics below are still the computed set's.
+        skip_sources = bool(settings.get("skip_loading_sources_records", False))
+        # A sign with no catalog maps from the all-float empty catalog: take the other's types.
+        schema = negative_sources.schema if negative_sources.num_rows and not sources.num_rows \
+            else sources.schema
+        both = pa.concat_tables([sources.cast(schema), negative_sources.cast(schema)])
+        loaded_sources = both.slice(0, 0) if skip_sources else both
+        pq.write_table(loaded_sources, job.path / "sources.parquet")
     outputs = [("diffimages", "diffimages.parquet"), ("sources", "sources.parquet")]
     xsources_record = None
     if sfft_catalogs.xsources is not None:
-        xsources_rows, xsources_record = xsources_set(sfft_catalogs.xsources, settings, key,
-                                                      inputs.pid, inputs.mjdobs)
+        with step("xsources_set"):
+            xsources_rows, xsources_record = xsources_set(sfft_catalogs.xsources, settings, key,
+                                                          inputs.pid, inputs.mjdobs)
         pq.write_table(xsources_rows, job.path / "xsources.parquet")
         outputs.append(("xsources", "xsources.parquet"))
         metrics.update(n_xsources=xsources_rows.num_rows,
                        n_xsources_read=sum(xsources_record["read"].values()),
                        n_xsources_fitted=sum(xsources_record["fitted"].values()),
                        xsources_s=xsources_record["seconds"])
-    residual_stars = _quality_metrics(
-        metrics, found, thresh=thresh, candidates=candidates, sources=sources,
-        catalog=catalog, in_footprint=in_footprint,
-        gainmatched_reference=w(output_resampled_gainmatched_reference_image + ".gz"),
-        difference=w(filename_diffimage_published),
-        coverage=w(output_resampled_reference_cov_map + ".gz"), reference_xy=reference_xy)
+    with step("quality_metrics"):
+        residual_stars = _quality_metrics(
+            metrics, found, thresh=thresh, candidates=candidates, sources=sources,
+            catalog=catalog, in_footprint=in_footprint,
+            gainmatched_reference=w(output_resampled_gainmatched_reference_image + ".gz"),
+            difference=w(filename_diffimage_published),
+            coverage=w(output_resampled_reference_cov_map + ".gz"), reference_xy=reference_xy)
     metrics.update(n_candidates_negative=int(negative_candidates),
                    n_sources_negative=negative_sources.num_rows)
     logger.info("difference: expid %s -> pid %s, %d of %d positive and %d of %d negative sources kept",
                 key["expid"], inputs.pid, sources.num_rows, candidates, negative_sources.num_rows,
                 negative_candidates)
-    reads, catalog, association = associate(job, loaded_sources, diffimage["field"])
+    with step("associate"):
+        reads, catalog, association = associate(job, loaded_sources, diffimage["field"])
     metrics.update(n_objects_read=association["objects_read"],
                    n_objects_founded=association["founded"],
                    n_memberships=association["memberships"],
@@ -1010,41 +1032,43 @@ def run(job: JobContext) -> None:
     outputs += [("objects", "objects.parquet"), ("memberships", "memberships.parquet")]
     xcatalog = {}
     if sfft_catalogs.xsources is not None:     # the xsources' cross-match, dev's crossMatchXSources
-        xreads, xcatalog["xcatalog"], xassociation = xassociate(job, xsources_rows)
+        with step("associate"):
+            xreads, xcatalog["xcatalog"], xassociation = xassociate(job, xsources_rows)
         reads = reads + xreads
         xcatalog["xassociation"] = xassociation
         metrics.update(n_xobjects_read=xassociation["objects_read"],
                        n_xobjects_founded=xassociation["founded"],
                        n_xmemberships=xassociation["memberships"])
         outputs += [("xobjects", "xobjects.parquet"), ("xmemberships", "xmemberships.parquet")]
-    job.write_manifest(
-        outputs,
-        empty_ok=("sources", "xsources"),       # a difference with nothing above the cut
-        reads=reads, catalog=catalog, association=association, **xcatalog,
-        difference={
-            "pid": inputs.pid, "rid": inputs.rid, "rfid": inputs.rfid,
-            "zero_point": {"value": zero_point, "source": zero_point_source},
-            "fwhm_arcsec": {"science": fwhm_sci, "reference": fwhm_ref},
-            "scalefacref": float(scalefacref),
-            "registration_residual": {"x_rms": dxrmsfin_measured, "y_rms": dyrmsfin_measured,
-                                      "x_median": float(dxmedianfin),
-                                      "y_median": float(dymedianfin)},
-            "zogy_astrometric_sigma": zogy_astrometric_sigma,
-            "differencer": "sfft",
-            "source_counts": {"sextractor": published_catalogs.sextractor,
-                              "photutils": published_catalogs.photutils},
-            "zogy_source_counts": {"sextractor": zogy_catalogs.sextractor,
-                                   "photutils": zogy_catalogs.photutils} if run_zogy else None,
-            "sfft_source_counts": {"sextractor": sfft_catalogs.sextractor,
-                                   "photutils": sfft_catalogs.photutils},
-            "sources_before_cap": {"positive": candidates, "negative": negative_candidates},
-            "sources_kept": {"positive": sources.num_rows, "negative": negative_sources.num_rows},
-            "sources_loaded": not skip_sources,
-            "rb": sfft_catalogs.rb, "rb_negative": sfft_catalogs.rb_negative,
-            "xsources": xsources_record,
-            "infobits_science_l2": inputs.infobits_science,
-            "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
-        metrics=metrics)
+    with step("manifest"):
+        job.write_manifest(
+            outputs,
+            empty_ok=("sources", "xsources"),       # a difference with nothing above the cut
+            reads=reads, catalog=catalog, association=association, **xcatalog,
+            difference={
+                "pid": inputs.pid, "rid": inputs.rid, "rfid": inputs.rfid,
+                "zero_point": {"value": zero_point, "source": zero_point_source},
+                "fwhm_arcsec": {"science": fwhm_sci, "reference": fwhm_ref},
+                "scalefacref": float(scalefacref),
+                "registration_residual": {"x_rms": dxrmsfin_measured, "y_rms": dyrmsfin_measured,
+                                          "x_median": float(dxmedianfin),
+                                          "y_median": float(dymedianfin)},
+                "zogy_astrometric_sigma": zogy_astrometric_sigma,
+                "differencer": "sfft",
+                "source_counts": {"sextractor": published_catalogs.sextractor,
+                                  "photutils": published_catalogs.photutils},
+                "zogy_source_counts": {"sextractor": zogy_catalogs.sextractor,
+                                       "photutils": zogy_catalogs.photutils} if run_zogy else None,
+                "sfft_source_counts": {"sextractor": sfft_catalogs.sextractor,
+                                       "photutils": sfft_catalogs.photutils},
+                "sources_before_cap": {"positive": candidates, "negative": negative_candidates},
+                "sources_kept": {"positive": sources.num_rows, "negative": negative_sources.num_rows},
+                "sources_loaded": not skip_sources,
+                "rb": sfft_catalogs.rb, "rb_negative": sfft_catalogs.rb_negative,
+                "xsources": xsources_record,
+                "infobits_science_l2": inputs.infobits_science,
+                "refpsf": refpsf_record, "residual_stars": residual_stars, "published": published},
+            metrics=metrics)
 
 
 def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[list, dict, dict]:
@@ -1438,7 +1462,8 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         s["sfft_bsmask_value"], s["sfft_bsmask_radius"],
         bool(s["sfft_use_gainmatch_catalogs"]), bool(s["sfft_use_segmentation"]))
     # Checked like every tool: SFFT is the published differencer, so no fallback to ZOGY.
-    kit.runner.run_shell(sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir)
+    with step("sfft_solve"):
+        kit.runner.run_shell(sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir)
 
     def w(name: str) -> Path:
         return work_dir / name
@@ -1448,50 +1473,53 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
     # dev 8107a083: mask SFFT's images with the resampled coverage map and
     # restore the zeroed NaNs, as for ZOGY and naive. SFFT writes the final
     # "_masked" names, so each is renamed "_unmasked" and masked back.
-    for name in [diffimage] + ([cconvdiff] if crossconv_flag else []):
-        unmasked = name.replace("_masked.fits", "_unmasked.fits")
-        w(name).replace(w(unmasked))
-        masking.mask_difference_image_with_resampled_reference_cov_map(
-            w(unmasked), w(resampled_cov_map), w(name), thresh)
-        _restore_nans(w(name), *nan_indices)
+    with step("sfft_mask"):
+        for name in [diffimage] + ([cconvdiff] if crossconv_flag else []):
+            unmasked = name.replace("_masked.fits", "_unmasked.fits")
+            w(name).replace(w(unmasked))
+            masking.mask_difference_image_with_resampled_reference_cov_map(
+                w(unmasked), w(resampled_cov_map), w(name), thresh)
+            _restore_nans(w(name), *nan_indices)
 
-    diffimage_negative = diffimage.replace(".fits", "_negative.fits")
-    scale_image_data(w(diffimage), -1.0, w(diffimage_negative))
-    cconvdiff_negative = cconvdiff.replace(".fits", "_negative.fits")
-    if crossconv_flag:
-        scale_image_data(w(cconvdiff), -1.0, w(cconvdiff_negative))
+        diffimage_negative = diffimage.replace(".fits", "_negative.fits")
+        scale_image_data(w(diffimage), -1.0, w(diffimage_negative))
+        cconvdiff_negative = cconvdiff.replace(".fits", "_negative.fits")
+        if crossconv_flag:
+            scale_image_data(w(cconvdiff), -1.0, w(cconvdiff_negative))
 
-    diffimage_unc = names["diffimage_unc"]
-    uncertainty.compute_diffimage_uncertainty(
-        gain_times_exptime, w(filename_bkg_subbed_science_image), w(gainmatched_reference),
-        w(resampled_cov_map), thresh, w(diffimage), w(diffimage_unc), seed=seed)
+        diffimage_unc = names["diffimage_unc"]
+        uncertainty.compute_diffimage_uncertainty(
+            gain_times_exptime, w(filename_bkg_subbed_science_image), w(gainmatched_reference),
+            w(resampled_cov_map), thresh, w(diffimage), w(diffimage_unc), seed=seed)
 
     # dev detects on the cross-convolved image when crossconv_flag is set,
     # and names the negative catalog after its detection image (8f8ea43f).
     detection, detection_negative = (
         (cconvdiff, cconvdiff_negative) if crossconv_flag else (diffimage, diffimage_negative))
     psfcat_table = settings["psfcat_diffimage"]
-    catalogs = _run_catalogs(
-        differencer="sfft", kit=kit, work_dir=work_dir, settings=settings,
-        positive={"detection": detection, "input": diffimage,
-                  "catalog": detection.replace(".fits", ".txt")},
-        negative={"detection": detection_negative, "input": diffimage_negative,
-                  "catalog": detection_negative.replace(".fits", ".txt")},
-        weight_image=diffimage_unc, psf_image=names["diffpsf"],
-        sky_coords_image=reformatted_science_image,
-        psfcat_names={"catalog": psfcat_table["output_sfft_psfcat_filename"],
-                      "finder": psfcat_table["output_sfft_psfcat_finder_filename"],
-                      "residual": psfcat_table["output_sfft_psfcat_residual_filename"]},
-        override_weight_type_and_filter=True, write_parquet=True,
-        overrides=sextractor.detection_overrides(
-            settings["sextractor_diffimage_sfft"], crossconv_flag, settings["paths"]["cfg_path"]),
-        seed=seed)
+    with step("sfft_catalogs"):
+        catalogs = _run_catalogs(
+            differencer="sfft", kit=kit, work_dir=work_dir, settings=settings,
+            positive={"detection": detection, "input": diffimage,
+                      "catalog": detection.replace(".fits", ".txt")},
+            negative={"detection": detection_negative, "input": diffimage_negative,
+                      "catalog": detection_negative.replace(".fits", ".txt")},
+            weight_image=diffimage_unc, psf_image=names["diffpsf"],
+            sky_coords_image=reformatted_science_image,
+            psfcat_names={"catalog": psfcat_table["output_sfft_psfcat_filename"],
+                          "finder": psfcat_table["output_sfft_psfcat_finder_filename"],
+                          "residual": psfcat_table["output_sfft_psfcat_residual_filename"]},
+            override_weight_type_and_filter=True, write_parquet=True,
+            overrides=sextractor.detection_overrides(
+                settings["sextractor_diffimage_sfft"], crossconv_flag, settings["paths"]["cfg_path"]),
+            seed=seed)
     # dev e4a49c97 and c32e28f6: sumrat, nneg and nbad on every SFFT PSF-fit source, before the
     # cap, each catalog with the image its sources are positive in.
     start = time.perf_counter()
-    for sign, image in (("positive", diffimage), ("negative", diffimage_negative)):
-        if catalogs.parquet[sign]:
-            columns.add_pixel_columns(w(catalogs.parquet[sign]), w(image), settings)
+    with step("pixel_columns"):
+        for sign, image in (("positive", diffimage), ("negative", diffimage_negative)):
+            if catalogs.parquet[sign]:
+                columns.add_pixel_columns(w(catalogs.parquet[sign]), w(image), settings)
     catalogs.pixel_columns_s = round(time.perf_counter() - start, 3)
     if rb is not None:
         classifier, filter_name = rb
@@ -1549,7 +1577,8 @@ def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: 
     for sign, (catalog_name, image) in signs.items():
         catalog = xsources.read_catalog(work_dir / catalog_name)
         data = fits.getdata(work_dir / image, 0)
-        extra, fitted = xsources.extra_columns(catalog, data, error, psf_data, settings)
+        with step("xsources_fit"):
+            extra, fitted = xsources.extra_columns(catalog, data, error, psf_data, settings)
         out["fitted"][sign] = fitted
         if rb is not None and len(catalog):
             classifier, filter_name = rb
@@ -1622,8 +1651,9 @@ def _score_rb(classifier, filter_name: str, catalog: Path, science: Path, refere
     output = catalog.with_name(catalog.stem + "_rubrat.parquet")
     before_counts = dict(classifier.model.counts)
     start = time.perf_counter()
-    summary = realbogus.add_rb_columns(catalog, output, science, reference, difference,
-                                       filter_name, classifier)
+    with step("rb"):
+        summary = realbogus.add_rb_columns(catalog, output, science, reference, difference,
+                                           filter_name, classifier)
     seconds = round(time.perf_counter() - start, 3)
     session = {k: classifier.model.counts[k] - before_counts[k] for k in before_counts}
     before = pq.read_table(catalog, columns=["id"]).column("id")

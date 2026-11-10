@@ -92,6 +92,7 @@ from astropy.wcs import WCS
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.foundation.steps import step
 from rapidpipe.science.catalogs.readers import CATALOG_KINDS, mirror_root
 from rapidpipe.science.catalogs.store import GAIA_INFO, LVS_INFO, LVS_PARQUET, MANIFEST_NAME, Store
 from rapidpipe.science.difference import xsources
@@ -153,7 +154,8 @@ def run(job: JobContext) -> None:
     tables: dict[str, list[dict] | pa.Table] = {}
     recorded = {"provenance": PROVENANCE}
     for epoch in epochs:
-        epoch_tables, epoch_record = _epoch(job, settings, source, epoch)
+        with step("epoch"):
+            epoch_tables, epoch_record = _epoch(job, settings, source, epoch)
         tables.update(epoch_tables)
         recorded.update(epoch_record)
     if "reference" in scope:
@@ -168,7 +170,8 @@ def run(job: JobContext) -> None:
             spec = scope[kind]
             if spec.get("name", kind) != kind:
                 raise ValueError(f"a {kind} catalog is named {kind!r}, not {spec['name']!r}")
-            location, recorded[kind] = _mirror(kind, spec["prefix"], partial=bool(spec.get("partial")))
+            with step("catalog_mirror"):
+                location, recorded[kind] = _mirror(kind, spec["prefix"], partial=bool(spec.get("partial")))
             catalogs.append({"dataset": job.dataset, "name": kind, "version": spec["version"],
                              "location": location})
     if catalogs:
