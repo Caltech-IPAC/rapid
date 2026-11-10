@@ -62,11 +62,6 @@ def _forced(aid: int, field: int, forced_id: int) -> dict:
             "science_flux": 1.0 / 3.0, "science_fluxerr": 1.0, "flags": 0, "time_proc": 0.0}
 
 
-def _analyses(conn, tables) -> dict[str, int]:
-    return dict(_rows(conn, "SELECT relname, analyze_count FROM pg_stat_user_tables"
-                            " WHERE relname = ANY(%s)", (list(tables),)))
-
-
 def _xobject(xaid: int, field: int) -> dict:
     return {"xaid": xaid, "dataset": DATASET, "survey": SURVEY, "field": field,
             "ra0": 20.0 + xaid, "dec0": -5.0, "flux0": 7.5}
@@ -96,7 +91,6 @@ def _publish_two_fields(conn, tmp_path) -> tuple[int, int, int]:
 
 def test_each_row_lands_in_its_objects_field_child_and_the_parents_hold_none(connect, tmp_path):
     conn = connect()
-    before = _analyses(conn, FIELD_PARENTS)
     _, diff, pkt = _publish_two_fields(conn, tmp_path)
     for parent in FIELD_PARENTS:
         assert _children(conn, parent) == [f"{parent}_7", f"{parent}_9"]
@@ -110,10 +104,6 @@ def test_each_row_lands_in_its_objects_field_child_and_the_parents_hold_none(con
     # COPY keeps a NaN, a null and every digit of a float.
     assert _rows(conn, "SELECT psf_flux = 'NaN', psf_fluxerr, science_flux FROM forced_7") == [
         (True, None, 1.0 / 3.0)]
-    # The publisher analysed the children it loaded, not the parents.
-    assert _analyses(conn, FIELD_PARENTS) == before
-    assert _analyses(conn, [f"{p}_{f}" for p in FIELD_PARENTS for f in (7, 9)]) == {
-        f"{p}_{f}": 1 for p in FIELD_PARENTS for f in (7, 9)}
 
 
 def test_the_parent_refuses_a_row_and_a_child_refuses_another_field(connect):
@@ -206,8 +196,6 @@ def test_a_membership_attached_to_an_object_in_a_field_with_no_memberships_child
         ("memberships_1", a, 7, 1)]
     assert _rows(conn, "SELECT parent, field FROM job_fields WHERE job = %s ORDER BY 1", (b,)) == [
         ("memberships", 1)]
-    assert _rows(conn, "SELECT last_analyze IS NOT NULL FROM pg_stat_user_tables"
-                       " WHERE relname = 'memberships_1'") == [(True,)]
 
 
 def test_the_readers_give_the_rows_the_parents_give(connect, tmp_path):

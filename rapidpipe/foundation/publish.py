@@ -112,12 +112,17 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     reconcile its catalogs; load each output into its table, or its
     children by ``COPY``, with ``job`` set; record the attempt, manifest,
     state and ``ended`` (the commit's moment, which the caller moves to
-    its own end once the ``ANALYZE`` statements are done); then,
-    inside a savepoint, bind the job's ``expects`` keys if its run is live
-    for its survey and dataset, recording a refusal on the job instead
-    when the binding is refused. ``ANALYZE`` every table it wrote to after
-    commit: the loaded tables (of a parent of children, the children it
-    loaded, never the parent), and ``official`` when it bound.
+    its own end); then, inside a savepoint, bind the job's ``expects``
+    keys if its run is live for its survey and dataset, recording a
+    refusal on the job instead when the binding is refused.
+
+    It runs no ``ANALYZE``: autovacuum keeps the tables' statistics. Each
+    ``ANALYZE`` takes its table's self-conflicting lock until its
+    transaction ends, so a post-commit ``ANALYZE`` serialised every
+    publisher behind the first table they shared (run 215: 794 sessions
+    queued, 376 published differences held on their hosts to the attempt
+    timeout); the stages' reads of a child plan the same with or without
+    its statistics (publish-analyze's plan check).
 
     Returns ``{"job", "attempt", "published", "group", "refusal", "live"}``:
     ``published`` is whether this call published, ``group`` the automatic
@@ -183,7 +188,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 execute_values(cur, "INSERT INTO job_inputs (job, kind, product, key, source_job)"
                                " VALUES %s", [(job_id, "input", r["product"], Json(r["key"]),
                                                r["source_job"]) for r in reads])
-            # ended with the state, so a host lost during the ANALYZEs below (a Spot reclaim)
+            # ended with the state, so a host lost before the caller's own write (a Spot reclaim)
             # still leaves the published row an end; the caller's later write moves it to its own.
             cur.execute("UPDATE jobs SET state = 'published', published_attempt = %s,"
                         " manifest = %s, ended = clock_timestamp() WHERE id = %s",
@@ -195,17 +200,6 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     except BaseException:
         conn.rollback()
         raise
-    with conn.cursor() as cur:
-        for table in sorted(set(tables) | ({"official"} if group is not None else set())):
-            if table in CHILDREN:
-                # The children loaded, not the parent: a parent's ANALYZE samples every
-                # child, which grows with their number, and the pipeline reads a set's rows
-                # from its child (rapidpipe.foundation.children), whose own statistics plan it.
-                for child in sorted(children.get(table, {}).values()):
-                    cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(child)))
-            else:
-                cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(table)))
-    conn.commit()
     return {"job": job_id, "attempt": attempt, "published": True, "group": group,
             "refusal": refusal, "live": live}
 
