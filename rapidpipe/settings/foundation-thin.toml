@@ -192,14 +192,16 @@ max_submissions_per_pass = 1000
 # resourceRequirements override of the one job definition's 24 GiB), the
 # 2026-10-21 ramp's measured peaks times about two, rounded (PR 308: intake
 # 910 MiB, reference 2,831, difference 16,125, associate 238, packet 867).
-# The difference keeps the definition's 24 GiB and its headroom. A stage
-# with no key gets the job definition's value. The packet stage's from the
-# 2,000-packet sets of `max_alerts` 2000: RimTimSim F087's five epochs
+# A stage with no key gets the job definition's value. The packet stage's
+# from the 2,000-packet sets of `max_alerts` 2000: RimTimSim F087's five epochs
 # 2,246 to 2,443 MiB, rising with the forced window (run 180, every one
-# OOM at 2048), F213's 2,094 (run 179).
+# OOM at 2048), F213's 2,094 (run 179). The difference is the agreed
+# 15 GiB shape (Ben, 2026-11-09), four jobs per 64 GiB node: the GBTDS
+# fakesrc window's 1,980 differences at 15,360 MiB, cgroup anon peak median
+# 14,939 MiB, max 15,050, no exit 137 (run 215).
 intake = 2048
 reference = 6144
-difference = 24576
+difference = 15360
 packet = 5120
 # New: the psf stage holds one 178.6 MB ePSF reference and its 42 MB array.
 psf = 2048
