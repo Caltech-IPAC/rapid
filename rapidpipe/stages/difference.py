@@ -266,9 +266,9 @@ REFERENCE_CATALOG_COLUMNS = ["ALPHAWIN_J2000", "DELTAWIN_J2000", "FLUX_AUTO", "F
 
 #: `dev`'s pass 2 uses the field's inclusion cone only for a tile with this many neighbours.
 #: The fields' objects of the job's run as they stand: every published difference job's founded ones,
-#: read from those fields' children of ``objects`` (``objects_in``), never the parent.
-OBJECTS_SQL = ("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects_in(%s::integer[]) o"
-               " JOIN jobs j ON j.id = o.job WHERE j.run = %s AND o.dataset = %s AND o.survey = %s")
+#: read from those fields' children of ``objects`` (``objects_in`` of the run), never the parent.
+OBJECTS_SQL = ("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects_in(%s::integer[], %s) o"
+               " WHERE o.dataset = %s AND o.survey = %s")
 
 OBJECTS_SCHEMA = pa.schema([
     ("aid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),
@@ -281,8 +281,8 @@ MEMBERSHIPS_SCHEMA = pa.schema([
 ])
 
 #: The fields' xobjects of the job's run as they stand, from those fields' children of ``xobjects``.
-XOBJECTS_SQL = ("SELECT o.job, o.xaid, o.field, o.ra0, o.dec0 FROM xobjects_in(%s::integer[]) o"
-                " JOIN jobs j ON j.id = o.job WHERE j.run = %s AND o.dataset = %s AND o.survey = %s")
+XOBJECTS_SQL = ("SELECT o.job, o.xaid, o.field, o.ra0, o.dec0 FROM xobjects_in(%s::integer[], %s) o"
+                " WHERE o.dataset = %s AND o.survey = %s")
 
 XOBJECTS_SCHEMA = pa.schema([
     ("xaid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),

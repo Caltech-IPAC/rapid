@@ -98,7 +98,7 @@ def test_the_reconcile_reads_every_locked_field_and_an_old_manifest_its_one_fiel
     cur = Recorder()
     between(cur, JOB, 3, {"dataset": "D", "survey": "S", "fields": [8, 7], "radius": R}, [40, 41])
     ((statement, params),) = cur.calls
-    assert "objects_in(%s::integer[])" in statement and params == ([7, 8], 3, "D", "S", JOB, [40, 41])
+    assert "objects_in(%s::integer[], %s)" in statement and params == ([7, 8], 3, "D", "S", JOB, [40, 41])
     assert fields({"dataset": "D", "survey": "S", "field": 7, "radius": R}) == [7]
 
 

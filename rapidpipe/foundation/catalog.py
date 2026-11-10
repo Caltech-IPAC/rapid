@@ -75,12 +75,11 @@ def between(cur, job: int, run: int, catalog: dict, read_jobs: list[int],
     A job publishes all its objects in one transaction, so a founding job
     the read saw had published every object it has; one founded since is
     one whose job the read did not see. Read from those fields' children of
-    ``table`` (``objects_in`` or ``xobjects_in``), never the parent.
+    ``table`` (``objects_in`` or ``xobjects_in`` of the run), never the parent.
     """
     ident = CATALOGS[table][2]
-    cur.execute(f"SELECT o.job, o.{ident}, o.ra0, o.dec0, o.field FROM {table}_in(%s::integer[]) o"
-                " JOIN jobs j ON j.id = o.job"
-                " WHERE j.run = %s AND o.dataset = %s AND o.survey = %s"
+    cur.execute(f"SELECT o.job, o.{ident}, o.ra0, o.dec0, o.field FROM {table}_in(%s::integer[], %s) o"
+                " WHERE o.dataset = %s AND o.survey = %s"
                 f" AND o.job <> %s AND NOT o.job = ANY(%s) ORDER BY o.job, o.{ident}",
                 (fields(catalog), run, catalog["dataset"], catalog["survey"], job,
                  list(read_jobs)))
