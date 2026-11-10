@@ -206,6 +206,16 @@ packet = 5120
 # New: the psf stage holds one 178.6 MB ePSF reference and its 42 MB array.
 psf = 2048
 
+[batch.vcpus]
+# New, not dev's: the vCPUs each stage's Batch job asks for (a
+# resourceRequirements override of the job definition's 1); a stage with no
+# key gets the job definition's. The difference asks for its share of the
+# host at the 15,360 MiB shape, 16 vCPU over 8 jobs on an r7i.4xlarge, so
+# no packing step is lost on any listed type, and its onnxruntime session
+# runs as many intra-op threads (rapid PR 574) on the vCPU that idled beside
+# each job (difference-vcpus: measured on rapid_docs' findings page).
+difference = 2
+
 # [batch.spot] (a table, absent by default): Spot as a probe, never
 # production (Ben, 2026-10-24). `queue` names the Spot job queue; a stage's
 # submission goes there while a pass has more than `backlog` (an integer) of

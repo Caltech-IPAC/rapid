@@ -28,7 +28,7 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   (or ``--job <id>`` in their place, a new attempt of an existing job),
   records the job and submits one Batch job running ``job run --job <id>``
   in the image (``rapidpipe.launch.submit``) asking for the run's
-  ``[batch.memory_mib]`` memory for the stage, recording the Batch job id
+  ``[batch.memory_mib]`` memory and ``[batch.vcpus]`` vCPUs for the stage, recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
 - ``job wait --job N [N ...] [--timeout S] [--interval S]`` blocks until
   every named job is ``published`` or ``failed``, reconciling their runs
@@ -337,6 +337,7 @@ def _run_job(args: argparse.Namespace) -> int:
                 spot = launch.spot(settings)
                 batch_job = launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
                                           memory_mib=launch.memory_mib(settings, stage),
+                                          vcpus=launch.vcpus(settings, stage),
                                           environment_extra=launch.job_environment(settings),
                                           queue=args.job_queue,
                                           one_attempt=bool(spot) and args.job_queue == spot["queue"])
@@ -421,6 +422,7 @@ def _loop(args: argparse.Namespace) -> int:
                                            item["inputs"], item["expects"])
             launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
                           memory_mib=launch.memory_mib(settings, item["stage"]),
+                          vcpus=launch.vcpus(settings, item["stage"]),
                           environment_extra=launch.job_environment(settings),
                           queue=item.get("queue") or args.job_queue, one_attempt="queue" in item)
         return job_id
@@ -428,7 +430,8 @@ def _loop(args: argparse.Namespace) -> int:
     def rerun(job_id: int, stage: str) -> None:          # always the prompt queue
         with connect_loop() as conn:
             launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
-                          memory_mib=launch.memory_mib(settings, stage), name_suffix=loop.RERUN_SUFFIX,
+                          memory_mib=launch.memory_mib(settings, stage), vcpus=launch.vcpus(settings, stage),
+                          name_suffix=loop.RERUN_SUFFIX,
                           environment_extra=launch.job_environment(settings), queue=args.job_queue)
 
     def publish() -> dict:
