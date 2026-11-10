@@ -127,6 +127,19 @@ def test_submit_asks_for_the_stages_memory_and_the_definitions_stands_without_a_
     assert launch.memory_mib({}, "intake") is None
 
 
+def test_submit_asks_for_the_stages_vcpus_beside_its_memory_and_the_definitions_stand_without_keys(batch_env):
+    settings = {"batch": {"memory_mib": {"difference": 15360}, "vcpus": {"difference": 2}}}
+    batch = _Batch()
+    launch.submit(7, "difference", job_definition="definition", client=batch,
+                  memory_mib=launch.memory_mib(settings, "difference"), vcpus=launch.vcpus(settings, "difference"))
+    launch.submit(8, "packet", job_definition="definition", client=batch,
+                  memory_mib=launch.memory_mib(settings, "packet"), vcpus=launch.vcpus(settings, "packet"))
+    assert batch.submitted[0]["containerOverrides"]["resourceRequirements"] == \
+        [{"type": "MEMORY", "value": "15360"}, {"type": "VCPU", "value": "2"}]
+    assert "resourceRequirements" not in batch.submitted[1]["containerOverrides"]
+    assert launch.vcpus({}, "difference") is None
+
+
 def test_submit_passes_the_database_secret_when_the_submitter_names_one(batch_env, monkeypatch):
     monkeypatch.setenv("RAPID_DB_SECRET_ID", "secret-name")
     batch = _Batch()

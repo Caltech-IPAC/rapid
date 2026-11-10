@@ -32,7 +32,7 @@ from rapidpipe.db.connection import parameter_tree_environment
 from rapidpipe.foundation import attempts, publish_kafka
 from rapidpipe.foundation.local import failure_reason
 
-__all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "spot", "submit"]
+__all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "spot", "submit", "vcpus"]
 
 
 class LaunchError(Exception):
@@ -46,7 +46,7 @@ def batch_client() -> Any:
 
 
 def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, client: Any = None,
-           memory_mib: int | None = None, name_suffix: str = "",
+           memory_mib: int | None = None, vcpus: int | None = None, name_suffix: str = "",
            environment_extra: dict[str, str] | None = None, queue: str | None = None,
            one_attempt: bool = False) -> str:
     """Submit job ``job_id`` (of ``stage``) to Batch as ``job run --job <id>``; return the Batch job id.
@@ -61,7 +61,8 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     ``failed`` row becomes ``launched`` again, so a loop started at once counts it
     pending, not failed, before its container starts. With
     ``memory_mib`` (the run's ``[batch.memory_mib]`` value for the stage, :func:`memory_mib`),
-    the job asks for that memory instead of the job definition's. ``name_suffix`` ends
+    the job asks for that memory instead of the job definition's, and with ``vcpus`` (its
+    ``[batch.vcpus]`` value, :func:`vcpus`) for that many vCPUs. ``name_suffix`` ends
     the Batch job's name (the loop's rerun marks its one automatic rerun so).
     ``environment_extra`` (:func:`job_environment`) is added to the job's environment.
     When the Batch request itself raises, the row (with ``conn``) is marked
@@ -80,8 +81,10 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     environment = [{"name": k, "value": v} for k, v in values.items()]
     prefix = os.environ.get("RAPIDPIPE_BATCH_JOB_NAME_PREFIX") or "rapid"
     overrides = {"command": ["job", "run", "--job", str(job_id)], "environment": environment}
-    if memory_mib is not None:
-        overrides["resourceRequirements"] = [{"type": "MEMORY", "value": str(int(memory_mib))}]
+    resources = [{"type": kind, "value": str(int(value))}
+                 for kind, value in (("MEMORY", memory_mib), ("VCPU", vcpus)) if value is not None]
+    if resources:
+        overrides["resourceRequirements"] = resources
     request = {"jobName": f"{prefix}-{stage}-{job_id}{name_suffix}", "jobQueue": queue,
                "jobDefinition": job_definition, "containerOverrides": overrides}
     if one_attempt:
@@ -140,3 +143,8 @@ def spot(settings: dict) -> dict | None:
 def memory_mib(settings: dict, stage: str) -> int | None:
     """The run's ``[batch.memory_mib]`` value for ``stage``; ``None`` (the job definition's) without one."""
     return settings.get("batch", {}).get("memory_mib", {}).get(stage)
+
+
+def vcpus(settings: dict, stage: str) -> int | None:
+    """The run's ``[batch.vcpus]`` value for ``stage``; ``None`` (the job definition's) without one."""
+    return settings.get("batch", {}).get("vcpus", {}).get(stage)
