@@ -147,9 +147,9 @@ def world(connect, tmp_path):
     made = w.recipe(run)
     failed = w.job(run, "packet", {"epoch": 2, "sca": 1}, {}, published=False)
     w.rows("UPDATE jobs SET state = 'failed', exit_code = 70 WHERE id = %s RETURNING id", (failed,))
-    # The publisher analyses the product tables it loads; autovacuum analyses
-    # the rest on a running database. Here, at once, so the planner costs the
-    # views' bookkeeping joins from statistics rather than defaults.
+    # Autovacuum analyses the tables on a running database. Here, at once, so
+    # the planner costs the views' bookkeeping joins from statistics rather
+    # than defaults.
     w.conn.autocommit = True
     with w.conn.cursor() as cur:
         cur.execute("ANALYZE")
