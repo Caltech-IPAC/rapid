@@ -1,7 +1,9 @@
 """The reference stage under ``run(job)``, on three synthetic frames with the fake tools.
 
-Contracts: a job's named ``l2files`` rows are coadded in ``mjdobs`` order
-and the stage writes ``refimages``, ``refimimages`` and ``refimcatalogs``
+Contracts: a job's named ``l2files`` rows are coadded in ``mjdobs`` order,
+a tie broken by distance from the tile centre and then file name, so the
+same frames under other rids give the same order and cut; and the stage
+writes ``refimages``, ``refimimages`` and ``refimcatalogs``
 with exactly their tables' columns from ``database/schema.sql``, all three
 carrying the one ``rfid`` drawn for the job, the files under the attempt's
 prefix and the header stamped with the job; frames past ``max_frames`` are
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 import hashlib
 import json
 import re
@@ -31,7 +34,7 @@ from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation.local import JobContext
 from tests.support import fakereftools
 from tests.support.fakedifftools import cdf_dir
-from tests.support.fakereftools import FRAMES, RTID, write_frames
+from tests.support.fakereftools import FRAMES, RTID, TILE_CENTRE, write_frames
 
 REPO = Path(__file__).resolve().parents[2]
 THIN = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
@@ -57,7 +60,7 @@ def settings(**tables) -> dict:
     return {"reference": body}
 
 
-def fake_connect(rows: dict[int, tuple[int, str]], queries: list):
+def fake_connect(rows: dict[int, tuple[int, str, float, float]], queries: list):
     """A connection answering the filter, each ``l2files`` row by source job, and ``nextval``."""
     class Cursor:
         def __enter__(self):
@@ -111,7 +114,7 @@ def run_reference(tmp_path: Path, frames: list[Path], *, order=(2, 0, 1), body=N
         key = {"dataset": "D", "expid": 100 + index, "sca": SCA, "fid": FID, **(key_override or {})}
         inputs.append({"kind": "input", "product": "l2files", "key": key,
                        "source_job": source_job, "binding": None})
-        rows[source_job] = (7000 + index, frames[index].as_uri())
+        rows[source_job] = (7000 + index, frames[index].as_uri(), *TILE_CENTRE)
     job = JobContext(job=5, run=3, stage="reference", scope={"field": RTID, "fid": FID, "sca": SCA},
                      survey="S", dataset="D", settings=body or settings(), inputs=inputs,
                      attempt=1, prefix=prefix.as_uri() + "/", connect=fake_connect(rows, []))
@@ -164,6 +167,23 @@ def test_frames_past_max_frames_are_not_coadded_and_are_named(tmp_path, frames):
     prefix = run_reference(tmp_path, frames, body=settings(selection={"max_frames": 2}))
     assert sorted(r["rid"] for r in read(prefix, "refimimages")) == [7000, 7001]
     assert json.loads((prefix / "manifest.json").read_text())["reference"]["not_coadded"] == [7002]
+
+
+def test_tied_frames_order_and_cut_by_distance_then_name_whatever_their_rids(frames, monkeypatch):
+    """Two runs' rows of the same three frames, one ``mjdobs``, other ``rid``\\ s in another order."""
+    read_header = reference.prep.read_frame_header
+    monkeypatch.setattr(reference.prep, "read_frame_header",
+                        lambda path: dataclasses.replace(read_header(path), mjdobs=61679.0))
+    checked = reference.check_settings(settings(selection={"max_frames": 2})["reference"])
+    far, near, also_near = (f.as_uri() for f in frames)       # frames 1 and 2 tie on distance too
+    one = [(1, far, 0.2), (2, near, 0.1), (3, also_near, 0.1)]
+    other = [(9, also_near, 0.1), (8, near, 0.1), (7, far, 0.2)]
+    names = {}
+    for rows in (one, other):
+        coadded, cut = reference.read_frames(rows, "W146", checked)
+        by_rid = {rid: uri for rid, uri, _ in rows}
+        names[len(names)] = ([f.name for f in coadded], [by_rid[rid] for rid in cut])
+    assert names[0] == names[1] == ([FRAMES[1][1], FRAMES[2][1]], [far])
 
 
 @pytest.mark.parametrize("case", ["too few", "another filter"])

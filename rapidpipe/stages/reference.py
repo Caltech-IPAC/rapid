@@ -31,7 +31,11 @@ scope's ``fid``, of any SCA (`dev`'s launcher takes every L2 file whose
 ``overlapfields`` list the field; the scope's ``sca`` is the first SCA the
 reference serves): the frames, read through
 :func:`rapidpipe.foundation.prefix.get` by the row's ``filename``, coadded
-in ``mjdobs`` order (`dev`'s launcher orders by mjdobs, then distance). At
+in ``mjdobs`` order, a tie broken by the frame centre's distance from the
+tile centre, nearest first, as `dev`'s launcher orders them
+(``get_overlapping_l2files``: ``order by b.mjdobs, dist``), then by file
+name, so the order and the ``max_frames`` cut follow the inputs, never the
+run's rids (reference-frame-order). At
 least ``[selection] min_frames``; frames past ``max_frames`` are not
 coadded and are named in the manifest. Every frame's HDU 1 ``FILTER``,
 normalised to the RAPID spelling, must be the scope's filter.
@@ -94,7 +98,7 @@ from rapidpipe.foundation.steps import step
 from rapidpipe.science.difference.sextractor import parse_ascii_text_sextractor_catalog
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.reference import awaicgen, catalog, header, infobits, measure, prep
-from rapidpipe.science.spatial import field_center
+from rapidpipe.science.spatial import compute_angular_separation, field_center
 
 logger = logging.getLogger(__name__)
 
@@ -248,9 +252,13 @@ def _rejected(reason: str) -> CommandExit:
     return CommandExit(int(ExitCode.INPUT_REJECTED), reason)
 
 
-def _read(job: JobContext) -> tuple[str, list[tuple[int, str]], int]:
-    """The scope's filter name, each named L2 row's ``(rid, filename)``, and a new ``rfid``."""
+def _read(job: JobContext) -> tuple[str, list[tuple[int, str, float]], int]:
+    """The scope's filter name, each named L2 row's ``(rid, filename, distance)``, and a new ``rfid``.
+
+    ``distance`` is the row's centre's from the scope field's tile centre, in degrees.
+    """
     fid = int(job.scope["fid"])
+    ra_tile, dec_tile = field_center(int(job.scope["field"]))
     l2_inputs = [i for i in job.inputs if i["kind"] == "input" and i["product"] == "l2files"]
     others = sorted({i["product"] for i in job.inputs if i["kind"] == "input"} - {"l2files"})
     if others:
@@ -265,27 +273,29 @@ def _read(job: JobContext) -> tuple[str, list[tuple[int, str]], int]:
             key = item["key"]
             if int(key["fid"]) != fid:
                 raise _rejected(f"job {job.job}: l2files input {key} is not the scope's fid {fid}")
-            cur.execute("SELECT rid, filename FROM l2files WHERE job = %s AND dataset = %s"
+            cur.execute("SELECT rid, filename, ra0, dec0 FROM l2files WHERE job = %s AND dataset = %s"
                         " AND expid = %s AND sca = %s AND fid = %s",
                         (item["source_job"], key["dataset"], key["expid"], int(key["sca"]), fid))
             row = cur.fetchone()
             if row is None:
                 raise _rejected(f"job {job.job}: no l2files row {key} in job {item['source_job']}")
-            rows.append((int(row[0]), row[1]))
+            rows.append((int(row[0]), row[1],
+                         compute_angular_separation(float(row[2]), float(row[3]), ra_tile, dec_tile)))
         cur.execute("SELECT nextval(pg_get_serial_sequence('refimages', 'rfid'))")
         rfid = int(cur.fetchone()[0])
         conn.commit()
     return found[0], rows, rfid
 
 
-def read_frames(rows: list[tuple[int, str]], unit_filter: str,
+def read_frames(rows: list[tuple[int, str, float]], unit_filter: str,
                 checked: _Checked) -> tuple[list[Frame], list[int]]:
-    """The frames to coadd in ``mjdobs`` order, and the ``rid``\\ s past ``max_frames``."""
+    """The frames to coadd in ``(mjdobs, distance, name)`` order, and the ``rid``\\ s past ``max_frames``."""
     if len(rows) < checked.min_frames:
         raise ValueError(f"{len(rows)} l2files inputs; [reference.selection] min_frames is "
                          f"{checked.min_frames}")
     frames: list[Frame] = []
-    for rid, filename in rows:
+    distance: dict[int, float] = {}
+    for rid, filename, dist in rows:
         path = get(filename)
         try:
             frame_header = prep.read_frame_header(path)
@@ -300,7 +310,8 @@ def read_frames(rows: list[tuple[int, str]], unit_filter: str,
             raise ValueError(f"l2files rid {rid}: EXPTIME {frame_header.exptime} is not positive")
         frames.append(Frame(rid=rid, path=path, name=filename.rsplit("/", 1)[-1],
                             header=frame_header))
-    frames.sort(key=lambda f: (f.header.mjdobs, f.rid))
+        distance[rid] = dist
+    frames.sort(key=lambda f: (f.header.mjdobs, distance[f.rid], f.name))
     if len({f.name for f in frames}) != len(frames):
         raise ValueError("two l2files inputs share a file name")
     return frames[:checked.max_frames], [f.rid for f in frames[checked.max_frames:]]

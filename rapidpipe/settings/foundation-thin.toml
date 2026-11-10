@@ -302,7 +302,9 @@ work_subdirectory = "ref"
 [reference.selection]
 # [REF_IMAGE] min_n_images_to_coadd, max_n_images_to_coadd. Fewer input
 # frames than min_frames fails the job; frames past max_frames in mjdobs
-# order are not coadded (`dev` breaks its loop) and the manifest names them.
+# order, a tie by distance from the tile centre then file name (`dev`'s
+# order by mjdobs, dist), are not coadded (`dev` breaks its loop) and the
+# manifest names them.
 min_frames = 2
 max_frames = 25
 # before_mjd (a float, absent by default): the loop builds a field's
