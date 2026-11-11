@@ -1460,7 +1460,8 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
         science_psf, reference_psf, names["scisegm"], names["refsegm"],
         science_image_filename, crossconv_flag,
         s["sfft_bsmask_value"], s["sfft_bsmask_radius"],
-        bool(s["sfft_use_gainmatch_catalogs"]), bool(s["sfft_use_segmentation"]))
+        bool(s["sfft_use_gainmatch_catalogs"]), bool(s["sfft_use_segmentation"]),
+        s["sfft_zero_margin"], s["sfft_bsmask_isoarea"], s["sfft_bsmask_isofactor"])
     # Checked like every tool: SFFT is the published differencer, so no fallback to ZOGY.
     with step("sfft_solve"):
         kit.runner.run_shell(sfft.shell_command(s["activate_cmd"], sfft_cmd), cwd=work_dir)
