@@ -685,6 +685,16 @@ sfft_bsmask_value = "50.0"
 sfft_bsmask_radius = "100.0"
 sfft_use_gainmatch_catalogs = true
 sfft_use_segmentation = true
+# Commissioning's kernel-fit masking (ed2f1a73), not in dev: --zeromargin
+# leaves out of the fit pixels that are 0 in either image (the stage's
+# NaN fill) and those within this many pixels of one; --bsmaskisoarea also
+# masks catalog sources with ISOAREA_IMAGE >= this, radius max(bsmask
+# radius, isofactor * sqrt(ISOAREA_IMAGE / pi)). Empty, as here, leaves the
+# option off the command, which is then dev's; flight-1049 sets them
+# (Azalee, 2026-11-10).
+sfft_zero_margin = ""
+sfft_bsmask_isoarea = ""
+sfft_bsmask_isofactor = ""
 sfft_code = "/code/modules/sfft/sfft_rapid_crowded.py"
 # The interpreter that runs sfft_code; empty means the interpreter
 # running this stage (the pipeline image's main conda environment, where

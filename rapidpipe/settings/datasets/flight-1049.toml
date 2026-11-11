@@ -44,3 +44,19 @@ program_id = 1049
 # (-0.08 to +0.16, -0.56 to -0.35) px, as WCS offset; by hand the
 # propagation puts the WCS at (-0.09 to -0.04, -0.06 to -0.04) px.
 gaia_proper_motion = true
+
+[difference.sfft]
+# Commissioning's kernel-fit masking (ed2f1a73), its ini's [SFFT] values,
+# chosen by offline reruns of 20261021 req7 jid95 (PID 1062, F062, WFI06),
+# not measured on 1049: there the fit, on this base's OpenUniverse block,
+# gave a kernel sum of 1.050 (negative/positive 0.755), dominated by one
+# saturated star and by the zero-filled DQ-masked pixels, of which about
+# 500 to 1,250 inside source footprints carried 22% to 29% of the fit's
+# (sci - ref)^2. With zero margin 2 and isoarea 2000 / isofactor 2.0 the
+# kernel sum was 0.997 and the bright-star residuals largely gone; a star
+# whose missing saturated core leaves FLUX_MAX at 176 DN/s has ISOAREA
+# 143,000 px^2, radius 427 px. jid95 was tuned with SATURATED masked, as
+# the base dq_mask_bits masks it (Azalee, 2026-11-10).
+sfft_zero_margin = "2"
+sfft_bsmask_isoarea = "2000"
+sfft_bsmask_isofactor = "2.0"
