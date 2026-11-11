@@ -26,7 +26,9 @@ exit 65 and the reason, before a manifest; ``[difference] reference_psf =
 images, the manifest saying so; a reference ``psfs`` input
 fails; SFFT and naive catalogs take their detection
 overrides; the naive subtraction makes no PSF-fit catalog and so sets no
-naive catalog-outcome bit; the SFFT image is coverage-masked; every bad input fails the
+naive catalog-outcome bit; the science and every difference catalog take the science
+``ZPTMAG`` as ``MAG_ZEROPOINT`` and the gain-match runs 0, the run's body unchanged;
+the SFFT image is coverage-masked; every bad input fails the
 job before a manifest is written; the shipped ``[difference]`` table is
 valid.
 """
@@ -55,6 +57,7 @@ from rapidpipe.science.difference.tools import ToolFailed
 from rapidpipe.science.load.catalogs import source_set, sources_prefilter
 from rapidpipe.foundation.local import JobContext
 from tests.support.fakedifftools import (
+    ZPTMAG,
     FakePsfCatalog,
     FakeRbClassifier,
     FakeReferencePsf,
@@ -603,6 +606,33 @@ def test_sfft_and_naive_catalogs_take_their_detection_overrides(tmp_path, files,
         assert option(call, "-FILTER_NAME") == f"{cdf_dir()}/rapidSexDiffImageSfftFilter.conv"
     # dev 8f8ea43f: the negative SFFT catalog is named after its detection image.
     assert option(sfft_runs[1], "-CATALOG_NAME") == "sfftdiffimage_masked_negative.txt"
+
+
+def test_catalog_magnitudes_are_on_the_science_zero_point_and_the_gain_match_stays_at_zero(
+        tmp_path, files, fakes):
+    runner, _ = fakes
+    body = settings()
+    run_difference(tmp_path, files, body=body)
+    sex = [c for c in runner.calls if c[0].endswith("sex")]
+    by_params = {}
+    for call in sex:
+        params = Path(call[call.index("-PARAMETERS_NAME") + 1]).name
+        by_params.setdefault(params, []).append(float(call[call.index("-MAG_ZEROPOINT") + 1]))
+    # One science catalog, ZOGY, SFFT and naive positive and negative, two gain-match runs.
+    assert by_params == {"rapidSexParamsSciImage.inp": [ZPTMAG],
+                         "rapidSexParamsDiffImage.inp": [ZPTMAG] * 6,
+                         "rapidSexParamsGainMatch.inp": [0.0, 0.0]}
+    for table in ("sextractor_sciimage", "sextractor_diffimage", "sextractor_gainmatch"):
+        assert body["difference"][table]["sextractor_mag_zeropoint"] == "0.0"
+
+
+def test_a_science_image_without_zptmag_leaves_the_catalog_zero_point_and_warns(tmp_path, caplog):
+    image = tmp_path / "sci.fits"
+    fits.PrimaryHDU().writeto(image)
+    body = settings()["difference"]
+    with caplog.at_level("WARNING"):
+        assert difference.with_catalog_zero_point(body, image) is body
+    assert "no ZPTMAG" in caplog.text
 
 
 def test_the_naive_subtraction_makes_no_psf_fit_catalog_and_sets_no_naive_bit(
