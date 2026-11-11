@@ -798,8 +798,8 @@ def test_expids_admit_stems_and_rows_inside_any_range_with_the_other_terms():
         loop.Selection.parse("F146", "8", "all", expids="5-4")
 
 
-# Coverage selection (``[reference.selection] selection_type = "coverage"``, commissioning d586136b,
-# ebd95254, debbc6e4): frames placed on the sky, their fields and overlapfields from the tessellation.
+# Coverage selection (``[reference.selection] selection_type = "coverage"``): frames placed on the
+# sky, their fields and overlapfields from the tessellation.
 
 THIN_MOSAIC = {"naxis1": 9100, "naxis2": 9100, "cdelt1": -0.000030555555556, "cdelt2": 0.000030555555556,
                "rotation": 0.0, "ra_center": "", "dec_center": ""}

@@ -1,15 +1,14 @@
 """The reference's coverage selection (``rapidpipe.products.coverage``), on synthetic footprints.
 
-Ported from commissioning's ``pipeline/test/test_refimage_coverage_selection.py``
-(d586136b, ebd95254, debbc6e4). Contracts: the coverage fraction counts a
-pixel at the depth; a frame larger than the reference covers all of it and
-one beside it none; selection stops at the maximum coverage or the frame
-cap, skips a frame that misses the reference without spending the cap, and
-judges the selection build, verify (within the tolerance of the minimum) or
-reject; a footprint across R.A. 0/360 covers what the same geometry covers
-at R.A. 180; the reference's tiles straddle R.A. 0 there too, and the
-candidates are ordered by ``mjdobs``, then distance, then their key; the
-settings body carries the coverage keys with ``"nframes"`` as its base.
+Contracts: the coverage fraction counts a pixel at the depth; a frame
+larger than the reference covers all of it and one beside it none;
+selection stops at the maximum coverage or the frame cap, skips a frame
+that misses the reference without spending the cap, and judges the
+selection build, verify (within the tolerance of the minimum) or reject; a
+footprint across R.A. 0/360 covers what the same geometry covers at
+R.A. 180; the reference's tiles straddle R.A. 0 there too, and the candidates
+are ordered by ``mjdobs``, then distance, then their key; the settings
+body carries the coverage keys with ``"nframes"`` as its base.
 """
 
 from __future__ import annotations
@@ -140,7 +139,7 @@ def test_footprints_straddling_ra_zero_match_same_geometry_elsewhere(ra0):
 
 
 def test_settings_carry_the_coverage_keys_with_nframes_the_base():
-    """Commissioning's ini test (test_master_ini_has_coverage_settings), against the settings body."""
+    """The settings body carries the coverage keys, and flight-1049 selects by coverage."""
     selection = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())["reference"]["selection"]
     assert selection["selection_type"] == "nframes"
     assert selection["min_coverage_depth"] >= 1

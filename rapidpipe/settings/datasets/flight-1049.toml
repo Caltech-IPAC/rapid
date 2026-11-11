@@ -44,9 +44,8 @@ dq_mask_bits = 0x2110C01
 gaia_proper_motion = true
 
 [reference.selection]
-# Commissioning's coverage selection (d586136b, ebd95254, debbc6e4), with the
-# base's coverage keys (half the pixels covered once to build, stop at four
-# deep everywhere) and a cap of 50 frames (2ebffce3). On commissioning's
+# Coverage selection, with the base's coverage keys (half the pixels covered
+# once to build, stop at four deep everywhere) and a cap of 50 frames. On
 # jid6318 the field rule's 50 frames left 2.7% of pixels four deep; this
 # rule's 42 left 58.4% (Azalee, 2026-11-10).
 selection_type = "coverage"
