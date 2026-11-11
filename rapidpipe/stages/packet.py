@@ -254,18 +254,18 @@ SOURCE_JOINS = (
 TRIGGER_SQL = ("SELECT {sid} AS sid, object_job, {aid} AS aid, field FROM {memberships}_of(ARRAY[%s]::bigint[])"
                " ORDER BY {sid}, {aid}, object_job")
 
-#: The triggers' objects' founding positions, from their fields' children of ``objects``.
-ORIGINS_SQL = ("SELECT o.{aid} AS aid, o.ra0, o.dec0 FROM {objects}_in(%s::integer[]) o"
-               " WHERE (o.job, o.{aid}) IN (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))")
+#: The triggers' objects' founding positions, from their fields' children of ``objects``, the
+#: (job, aid) pairs' filter inside each child's query (``packet_origin_rows``).
+ORIGINS_SQL = ("SELECT o.{aid} AS aid, o.ra0, o.dec0 FROM packet_origin_rows(NULL::{objects},"
+               " %s::integer[], %s::bigint[], %s::bigint[]) o")
 
 #: The memberships of the triggers' objects whose source set is official, and the set's own, from
 #: the objects' fields' children of ``memberships`` (an object's memberships are filed under its field).
-#: An xmembership's set is official through its ``sources`` binding, as its xsources are.
+#: An xmembership's set is official through its ``sources`` binding, as its xsources are. Both
+#: conditions are inside each child's query (``packet_membership_rows``).
 MEMBERSHIPS_SQL = (
-    "SELECT m.{aid} AS aid, m.source_job, m.{sid} AS sid FROM {memberships}_in(%(fields)s::integer[]) m"
-    " WHERE (m.object_job, m.{aid}) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
-    " AND (m.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
-    " AND o.product = 'sources' AND o.job = m.job))")
+    "SELECT m.{aid} AS aid, m.source_job, m.{sid} AS sid FROM packet_membership_rows(NULL::{memberships},"
+    " %(fields)s::integer[], %(jobs)s::bigint[], %(aids)s::bigint[], %(own)s::bigint) m")
 
 #: Those members' source rows, from one child table of ``sources`` (never the parent: a query
 #: there visits every child, rapidpipe.foundation.children).
@@ -398,11 +398,12 @@ WINDOW_SQL = (
 
 #: Official packet sets' forced rows on the window's images, from the triggers' objects' fields'
 #: children of ``forced`` (a forced row is filed under its object's field), each with its set's key,
-#: the key of its open binding.
+#: the key of its open binding. The images and the binding are filtered inside each child's query
+#: (``packet_reuse_rows``); the join supplies the key.
 REUSE_SQL = ("SELECT f.*, o.key ->> 'dataset' AS p_dataset, (o.key ->> 'expid')::integer AS p_expid,"
              " (o.key ->> 'sca')::smallint AS p_sca, (o.key ->> 'fid')::smallint AS p_fid"
-             " FROM forced_in(%s::integer[]) f JOIN official o ON o.closed_at IS NULL"
-             " AND o.product = 'packets' AND o.job = f.job WHERE f.pid = ANY(%s)")
+             " FROM packet_reuse_rows(%s::integer[], %s::integer[]) f JOIN official o"
+             " ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = f.job")
 
 
 @dataclasses.dataclass

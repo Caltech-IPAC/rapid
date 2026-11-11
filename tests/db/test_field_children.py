@@ -4,7 +4,8 @@
 inheriting the parent with a ``CHECK`` on its field; ``rapidpipe.foundation.publish``
 files each row under its object's field, loads each child by ``COPY`` and
 records the job's fields in ``job_fields``; ``<parent>_in(fields)``,
-``<parent>_in(fields, run)``, ``<parent>_of(jobs)`` and ``objects_official_in(fields)`` read the children
+``<parent>_in(fields, run)``, ``<parent>_of(jobs)``, ``objects_official_in(fields)`` and the packet
+stage's ``packet_origin_rows``, ``packet_membership_rows`` and ``packet_reuse_rows`` read the children
 only (rapid_docs decisions.md, field-children). Run by foundation.yml against
 database/schema.sql.
 """
@@ -250,6 +251,93 @@ def test_the_run_readers_give_the_run_s_rows_of_the_fields_only(connect, tmp_pat
         assert _rows(conn, f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", (max(jobs) + 1,)) == [(0,)]
 
 
+#: The packet stage's three reads as rapidpipe.stages.packet shipped them before
+#: packet_origin_rows, packet_membership_rows and packet_reuse_rows (rebuild ae3fa4a7).
+_SHIPPED_ORIGINS = ("SELECT o.{aid} AS aid, o.ra0, o.dec0 FROM {objects}_in(%s::integer[]) o"
+                    " WHERE (o.job, o.{aid}) IN (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))")
+_SHIPPED_MEMBERSHIPS = (
+    "SELECT m.{aid} AS aid, m.source_job, m.{sid} AS sid FROM {memberships}_in(%(fields)s::integer[]) m"
+    " WHERE (m.object_job, m.{aid}) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
+    " AND (m.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
+    " AND o.product = 'sources' AND o.job = m.job))")
+_SHIPPED_REUSE = ("SELECT f.*, o.key ->> 'dataset' AS p_dataset, (o.key ->> 'expid')::integer AS p_expid,"
+                  " (o.key ->> 'sca')::smallint AS p_sca, (o.key ->> 'fid')::smallint AS p_fid"
+                  " FROM forced_in(%s::integer[]) f JOIN official o ON o.closed_at IS NULL"
+                  " AND o.product = 'packets' AND o.job = f.job WHERE f.pid = ANY(%s)")
+
+
+def _bind(conn, product: str, job: int, expid: int, closed: bool = False) -> None:
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO official (product, key, job, opened_group, opened_by, opened_why,"
+                    " closed_group, closed_by, closed_at, closed_why) VALUES (%s, %s, %s, 1, 't', 'test',"
+                    " %s, %s, CASE WHEN %s THEN now() END, %s)",
+                    (product, json.dumps({"dataset": DATASET, "expid": expid, "sca": 8, "fid": 1}), job,
+                     *((2, "t", True, "test") if closed else (None, None, False, None))))
+    conn.commit()
+
+
+def _sorted_rows(conn, query, params):
+    """The rows as text, sorted: the multiset a query returns, NaN equal to itself."""
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        rows = sorted(repr(r) for r in cur.fetchall())
+    conn.commit()
+    return rows
+
+
+def test_the_packet_readers_give_the_rows_the_shipped_reads_keep(connect, tmp_path):
+    """Two runs' rows in fields 7 and 9: an object founded by each run, memberships into run A's
+    objects from an official set, from run B's unbound set and from a set whose binding is closed,
+    and forced rows of an open, a closed and an unbound packet set. Each reader returns what the
+    read it replaces returned, for every own set and every pair and image chosen, other runs'
+    rows included."""
+    from rapidpipe.stages.packet import ALERT_CATALOGS, MEMBERSHIPS_SQL, ORIGINS_SQL, REUSE_SQL
+
+    conn = connect()
+    run_a, run_b = new_run(conn), new_run(conn)
+    a, b, c = new_job(conn, run_a), new_job(conn, run_b), new_job(conn, run_b)
+    publish(conn, a, 1, write_attempt(tmp_path / f"job-{a}", {
+        "objects": [_object(1, 7), _object(3, 9)],
+        "memberships": [_member(a, 1, 7, 1), _member(a, 3, 9, 3)],
+        "xobjects": [_xobject(1, 7), _xobject(4, 9)],
+        "xmemberships": [_xmember(a, 1, 7, 1), _xmember(a, 4, 9, 2)]}))
+    for job, sid in ((b, 5), (c, 6)):                             # members of run A's objects
+        publish(conn, job, 1, write_attempt(tmp_path / f"job-{job}", {
+            "objects": [_object(1, 7)], "xobjects": [_xobject(4, 9)],
+            "memberships": [_member(job, 1, 7, 1), {**_member(job, 1, 7, sid), "object_job": a},
+                            {**_member(job, 3, 9, sid + 10), "object_job": a}],
+            "xmemberships": [{**_xmember(job, 4, 9, sid), "object_job": a}, _xmember(job, 4, 9, 1)]}))
+    _bind(conn, "sources", a, 1)
+    _bind(conn, "sources", c, 3, closed=True)
+    packets = [new_job(conn, run) for run in (run_a, run_b, run_b)]
+    for n, pkt in enumerate(packets):
+        publish(conn, pkt, 1, write_attempt(tmp_path / f"job-{pkt}", {
+            "forced": [{**_forced(1, 7, 100 * n + 1), "pid": 1}, {**_forced(3, 9, 100 * n + 2), "pid": 2},
+                       {**_forced(3, 9, 100 * n + 3), "pid": 5}]}))
+    _bind(conn, "packets", packets[0], 1)
+    _bind(conn, "packets", packets[1], 2, closed=True)              # packets[2] is never bound
+
+    for name, catalog in ALERT_CATALOGS.items():
+        pairs = [([a], [1]), ([a, a], [1, 3]), ([a, a, b, c], [1, 4, 1, 4]), ([b], [1]), ([], [])]
+        for jobs, aids in pairs:
+            for fields in ([7, 9], [9], [7, 8], []):
+                origins = (fields, jobs, aids)
+                assert _sorted_rows(conn, catalog.sql(ORIGINS_SQL), origins) == _sorted_rows(
+                    conn, catalog.sql(_SHIPPED_ORIGINS), origins), (name, origins)
+                for own in (a, b, c, 0):
+                    members = {"fields": fields, "jobs": jobs, "aids": aids, "own": own}
+                    assert _sorted_rows(conn, catalog.sql(MEMBERSHIPS_SQL), members) == _sorted_rows(
+                        conn, catalog.sql(_SHIPPED_MEMBERSHIPS), members), (name, members)
+        everything = {"fields": [7, 9], "jobs": [a, a, a], "aids": [1, 3, 4], "own": b}
+        shipped = _sorted_rows(conn, catalog.sql(_SHIPPED_MEMBERSHIPS), everything)
+        assert len(shipped) == (4 if name == "sources" else 3), name    # the case is not empty
+    for fields in ([7, 9], [9], [8], []):
+        for pids in ([1], [1, 2], [2, 5], [3], []):
+            assert _sorted_rows(conn, REUSE_SQL, (fields, pids)) == _sorted_rows(
+                conn, _SHIPPED_REUSE, (fields, pids)), (fields, pids)
+    assert len(_sorted_rows(conn, REUSE_SQL, ([7, 9], [1, 2]))) == 2       # the open set's two
+
+
 def test_a_child_carries_the_parents_indexes(connect, tmp_path):
     conn = connect()
     _publish_two_fields(conn, tmp_path)
@@ -284,6 +372,17 @@ def test_the_readers_scan_no_parent(connect, tmp_path):
         for parent in ("objects", "xobjects"):
             cur.execute(f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", (run,))
             assert cur.fetchone()[0] > 0
+            cur.execute(f"SELECT count(*) FROM packet_origin_rows(NULL::{parent}, ARRAY[7, 9],"
+                        " %s::bigint[], ARRAY[1, 4]::bigint[])", ([diff, diff],))
+            assert cur.fetchone()[0] > 0
+        for parent in ("memberships", "xmemberships"):
+            cur.execute(f"SELECT count(*) FROM packet_membership_rows(NULL::{parent}, ARRAY[7, 9],"
+                        " %s::bigint[], ARRAY[1, 4]::bigint[], %s::bigint)", ([diff, diff], diff))
+            assert cur.fetchone()[0] > 0
+        cur.execute("INSERT INTO official (product, key, job, opened_group, opened_by, opened_why)"
+                    " VALUES ('packets', '{\"expid\": 1}', %s, 1, 't', 'test')", (pkt,))
+        cur.execute("SELECT count(*) FROM packet_reuse_rows(ARRAY[7, 9], ARRAY[1])")
+        assert cur.fetchone()[0] > 0
         cur.execute("SELECT count(*) FROM objects_official_in(ARRAY[7, 9])")
         cur.execute("SELECT count(*) FROM xobjects_official_in(ARRAY[7, 9])")
         cur.execute("SELECT pg_stat_force_next_flush()")

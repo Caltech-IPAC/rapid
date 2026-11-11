@@ -460,5 +460,5 @@ def test_the_xsources_catalog_reads_the_xsources_tables():
 
     x = ALERT_CATALOGS["xsources"]
     assert "FROM xmemberships_of(" in x.sql(TRIGGER_SQL) and "xsid AS sid" in x.sql(TRIGGER_SQL)
-    assert "FROM xobjects_in(" in x.sql(ORIGINS_SQL)
-    assert "FROM xmemberships_in(" in x.sql(MEMBERSHIPS_SQL)
+    assert "(NULL::xobjects," in x.sql(ORIGINS_SQL)
+    assert "(NULL::xmemberships," in x.sql(MEMBERSHIPS_SQL)
