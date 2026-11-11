@@ -58,5 +58,5 @@ magrefthresmax = 30.0
 refmagkeep = 30.0
 
 [difference.psfcat_diffimage]
-# DAOStarFinder's sharpness ceiling; 1.8 admits more extended detections into the difference sources than dev's 1.0, set from analysis of on-orbit data, as commissioning a7778505 (Azalee, 2026-11-10).
+# DAOStarFinder's sharpness ceiling; 1.8 admits more extended detections into the difference sources than dev's 1.0, set from the OpenUniverse sharpness distribution, which 1.0 cut a significant fraction of, as commissioning a7778505 (Azalee, 2026-11-11).
 sharphi = 1.8
