@@ -96,6 +96,15 @@ LOCK_RETRY_CAP_S = 10.0
 LOCK_RETRY_INITIAL_S = 0.5
 
 
+def lock_wait(tries: int) -> float:
+    """Seconds to wait before try ``tries + 1`` of a field's lock: full jitter under a doubling
+    capped at :data:`LOCK_RETRY_CAP_S`. The doubling stops at the cap, so a publisher that has
+    tried a thousand times still waits (run 229: ``0.5 * 2 ** 1024`` overflowed a float and
+    failed 945 finished differences after about 85 minutes of tries)."""
+    doublings = min(tries, math.ceil(math.log2(LOCK_RETRY_CAP_S / LOCK_RETRY_INITIAL_S)))
+    return random.uniform(0, min(LOCK_RETRY_CAP_S, LOCK_RETRY_INITIAL_S * 2 ** doublings))
+
+
 class PublishError(Exception):
     """An attempt whose manifest or declared outputs could not be verified; nothing was published."""
 
@@ -163,7 +172,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 if object_catalog.try_lock(cur, run, locked):
                     break
             conn.rollback()
-            time.sleep(random.uniform(0, min(LOCK_RETRY_CAP_S, LOCK_RETRY_INITIAL_S * 2 ** tries)))
+            time.sleep(lock_wait(tries))
         if tries:
             logging.getLogger(__name__).info("job %d: the locks of its %d fields taken at try %d",
                                              job_id, len(locked), tries + 1)
