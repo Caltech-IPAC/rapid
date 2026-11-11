@@ -143,6 +143,40 @@ def test_reformat_frame_takes_an_unzipped_frame(tmp_path):
     assert result.reformatted == "frame_b_reformatted.fits"
 
 
+NOMINAL = {"F146": 27.01, "F184": 25.34}
+
+
+def test_without_the_override_each_frame_is_scaled_by_its_own_zptmag(tmp_path):
+    data = np.ones((4, 4), np.float32)
+    results = [prep.reformat_frame(tmp_path, _frame(tmp_path / f"own_{i}.fits.gz", data, zptmag=zptmag),
+                                   AWAICGEN, 2.0, 9.4)
+               for i, zptmag in enumerate((26.84, 26.88))]
+    assert [r.flux_scale_factor for r in results] == [
+        10 ** (0.4 * (26.8630336165 - zptmag)) for zptmag in (26.84, 26.88)]
+    assert {r.zptmag_source for r in results} == {"header"}
+
+
+@pytest.mark.parametrize("filt", ["W146", "F146"])
+def test_under_the_override_frames_of_a_filter_share_the_nominal_scale_factor(tmp_path, filt):
+    """Commissioning 8a4a172d: the filter's nominal ZPTMAG, not the header's, sets the scale."""
+    data = np.ones((4, 4), np.float32)
+    results = [prep.reformat_frame(tmp_path, _frame(tmp_path / f"nom_{i}.fits.gz", data, zptmag=zptmag,
+                                                    filt=filt), AWAICGEN, 2.0, 9.4, nominal_zptmag=NOMINAL)
+               for i, zptmag in enumerate((26.84, 26.88))]
+    scale = 10 ** (0.4 * (26.8630336165 - 27.01))
+    assert [r.flux_scale_factor for r in results] == [scale, scale]
+    assert [r.zptmag for r in results] == [26.84, 26.88]  # the header values, for zptmag_rms
+    assert {r.zptmag_source for r in results} == {"nominal"}
+    with fits.open(tmp_path / results[0].reformatted) as hdul:
+        np.testing.assert_array_equal(hdul[0].data, data / 140.0 * scale)
+
+
+def test_under_the_override_a_filter_without_a_nominal_zptmag_fails(tmp_path):
+    name = _frame(tmp_path / "h158.fits.gz", np.ones((4, 4), np.float32), filt="H158")
+    with pytest.raises(KeyError, match="no nominal ZPTMAG for FILTER = H158"):
+        prep.reformat_frame(tmp_path, name, AWAICGEN, 2.0, 9.4, nominal_zptmag=NOMINAL)
+
+
 def test_list_files_stop_at_max(tmp_path):
     frames = [prep.PreparedFrame(f"f{i}_reformatted.fits", f"f{i}_reformatted_unc.fits",
                                  1.0, 1.0, 1.0, 1.0, 1.0, 1.0) for i in range(4)]
@@ -339,4 +373,5 @@ def test_stamp_writes_devs_keywords_without_fid_plus_the_foundations(tmp_path):
     assert (hdr["INFOBITS"], hdr["STATUS"]) == (272, 0)
     assert hdr.comments["INFOBITS"] == "infoBits string; bit(s) = 4, 8"
     assert (hdr["BIT04"], hdr["BIT08"]) == (4, 8)
+    assert hdr["ZPSOURCE"] == "header"
     assert "CHECKSUM" in hdr and "DATASUM" in hdr

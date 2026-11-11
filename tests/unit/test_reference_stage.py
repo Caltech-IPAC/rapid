@@ -30,6 +30,7 @@ from astropy.io import fits
 import rapidpipe.stages.reference as reference
 from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation.local import JobContext
+from rapidpipe.science.reference import infobits
 from tests.support import fakereftools
 from tests.support.fakedifftools import cdf_dir
 from tests.support.fakereftools import FRAMES, RTID, write_frames
@@ -199,10 +200,41 @@ def test_a_frame_of_another_sca_is_coadded(tmp_path, frames):
     {"mosaic": {"ra_center": 10.0}},
     {"mosaic": {"cdelt1": -0.0001}},
     {"awaicgen": {"awaicgen_output_mosaic_image_file": "mosaic.fits"}},
+    {"awaicgen": {"use_nominal_zptmag": "true"}},
 ])
 def test_refused_settings_fail_before_a_manifest(tmp_path, frames, tables):
     with pytest.raises(ValueError):
         run_reference(tmp_path, frames, body=settings(**tables))
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_a_reference_records_that_its_inputs_were_scaled_by_their_own_zptmag(tmp_path, frames):
+    prefix = run_reference(tmp_path, frames)
+    (ref,) = read(prefix, "refimages")
+    assert fits.getheader(Path(ref["filename"].removeprefix("file://")))["ZPSOURCE"] == "header"
+    assert json.loads((prefix / "manifest.json").read_text())["reference"]["zptmag_source"] == "header"
+
+
+def test_under_the_override_the_reference_reads_the_intake_table_and_grades_by_the_headers(
+        tmp_path, frames):
+    """Commissioning 8a4a172d: nominal scaling is recorded; zptmag_rms (bit 10) keeps the headers' spread."""
+    body = {**settings(awaicgen={"use_nominal_zptmag": True}),
+            "intake": {"nominal_zptmag": {"F146": 27.01}}}
+    prefix = run_reference(tmp_path, frames, body=body)
+    (ref,) = read(prefix, "refimages")
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert fits.getheader(Path(ref["filename"].removeprefix("file://")))["ZPSOURCE"] == "nominal"
+    assert manifest["reference"]["zptmag_source"] == "nominal"
+    assert manifest["reference"]["quality"]["zptmag_rms"] == pytest.approx(
+        infobits.compute_robust_spread([f[3] for f in FRAMES]))
+    assert manifest["reference"]["quality"]["zptmag_rms"] > 0
+
+
+def test_under_the_override_a_filter_missing_from_the_table_fails_the_job(tmp_path, frames):
+    body = {**settings(awaicgen={"use_nominal_zptmag": True}),
+            "intake": {"nominal_zptmag": {"F184": 25.34}}}
+    with pytest.raises(KeyError, match="no nominal ZPTMAG"):
+        run_reference(tmp_path, frames, body=body)
     assert not (tmp_path / "prefix" / "manifest.json").exists()
 
 
@@ -231,3 +263,7 @@ def test_the_thin_settings_body_reference_table_is_valid():
     checked = reference.check_settings(THIN["reference"])
     assert (checked.min_frames, checked.naxis1) == (2, 9100)
     assert checked.infobits["fatalinfobits"] == [2, 5, 7, 8, 16]
+    assert checked.use_nominal_zptmag is False
+    stored = copy.deepcopy(THIN["reference"])
+    del stored["awaicgen"]["use_nominal_zptmag"]
+    assert reference.check_settings(stored).use_nominal_zptmag is False  # a body stored before the flag
