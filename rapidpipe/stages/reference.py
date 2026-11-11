@@ -63,6 +63,11 @@ Departures from `dev` (reference page):
   whatever its status; `dev` then never reuses it (``get_best_reference_image``
   selects ``status > 0``), and the loop builds a field's reference once,
   so the status is a recorded verdict here, not a gate.
+- Commissioning's ``[awaicgen] use_nominal_zptmag`` (687c93b2, 8a4a172d):
+  when true, each frame is scaled by its filter's nominal ZPTMAG from the
+  run's ``[intake.nominal_zptmag]`` table instead of its header's, and the
+  stamp's ``ZPSOURCE`` and the manifest's ``zptmag_source`` say
+  ``nominal``; ``zptmag_rms`` still reads the header values.
 - `dev` never checks a tool's exit code; this stage fails when awaicgen
   or SExtractor leaves no output, and when the catalog has no source
   with a usable FWHM (`dev`'s ``nanmin`` raises there).
@@ -169,6 +174,7 @@ class _Checked:
     sca_readout_noise: float
     seed: int | None
     infobits: dict[str, Any]
+    use_nominal_zptmag: bool
 
 
 def check_settings(settings: dict[str, Any]) -> _Checked:
@@ -212,6 +218,10 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
         if not isinstance(name, str) or "/" in name or not name.endswith(".fits"):
             raise ValueError(f"[reference.awaicgen] {key} must be a plain .fits file name, "
                              f"got {name!r}")
+    use_nominal_zptmag = settings["awaicgen"].get("use_nominal_zptmag", False)  # absent from older bodies
+    if not isinstance(use_nominal_zptmag, bool):
+        raise ValueError(f"[reference.awaicgen] use_nominal_zptmag must be true or false, "
+                         f"got {use_nominal_zptmag!r}")
     if "image.fits" not in settings["awaicgen"]["awaicgen_output_mosaic_image_file"]:
         raise ValueError(
             "[reference.awaicgen] awaicgen_output_mosaic_image_file must contain 'image.fits' "
@@ -225,7 +235,8 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
         sca_gain=_number(settings, "instrument", "sca_gain"),
         sca_readout_noise=_number(settings, "instrument", "sca_readout_noise"),
         seed=seed if seed >= 0 else None,
-        infobits=infobits.check_params(settings["infobits"]))
+        infobits=infobits.check_params(settings["infobits"]),
+        use_nominal_zptmag=use_nominal_zptmag)
 
 
 # ----------------------------------------------------------------------
@@ -343,6 +354,8 @@ def run(job: JobContext) -> None:
         ra_center, dec_center = field_center(rtid)
     else:
         ra_center, dec_center = checked.ra_center, checked.dec_center
+    # Commissioning's use_nominal_zptmag (8a4a172d): the one table intake falls back to.
+    nominal_zptmag = job.settings["intake"]["nominal_zptmag"] if checked.use_nominal_zptmag else None
     awaicgen_dict = awaicgen.awaicgen_dict_for_mosaic(
         settings["awaicgen"], naxis1=checked.naxis1, naxis2=checked.naxis2,
         cdelt1=checked.cdelt1, rotation=checked.rotation,
@@ -361,12 +374,14 @@ def run(job: JobContext) -> None:
             for frame in coadded:
                 shutil.copyfile(frame.path, scratch / frame.name)
                 result = prep.reformat_frame(
-                    scratch, frame.name, awaicgen_dict, checked.sca_gain, checked.sca_readout_noise)
+                    scratch, frame.name, awaicgen_dict, checked.sca_gain, checked.sca_readout_noise,
+                    nominal_zptmag=nominal_zptmag)
                 total_exptime += result.exptime
                 jdstart, jdend = min(jdstart, result.jd), max(jdend, result.jd)
                 prepared.append(result)
         prep.write_list_files(scratch, awaicgen_dict, prepared, checked.max_frames)
         zprefimg = prepared[-1].zprefimg
+        zptmag_source = "nominal" if checked.use_nominal_zptmag else "header"
 
         args = awaicgen.build_awaicgen_command_line_args(awaicgen_dict, paths["awaicgen"])
         started = time.monotonic()
@@ -430,7 +445,8 @@ def run(job: JobContext) -> None:
         nframes=len(prepared), refimage_input_filenames=tuple(f.name for f in coadded),
         jdstart=jdstart, jdend=jdend, zprefimg=zprefimg, total_refimage_exptime=total_exptime,
         run=job.run, job=job.job, attempt=job.attempt,
-        infobits=grade.infobits, status=grade.status, infobit_cards=tuple(grade.cards))
+        infobits=grade.infobits, status=grade.status, infobit_cards=tuple(grade.cards),
+        zptmag_source=zptmag_source)
     header.add_keywords_to_reference_image_header(o(names["image"]), stamp)
     header.add_keywords_to_reference_image_header(o(names["uncertainty"]), stamp)
 
@@ -458,7 +474,8 @@ def run(job: JobContext) -> None:
         [(table, f"{table}.parquet") for table in tables],
         reference={"rfid": rfid, "ra_center": ra_center, "dec_center": dec_center,
                    "jd_start": jdstart, "jd_end": jdend, "total_exptime": total_exptime,
-                   "zero_point": zprefimg, **measurements.to_dict(),
+                   "zero_point": zprefimg, "zptmag_source": zptmag_source,
+                   **measurements.to_dict(),
                    "fwhmmedpix": fwhm.fwhmmedpix, "fwhmminpix": fwhm.fwhmminpix,
                    "fwhmmaxpix": fwhm.fwhmmaxpix, "nsexcatsources": fwhm.nsexcatsources,
                    "fwhmpctlpix": fwhm.fwhmpctlpix, "infobits": grade.infobits,

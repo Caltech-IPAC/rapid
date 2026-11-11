@@ -110,6 +110,7 @@ from astropy.wcs import WCS
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.foundation.steps import step
+from rapidpipe.products.filters import rapid_filter_name
 from rapidpipe.science import intake_openuniverse, intake_rimtimsim
 from rapidpipe.science.alerts.crossmatch import (
     GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, epoch_offset_years, propagate_positions)
@@ -208,7 +209,7 @@ def run(job: JobContext) -> None:
                 gaia = _gaia_metrics(job, hdul[1].data, WCS(header), header)
         if reader == "soc-l2":
             _check_key(stem, ids, header)  # the openuniverse reader checks its file's own in the conversion
-        fid = FIDS[header["FILTER"]]
+        fid = FIDS[rapid_filter_name(header["FILTER"])]
         psf = _science_psf(job, fid, ids["sca"])
         _check_epsf(stem, primary, psf)
         with step("limmag"):

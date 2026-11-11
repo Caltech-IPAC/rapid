@@ -11,6 +11,12 @@ HDU 1's header. The uncertainty image is `dev`'s simple model,
 written with the reformatted file's header. The arithmetic below is
 `dev`'s, operation for operation, so the float32 results are the same.
 
+Commissioning's ``use_nominal_zptmag`` (687c93b2, 8a4a172d) is the one
+addition: given the per-filter nominal zero point table, each frame is
+scaled by its filter's nominal ZPTMAG in place of its header ``ZPTMAG``,
+so every frame of a filter gets the same scale factor; the header value is
+still what :class:`PreparedFrame` records for the ``zptmag_rms`` grade.
+
 `dev` also accumulates the JD range and the total exposure time; the
 caller does that from :class:`PreparedFrame`.
 
@@ -131,18 +137,45 @@ class PreparedFrame:
     jd: float
     mjdobs: float
     zprefimg: float
-    zptmag: float
+    zptmag: float             # the header ZPTMAG, whatever scaled the frame
     flux_scale_factor: float
+    zptmag_source: str = "header"
+
+
+def nominal_zptmag_for(nominal_zptmag: Mapping[str, float], filter_name: str | None) -> float:
+    """The nominal zero point of a frame's filter, its ``FILTER`` in either spelling.
+
+    Parameters
+    ----------
+    nominal_zptmag : Mapping[str, float]
+        The per-filter nominal ZPTMAG [mag], keyed by Roman filter name (``F146``).
+    filter_name : str or None
+        The frame's ``FILTER``, Roman (``F146``) or RAPID (``W146``) spelling.
+
+    Returns
+    -------
+    float
+        The filter's nominal ZPTMAG; :class:`KeyError` when the table has no entry.
+    """
+    name = str(filter_name).strip().upper()
+    roman = RAPID_TO_ROMAN_FILTER_NAMES.get(name, name)
+    if roman not in nominal_zptmag:
+        raise KeyError(f"no nominal ZPTMAG for FILTER = {filter_name}: the [intake.nominal_zptmag] "
+                       f"table has {sorted(nominal_zptmag)}")
+    return float(nominal_zptmag[roman])
 
 
 def reformat_frame(work_dir: Path, input_filename: str, awaicgen_dict: Mapping[str, Any],
-                   sca_gain: float, sca_readout_noise: float) -> PreparedFrame:
+                   sca_gain: float, sca_readout_noise: float, *,
+                   nominal_zptmag: Mapping[str, float] | None = None) -> PreparedFrame:
     """`dev`'s per-frame block: reformat, normalise, scale, and the uncertainty image.
 
     ``input_filename`` is the delivered ``.fits.gz`` (or ``.fits``) in
     ``work_dir``; it is gunzipped and the unzipped file removed afterwards,
     as `dev` removes it "to save disk space". Output names are `dev`'s:
     ``<name>_reformatted.fits`` and ``<name>_reformatted_unc.fits``.
+    Given ``nominal_zptmag`` (commissioning's ``use_nominal_zptmag``), the
+    frame is scaled by its filter's nominal ZPTMAG, not its header's.
     """
     refimage_input_filename = input_filename
     fname_input = str(gunzip(work_dir / refimage_input_filename))
@@ -168,9 +201,13 @@ def reformat_frame(work_dir: Path, input_filename: str, awaicgen_dict: Mapping[s
     zprefimg = get_reference_image_zeropoint(awaicgen_dict, hdr.get("FILTER"))
 
     zptmag = hdr["ZPTMAG"]
-    flux_scale_factor = 10 ** (0.4 * (zprefimg - zptmag))
-    logger.info("For zptmag = %s: flux_scale_factor = %s; ZPREFIMG = %s",
-                zptmag, flux_scale_factor, zprefimg)
+    if nominal_zptmag is None:
+        zptmag_source, scale_zptmag = "header", zptmag
+    else:
+        zptmag_source, scale_zptmag = "nominal", nominal_zptmag_for(nominal_zptmag, hdr.get("FILTER"))
+    flux_scale_factor = 10 ** (0.4 * (zprefimg - scale_zptmag))
+    logger.info("For zptmag = %s (%s; header ZPTMAG %s): flux_scale_factor = %s; ZPREFIMG = %s",
+                scale_zptmag, zptmag_source, zptmag, flux_scale_factor, zprefimg)
 
     data_scaled = data_norm * flux_scale_factor
 
@@ -204,7 +241,8 @@ def reformat_frame(work_dir: Path, input_filename: str, awaicgen_dict: Mapping[s
     return PreparedFrame(
         reformatted=fname_output, reformatted_unc=fname_output_unc,
         exptime=float(exptime), jd=float(jd), mjdobs=mjdobs, zprefimg=float(zprefimg),
-        zptmag=float(zptmag), flux_scale_factor=float(flux_scale_factor))
+        zptmag=float(zptmag), flux_scale_factor=float(flux_scale_factor),
+        zptmag_source=zptmag_source)
 
 
 def write_list_files(work_dir: Path, awaicgen_dict: Mapping[str, Any],
