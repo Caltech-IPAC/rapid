@@ -54,12 +54,16 @@ The publisher returns its own lock and hold timings as ``metrics``, which
 (publish-lock-metrics): ``publish_lock_fields``, the fields it locked;
 ``publish_lock_tries``, the lock loop's tries, 1 when the first took
 them; ``publish_lock_wait_s``, the loop's start to the locks taken, its
-waits between tries included and the verification before it not;
-``publish_hold_s``, the locks taken to the commit's return, when they are
+waits between tries included and the verification before it and the
+loads below not; ``publish_load_sources_s`` and ``publish_load_xsources_s``,
+the ``COPY`` of the tables of :data:`DATE_SCA_CHILDREN`, which no field
+lock protects and so load in the publishing transaction before the locks
+are taken (publish-hold-trim: 58.0 % of run 234's hold), summed over the
+tries that loaded them; ``publish_hold_s``, the locks taken to the commit's return, when they are
 released; and that hold split by the steps run under the locks, each
 ``publish_hold_<step>_s``: ``between`` (reading the objects founded since
 the read), ``attach`` (the reconcile's match), ``load_<table>`` (each
-output's ``INSERT`` or ``COPY``), ``record`` (``job_fields``,
+other output's ``INSERT`` or ``COPY``), ``record`` (``job_fields``,
 ``job_inputs`` and the job row), ``bind`` (the automatic binding) and
 ``commit``, which sum to ``publish_hold_s`` but for the few statements
 between them. Seconds are wall seconds of ``time.perf_counter``. A job
@@ -133,11 +137,13 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     In order: if the job is already published, stop (a retry never
     touches a file); verify every declared output and make the child
     tables its rows need, and commit that; lock the job row and stop if
-    it was published meanwhile; take the locks of the fields its catalogs
-    name, all or none, and when any is held roll back and try again after
-    a jittered wait (never waiting on a lock while holding a connection);
-    reconcile its catalogs; load each output into its table, or its
-    children by ``COPY``, with ``job`` set; record the attempt, manifest,
+    it was published meanwhile; when no lock of the fields its catalogs
+    name is held, load its ``sources`` and ``xsources`` into their
+    children by ``COPY`` and take those locks, all or none; when any is
+    held roll back, those loads with it, and try again after a jittered
+    wait (never waiting on a lock while holding a connection); reconcile
+    its catalogs; load each other output into its table, or its children
+    by ``COPY``, with ``job`` set; record the attempt, manifest,
     state and ``ended`` (the commit's moment, which the caller moves to
     its own end); then, inside a savepoint, bind the job's ``expects``
     keys if its run is live for its survey and dataset, recording a
@@ -179,6 +185,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     locked = sorted({f for key, _, _ in RECONCILED if key in (manifest or {})
                      for f in object_catalog.fields(manifest[key])})
     hold: dict[str, float] = {}
+    unlocked: dict[str, float] = {}
     try:
         started = time.perf_counter()
         for tries in itertools.count():
@@ -190,8 +197,15 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                     conn.commit()
                     return {"job": job_id, "attempt": published_attempt, "published": False,
                             "group": None, "refusal": refusal, "live": None}
-                if object_catalog.try_lock(cur, run, locked):
-                    break
+                if not object_catalog.held(cur, run, locked):
+                    for output in manifest["outputs"]:
+                        table = output["table"]
+                        if table in DATE_SCA_CHILDREN:
+                            with _held(unlocked, f"load_{table}"):
+                                _copy(cur, table, children.setdefault(table, {}), rows[table],
+                                      job_id)
+                    if object_catalog.try_lock(cur, run, locked):
+                        break
             conn.rollback()
             time.sleep(lock_wait(tries))
         taken = time.perf_counter()
@@ -205,12 +219,14 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             tables = []
             for output in manifest["outputs"]:
                 table = output["table"]
+                tables.append(table)
+                if table in DATE_SCA_CHILDREN:
+                    continue
                 with _held(hold, f"load_{table}"):
                     if table in CHILDREN:
                         _copy(cur, table, children.setdefault(table, {}), rows[table], job_id)
                     else:
                         _insert(cur, table, rows[table], job_id)
-                tables.append(table)
             recording = time.perf_counter()
             filed = sorted({(table, int(r["field"])) for table in FIELD_CHILDREN & set(tables)
                             for r in rows[table]})
@@ -238,7 +254,9 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
         raise
     released = time.perf_counter()
     metrics = {"publish_lock_fields": len(locked), "publish_lock_tries": tries + 1,
-               "publish_lock_wait_s": taken - started, "publish_hold_s": released - taken,
+               "publish_lock_wait_s": taken - started - sum(unlocked.values()),
+               "publish_hold_s": released - taken,
+               **{f"publish_{name}_s": seconds for name, seconds in unlocked.items()},
                **{f"publish_hold_{name}_s": seconds for name, seconds in hold.items()}}
     return {"job": job_id, "attempt": attempt, "published": True, "group": group,
             "refusal": refusal, "live": live,
