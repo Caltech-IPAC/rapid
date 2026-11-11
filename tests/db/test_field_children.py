@@ -4,7 +4,7 @@
 inheriting the parent with a ``CHECK`` on its field; ``rapidpipe.foundation.publish``
 files each row under its object's field, loads each child by ``COPY`` and
 records the job's fields in ``job_fields``; ``<parent>_in(fields)``,
-``<parent>_of(jobs)`` and ``objects_official_in(fields)`` read the children
+``<parent>_in(fields, run)``, ``<parent>_of(jobs)`` and ``objects_official_in(fields)`` read the children
 only (rapid_docs decisions.md, field-children). Run by foundation.yml against
 database/schema.sql.
 """
@@ -229,6 +229,27 @@ def test_the_readers_give_the_rows_the_parents_give(connect, tmp_path):
     assert _rows(conn, "SELECT * FROM xobjects_official_in(ARRAY[7, 9]) ORDER BY job, xaid") == xview
 
 
+def test_the_run_readers_give_the_run_s_rows_of_the_fields_only(connect, tmp_path):
+    conn = connect()
+    jobs = {}
+    for run in (new_run(conn), new_run(conn)):                # two runs founding in fields 7 and 9
+        jobs[run] = new_job(conn, run)
+        publish(conn, jobs[run], 1, write_attempt(tmp_path / f"job-{jobs[run]}", {
+            "objects": [_object(1, 7), _object(3, 9)],
+            "memberships": [_member(jobs[run], 1, 7, 1), _member(jobs[run], 3, 9, 3)],
+            "xobjects": [_xobject(1, 7), _xobject(4, 9)],
+            "xmemberships": [_xmember(jobs[run], 1, 7, 1), _xmember(jobs[run], 4, 9, 2)]}))
+    for parent in ("objects", "xobjects"):
+        for run, job in jobs.items():
+            assert _rows(conn, f"SELECT t::text FROM {parent}_in(ARRAY[7, 9, 8], %s) t ORDER BY 1",
+                         (run,)) == _rows(conn, f"SELECT t::text FROM {parent} t WHERE job = %s"
+                                                " ORDER BY 1", (job,)), parent
+            assert _rows(conn, f"SELECT t::text FROM {parent}_in(ARRAY[9], %s) t ORDER BY 1", (run,)) == _rows(
+                conn, f"SELECT t::text FROM {parent} t WHERE job = %s AND field = 9 ORDER BY 1",
+                (job,)), parent
+        assert _rows(conn, f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", (max(jobs) + 1,)) == [(0,)]
+
+
 def test_a_child_carries_the_parents_indexes(connect, tmp_path):
     conn = connect()
     _publish_two_fields(conn, tmp_path)
@@ -245,7 +266,7 @@ def test_a_child_carries_the_parents_indexes(connect, tmp_path):
 def test_the_readers_scan_no_parent(connect, tmp_path):
     """The parents' scan counters stand still while every reader runs (a parent read scans it)."""
     conn, observer = connect(), connect()
-    _, diff, pkt = _publish_two_fields(conn, tmp_path)
+    run, diff, pkt = _publish_two_fields(conn, tmp_path)
 
     def scans() -> dict[str, int]:
         _rows(observer, "SELECT pg_stat_clear_snapshot()")
@@ -259,6 +280,9 @@ def test_the_readers_scan_no_parent(connect, tmp_path):
             cur.execute(f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9])")
             assert cur.fetchone()[0] > 0
             cur.execute(f"SELECT count(*) FROM {parent}_of(%s::bigint[])", ([diff, pkt],))
+            assert cur.fetchone()[0] > 0
+        for parent in ("objects", "xobjects"):
+            cur.execute(f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", (run,))
             assert cur.fetchone()[0] > 0
         cur.execute("SELECT count(*) FROM objects_official_in(ARRAY[7, 9])")
         cur.execute("SELECT count(*) FROM xobjects_official_in(ARRAY[7, 9])")

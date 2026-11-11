@@ -45,7 +45,9 @@ the pipeline imports.
   through `create_field_child(parent, field)`, owned and granted like
   `create_catalog_child`, loads it by `COPY` and records the fields each
   job's rows went to in `job_fields`. In SQL, `<parent>_in(fields)` returns
-  the rows in those fields' children, `<parent>_of(jobs)` the rows those
+  the rows in those fields' children, `objects_in(fields, run)` and
+  `xobjects_in(fields, run)` the run's rows of them (the run's filter inside
+  each child's query, so the readers hold no other run's rows), `<parent>_of(jobs)` the rows those
   jobs wrote (through `job_fields`), and `objects_official_in(fields)`
   `objects_official`'s rows of those fields, each from the children only.
 
