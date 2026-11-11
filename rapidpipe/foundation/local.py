@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import urlparse
 
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation import attempts as submissions
@@ -159,7 +159,9 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     (:class:`CgroupCpu`: the container's CPU seconds and the wall seconds of
     the same interval, from the stage's start to the manifest's upload) and
     ``host_vcpus`` (the CPUs this process may run on: Batch sets no cpuset,
-    so the host's, never the job's reservation). A job already published returns at once with
+    so the host's, never the job's reservation); after publication, the publisher's own
+    lock and hold timings (:mod:`rapidpipe.foundation.publish`, ``publish_lock_*`` and
+    ``publish_hold_*``). A job already published returns at once with
     ``published`` false and no file touched. The job row records
     ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
     which the job definition sets; none for a checkout) and the instance
@@ -241,7 +243,9 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             shutil.rmtree(workdir)
         with connect() as conn:
             result = publish(conn, job_id, attempt, context.prefix)
-            _record(conn, job_id, "ended = now(), exit_code = 0")
+            _record(conn, job_id, "ended = now(), exit_code = 0, manifest = jsonb_set(manifest,"
+                    " '{metrics}', coalesce(manifest -> 'metrics', '{}'::jsonb) || %s)",
+                    (Json(result.get("metrics", {})),))
             _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "published"})
     except BaseException as exc:
         code = exit_code(exc)
