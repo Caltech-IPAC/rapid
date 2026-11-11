@@ -12,14 +12,13 @@ Scope: ``{"expid", "sca", "fid"}``, the packet set's key without the
 dataset (the run's). Recorded inputs at launch, every one an ``input`` row:
 
 - ``sources``: exactly one, the epoch's source set, whose key is the
-  packet set's key. Its sources with no rejecting flag (`dev`'s
-  ``ALERTABLE_FLAGS``, 0, once the informational bits of
-  :data:`rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS` are
-  cleared, so a source in a bright footprint is a trigger and its packet
-  carries the bit in ``psfFitFlags``) that the difference job made a
-  member of an object are the triggers, cut to the ``[packet] max_alerts``
-  of highest |S/N| (shipped 2,000, `dev`'s per-chip cap; -1 keeps all). A trigger in several objects takes the lowest
-  ``aid`` (`dev`'s rule).
+  packet set's key: the binding through which the set's xsources are
+  official (rapid_docs ``decision-skip-sources``). Its xsources whose
+  SExtractor ``flags`` equal ``[associate] xsource_flags`` and that the
+  difference job made an xmember of an xobject are the triggers, cut to
+  the ``[packet] max_alerts`` of highest |S/N| (shipped 2,000, `dev`'s
+  per-chip cap; -1 keeps all). A trigger in several xobjects takes the
+  lowest ``xaid`` (`dev`'s rule).
 - ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
 - ``catalogs``: the dataset's catalog copies, at most one per name among
   ``gaia``, ``ned`` and ``lvs``, each by its whole key (``dataset``, ``name``,
@@ -36,9 +35,10 @@ Read at execution, as the object catalog stands (the plan's amendment of
 2026-10-24: best information at the time), and recorded exactly in the
 manifest's ``reads``, which the publisher writes to ``job_inputs``:
 
-- the triggers' objects and their members: every membership of those
-  objects whose source set is official (``memberships_official``), and the
-  set's own; ``sources`` reads, one per source set read;
+- the triggers' xobjects and their xmembers: every xmembership of those
+  xobjects whose source set is official, and the set's own; ``sources``
+  reads, one per source set read (a set's xsources are official through
+  its ``sources`` binding);
 - each of those sources' exposure: the official ``exposures`` row of its
   (dataset, expid), the one intake wrote, giving ``exposureTime``, the
   Roman observation identifiers (``program``, ``plan``, ``pass``,
@@ -57,17 +57,14 @@ manifest's ``reads``, which the publisher writes to ``job_inputs``:
 A late epoch's memberships therefore appear in packets issued after it
 arrives, never in those already sent.
 
-``[packet] alert_catalog`` names the tables read (rapid_docs
-``decision-packets-from-xsources``; :data:`ALERT_CATALOGS`): ``"xsources"``,
-shipped, reads the set's xsources, the ``xobjects`` and the
-``xmemberships`` where this docstring says sources, objects and
-memberships, each xsource read as a :class:`Source` by
-:func:`xsource_fields`; ``"sources"``, and a run body without the key,
-reads ``sources``, ``objects`` and ``memberships``. An xsource triggers
-when its SExtractor ``flags`` equal ``[associate] xsource_flags``. The
-``sources`` input and the ``sources`` reads name the source sets either
-way: a set's xsources are official through its ``sources`` binding. The
-index's ``aid`` and ``sid`` are the ``xaid`` and ``xsid`` under ``"xsources"``.
+The packets are made from ``xsources``, ``xobjects`` and ``xmemberships``
+only (rapid_docs ``decision-packets-from-xsources``; :data:`ALERT_CATALOG`),
+each xsource read as a :class:`Source` by :func:`xsource_fields`. The
+``sources``, ``objects`` and ``memberships`` tables are not read: the
+``"sources"`` value of ``[packet] alert_catalog`` was retired with them
+(Emily, 2026-11-11), and a run body that still names it is refused
+(:func:`alert_catalog`). The index's ``aid`` and ``sid`` are the ``xaid``
+and ``xsid``.
 
 The job's ``expects`` row names the previous packet binding for its key,
 or none.
@@ -146,10 +143,8 @@ each row naming its catalog's job; ``catid`` is Gaia's ``source_id`` or NED's
 ``prefname``).
 The manifest's ``metrics``: ``n_packets``, the set's packets, and
 ``n_packets_snr_gt20``, those whose source's fit flux over its error is
-above 20, and ``n_packets_bright_footprint``, those whose source carries
-the bright-footprint flag
-(:data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`; 0
-under ``"xsources"``, whose flags are the fit's); and the job's seconds by
+above 20 (``n_packets_bright_footprint`` was retired with the sources
+path: an xsource's flags are the fit's, never that bit); and the job's seconds by
 step, wall clock: ``packet_read_s``, the reads (:func:`_read`: the one
 transaction and the window's difference images and PSFs fetched);
 ``packet_forced_s``, the forced photometry measured on the window;
@@ -181,7 +176,6 @@ from rapidpipe.foundation.children import set_children
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import cache_dir, get, is_staged
 from rapidpipe.foundation.steps import step
-from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
     VERSION, AlertContainer, assemble_alert, load_schema, sync_marker_for)
@@ -191,8 +185,7 @@ from rapidpipe.science.alerts.crossmatch import (
     match_nedcat, match_refcat)
 from rapidpipe.science.catalogs.readers import CATALOG_KINDS, catalog_reader, cone_of_corners
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES, extract_stamp, load_fits_image
-from rapidpipe.science.alerts.records import (
-    ALERTABLE_FLAGS, Cutouts, ForcedPhot, ObjectRecord, Source)
+from rapidpipe.science.alerts.records import Cutouts, ForcedPhot, ObjectRecord, Source
 from rapidpipe.science.difference.realbogus import version_of
 from rapidpipe.science.statistics.sums import Sums
 
@@ -230,13 +223,10 @@ EXTERNAL_SCHEMA = pa.schema([
     ("sid", pa.int64()), ("catalog_job", pa.int64()),
 ])
 
-#: A source row with its band, and from its exposure the exposure time, the Roman observation
-#: identifiers and the program's survey title, as `dev`'s provider selects it (``SOURCE_SELECT``).
-SOURCE_COLUMNS = (
-    "s.job AS source_job, s.dataset, s.sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.xfit, s.yfit,"
-    " s.xerr, s.yerr, s.fluxfit, s.fluxerr, s.flags, s.field, s.hp6, s.hp9, s.pid,"
-    " s.isdiffpos, s.qfit, s.cfit, s.redchi, s.npixfit, s.sharpness, s.roundness1,"
-    " s.roundness2, s.peak, s.rb, s.rblabel, f.filter AS band, e.job AS exposure_job, e.exptime,"
+#: A row's band, and from its exposure the exposure time, the Roman observation identifiers and
+#: the program's survey title, as `dev`'s provider selects them (``SOURCE_SELECT``).
+EXPOSURE_COLUMNS = (
+    ", f.filter AS band, e.job AS exposure_job, e.exptime,"
     " e.program_id, e.execution_plan, e.pass AS obs_pass, e.segment, e.observation, e.visit,"
     " e.exposure, e.observation_id, sv.program_title AS survey")
 #: The exposure is the official ``exposures`` row of the source's (dataset, expid), the one intake
@@ -248,9 +238,9 @@ SOURCE_JOINS = (
     " LEFT JOIN exposures e ON e.job = oe.job AND e.dataset = s.dataset AND e.expid = s.expid"
     " LEFT JOIN surveys sv ON sv.program_id = e.program_id")
 
-#: The trigger set's memberships: its sources' objects and their fields, from the children of
-#: ``memberships`` its difference job wrote (``memberships_of``), never the parent; under
-#: ``"xsources"`` its xsources' xobjects from ``xmemberships`` (``{aid}`` ``xaid``, ``{sid}`` ``xsid``).
+#: The trigger set's xmemberships: its xsources' xobjects and their fields, from the children of
+#: ``xmemberships`` its difference job wrote (``xmemberships_of``), never the parent (``{aid}``
+#: ``xaid``, ``{sid}`` ``xsid``; the templates are filled by :data:`ALERT_CATALOG`).
 TRIGGER_SQL = ("SELECT {sid} AS sid, object_job, {aid} AS aid, field FROM {memberships}_of(ARRAY[%s]::bigint[])"
                " ORDER BY {sid}, {aid}, object_job")
 
@@ -281,15 +271,16 @@ XSOURCE_COLUMNS = (
     "s.job AS source_job, s.dataset, s.xsid AS sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.x, s.y,"
     " s.fluxap1, s.fluxerrap1, s.fluxfit, s.snrfit, s.flagsfit, s.redchi, s.npixfit, s.cfit,"
     " s.sharpness, s.roundness1, s.roundness2, s.field, s.hp6, s.hp9, s.pid, s.isdiffpos, s.rb,"
-    " s.rblabel" + SOURCE_COLUMNS[SOURCE_COLUMNS.index(", f.filter AS band"):])
+    " s.rblabel" + EXPOSURE_COLUMNS)
 
 
 @dataclasses.dataclass(frozen=True)
 class AlertCatalog:
-    """The tables ``[packet] alert_catalog`` makes a packet set from, and how their rows are read.
+    """The tables a packet set is made from, and how their rows are read.
 
     ``alertable`` is the own set's trigger condition, its one ``%s`` the
-    flags value (the sources' also takes the informational bits first).
+    flags value. One instance, :data:`ALERT_CATALOG`: the sources path it
+    was a choice against was retired with the ``sources`` table.
     """
     parent: str
     objects: str
@@ -306,36 +297,42 @@ class AlertCatalog:
                                alertable=self.alertable)
 
 
-#: ``[packet] alert_catalog``'s values (rapid_docs decision-packets-from-xsources).
-ALERT_CATALOGS = {
-    "sources": AlertCatalog("sources", "objects", "memberships", "aid", "sid", SOURCE_COLUMNS,
-                            "s.flags & ~%s = %s"),
-    "xsources": AlertCatalog("xsources", "xobjects", "xmemberships", "xaid", "xsid", XSOURCE_COLUMNS,
-                             "s.flags = %s"),
-}
+#: The tables the packets are made from (rapid_docs decision-packets-from-xsources): the xsources,
+#: xobjects and xmemberships; an xsource triggers when its SExtractor flags equal the value given.
+ALERT_CATALOG = AlertCatalog("xsources", "xobjects", "xmemberships", "xaid", "xsid", XSOURCE_COLUMNS,
+                             "s.flags = %s")
+
+#: The one value ``[packet] alert_catalog`` may hold, kept only so a stored run body that names
+#: the retired ``"sources"`` path is refused by name rather than read against a dropped table.
+RETIRED_ALERT_CATALOG = "sources"
 
 
 def alert_catalog(settings: dict) -> str:
-    """The run's ``[packet] alert_catalog``: ``"sources"`` for a run body stored before the key.
+    """The run's alert catalog, always ``"xsources"``; a body naming ``"sources"`` is refused.
 
     Parameters
     ----------
     settings : dict
-        The run's settings body.
+        The run's settings body. A body without the key, stored before
+        it, reads the xsources like every other.
 
     Returns
     -------
     str
-        ``"xsources"`` or ``"sources"``.
+        ``"xsources"``.
 
     Raises
     ------
     ValueError
-        When the value is neither.
+        When the body names ``"sources"`` (the path retired with the
+        table, Emily, 2026-11-11) or anything but ``"xsources"``.
     """
-    name = settings["packet"].get("alert_catalog", "sources")
-    if name not in ALERT_CATALOGS:
-        raise ValueError(f"[packet] alert_catalog must be one of {sorted(ALERT_CATALOGS)}, got {name!r}")
+    name = settings["packet"].get("alert_catalog", ALERT_CATALOG.parent)
+    if name == RETIRED_ALERT_CATALOG:
+        raise ValueError("[packet] alert_catalog = \"sources\" was retired with the sources table:"
+                         " packets are made from the xsources only, and this run body cannot be replayed")
+    if name != ALERT_CATALOG.parent:
+        raise ValueError(f"[packet] alert_catalog must be {ALERT_CATALOG.parent!r}, got {name!r}")
     return name
 
 
@@ -467,7 +464,6 @@ class Read:
     catalogs: dict[str, CatalogInput]            # by name, the ones the job names
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
-    catalog: str = "sources"                     # [packet] alert_catalog
     capped: int = 0                              # triggers dropped by [packet] max_alerts
 
 
@@ -499,14 +495,13 @@ def _key_where(key: dict, alias: str) -> tuple[str, list]:
 
 
 def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
-                 fields: list[int], catalog: AlertCatalog = ALERT_CATALOGS["sources"]) -> list[dict]:
-    """The members of the triggers' objects, each with its object's ``member_aid``.
+                 fields: list[int], catalog: AlertCatalog = ALERT_CATALOG) -> list[dict]:
+    """The xmembers of the triggers' xobjects, each with its xobject's ``member_aid``.
 
-    The memberships first (:data:`MEMBERSHIPS_SQL`), then the members' rows
-    from the child tables of ``sources`` that hold them, one query per child
+    The xmemberships first (:data:`MEMBERSHIPS_SQL`), then the members' rows
+    from the child tables of ``xsources`` that hold them, one query per child
     (:data:`MEMBER_ROWS_SQL`), never the parent. A member appears once per
-    object, ordered by object, source set and source id. Under ``catalog``
-    ``xsources``: the xobjects' xmemberships and the xsources' children.
+    xobject, ordered by xobject, source set and xsource id.
 
     Parameters
     ----------
@@ -519,7 +514,7 @@ def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
     fields : list of int
         The objects' fields, whose children of ``memberships`` hold their memberships.
     catalog : AlertCatalog, optional
-        The tables read (:data:`ALERT_CATALOGS`).
+        The tables read (:data:`ALERT_CATALOG`).
 
     Returns
     -------
@@ -565,12 +560,13 @@ def _read(job: JobContext) -> Read:
     ref_in = _one(inputs, "refimages", job.job)
     window_days = float(job.settings["packet"]["forced_window_days"])
     max_alerts = job.settings["packet"]["max_alerts"]
-    catalog_name = alert_catalog(job.settings)
-    catalog = ALERT_CATALOGS[catalog_name]
-    alertable_flags = ((INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS) if catalog_name == "sources"
-                       else (int(job.settings["associate"]["xsource_flags"]),))
-    as_source = (lambda r: Source.from_row(r)) if catalog_name == "sources" else (
-        lambda r: Source.from_row(xsource_fields(r)))
+    alert_catalog(job.settings)                  # refuses a body naming the retired sources path
+    catalog = ALERT_CATALOG
+    alertable_flags = (int(job.settings["associate"]["xsource_flags"]),)
+
+    def as_source(row):
+        return Source.from_row(xsource_fields(row))
+
     if not isinstance(max_alerts, int) or isinstance(max_alerts, bool) or max_alerts < -1:
         raise ValueError(f"[packet] max_alerts must be an integer, -1 for no cap, got {max_alerts!r}")
     reads: list[dict] = []
@@ -709,7 +705,7 @@ def _read(job: JobContext) -> Read:
     trigger_image = [i for i in images if (i.expid, i.sca, i.fid) == (key["expid"], key["sca"], key["fid"])]
     if len(trigger_image) != 1:
         raise ValueError(f"job {job.job}: the trigger's difference image is not in its window")
-    return Read(key=key, source_job=source_job, catalog=catalog_name, object_job=object_job,
+    return Read(key=key, source_job=source_job, object_job=object_job,
                 field_of=field_of,
                 flags_zero=len(alertable), triggers=triggers, capped=capped,
                 aid_of=aid_of, objects=objects, members=members, images=images,
@@ -1008,7 +1004,6 @@ def run(job: JobContext) -> None:
                            empty_ok=() if read.triggers else ("packets",), packet=summary, reads=read.reads,
                            metrics={"n_packets": summary["packets"],
                                     "n_packets_snr_gt20": summary["packets_snr_gt20"],
-                                    "n_packets_bright_footprint": summary["packets_bright_footprint"],
                                     "packet_read_s": round(read_s, 3),
                                     **{f"packet_{k}": v for k, v in summary["timing_s"].items()}})
 
@@ -1156,10 +1151,6 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
             "triggers_dropped_by_cap": read.capped,
             "packets_snr_gt20": sum(1 for source, _ in order
                                     if source.fluxerr and source.fluxfit / source.fluxerr > 20),
-            # an xsource's flags are its fit's, which carry no bright-footprint bit
-            "packets_bright_footprint": sum(1 for source, _ in order
-                                            if read.catalog == "sources"
-                                            and source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
             "window_images": len(window),
             "window_without_science_psf": sum(1 for i in window if i.sci_psf is None),
             "forced_rows": len(forced_rows),

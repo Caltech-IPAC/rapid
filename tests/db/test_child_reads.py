@@ -202,8 +202,9 @@ def test_validate_runs_checks_pass_and_read_the_parents_rows(connect, tmp_path):
     assert reference and dict(validate.members_by_aid(made["packets"][(1, 1)], pairs)) == reference
 
 
-def test_completeness_reads_the_run_s_official_sources(connect, tmp_path):
+def test_completeness_reads_the_run_s_official_xsources(connect, tmp_path):
+    """The detections are the official sets' xsources, by xsid: the sources path is retired."""
     w, run, _ = _proof_run(connect, tmp_path, {"intake": {}})
     got = _script("completeness").load(w.conn, run)["sources"]
-    want = w.rows("SELECT s.job, s.sid FROM sources_official s WHERE s.run = %s ORDER BY 1, 2", (run,))
+    want = w.rows("SELECT s.job, s.xsid FROM xsources_official s WHERE s.run = %s ORDER BY 1, 2", (run,))
     assert len(want) and sorted(zip(got["job"], got["sid"])) == [tuple(r) for r in want]

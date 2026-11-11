@@ -440,25 +440,30 @@ def test_a_fitted_xsource_carries_its_fit_and_zero_based_pixels():
     assert source.snr == 40.0                      # [packet] max_alerts ranks by the fit's S/N
 
 
-def test_alert_catalog_is_sources_for_a_body_without_the_key_and_refuses_another_value():
-    assert alert_catalog({"packet": {}}) == "sources"
+def test_alert_catalog_is_xsources_and_refuses_the_retired_sources_path():
+    """A body without the key, stored before it, reads the xsources like every other; one naming
+    the retired sources path is refused by name, never read against the dropped table."""
+    assert alert_catalog({"packet": {}}) == "xsources"
     assert alert_catalog({"packet": {"alert_catalog": "xsources"}}) == "xsources"
+    with pytest.raises(ValueError, match="retired with the sources table"):
+        alert_catalog({"packet": {"alert_catalog": "sources"}})
     with pytest.raises(ValueError, match="alert_catalog"):
         alert_catalog({"packet": {"alert_catalog": "objects"}})
 
 
-def test_the_base_settings_ship_xsources():
+def test_the_base_settings_carry_no_alert_catalog_key():
     import tomllib
     from pathlib import Path
 
     base = Path(__file__).resolve().parents[2] / "rapidpipe" / "settings" / "foundation-thin.toml"
-    assert alert_catalog(tomllib.loads(base.read_text())) == "xsources"
+    body = tomllib.loads(base.read_text())
+    assert "alert_catalog" not in body["packet"] and alert_catalog(body) == "xsources"
 
 
-def test_the_xsources_catalog_reads_the_xsources_tables():
-    from rapidpipe.stages.packet import ALERT_CATALOGS, MEMBERSHIPS_SQL, ORIGINS_SQL, TRIGGER_SQL
+def test_the_alert_catalog_reads_the_xsources_tables():
+    from rapidpipe.stages.packet import ALERT_CATALOG, MEMBERSHIPS_SQL, ORIGINS_SQL, TRIGGER_SQL
 
-    x = ALERT_CATALOGS["xsources"]
+    x = ALERT_CATALOG
     assert "FROM xmemberships_of(" in x.sql(TRIGGER_SQL) and "xsid AS sid" in x.sql(TRIGGER_SQL)
     assert "(NULL::xobjects," in x.sql(ORIGINS_SQL)
     assert "(NULL::xmemberships," in x.sql(MEMBERSHIPS_SQL)

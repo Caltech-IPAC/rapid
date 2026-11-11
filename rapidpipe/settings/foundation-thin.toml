@@ -141,12 +141,11 @@ forced_window_days = 30.0
 # temporary stand-in for a real/bogus cut. The absolute value is new, not
 # dev's: a negative source ranks by its strength, not last.
 max_alerts = 2000
-# New, not dev's (rapid_docs decision-packets-from-xsources): the catalog the
-# packets are made from. "xsources": the set's xsources (prefiltered by
-# [difference.xsources_database_prefilter]), xobjects and xmemberships;
-# "sources": the set's sources, objects and memberships. A run body stored
-# before this key keeps "sources".
-alert_catalog = "xsources"
+# The packets are made from the set's xsources (prefiltered by
+# [difference.xsources_database_prefilter]), xobjects and xmemberships only
+# (rapid_docs decision-packets-from-xsources). The alert_catalog key that
+# chose between them and the sources tables was retired with those tables
+# (Emily, 2026-11-11): a stored run body naming "sources" is refused.
 # The three catalog matches, each on by default (dev [ALERTS] ned_match and
 # siblings): a switched-on catalog must be official for the loop to plan a
 # packet job, and a match that cannot run at execution ships its field null

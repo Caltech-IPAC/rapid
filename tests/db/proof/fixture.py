@@ -147,6 +147,20 @@ class World:
                 "fluxfit": flux_scale * (100.0 + i + 10.0 * epoch), "fluxerr": 1.0,
                 "flags": 0, "qfit": 0.0, "cfit": 0.0, "npixfit": 9, "sharpness": 0.5,
                 "roundness1": 0.0, "roundness2": 0.0, "peak": 10.0})
+        # The set's xsources beside its sources, one per source at the same position with the
+        # same fit (the packet stage and completeness.py read the xsources; the sources path is
+        # retired, rapid_docs decision-packets-from-xsources).
+        apertures = ("fluxap", "fluxap1", "fluxap2", "fluxap3", "fluxap4", "fluxap5", "fluxerrap",
+                     "fluxerrap1", "fluxerrap2", "fluxerrap3", "fluxerrap4", "fluxerrap5")
+        shapes = ("awinworld", "bwinworld", "awinimage", "bwinimage", "fwhmimage", "classstar")
+        xsources = [{
+            "xsid": s["sid"], **key, "pid": pid, "num": s["sid"], "isdiffpos": True, "field": FIELD,
+            "hp6": 0, "hp9": 0, "mjdobs": s["mjdobs"], "ra": s["ra"], "dec": s["dec"],
+            "x": s["xfit"] + 1.0, "y": s["yfit"] + 1.0, **{name: 1.5 for name in apertures + shapes},
+            "flags": 0, "rb": None, "nneg": 0, "nbad": 0, "sumrat": 0.8, "sharpness": s["sharpness"],
+            "roundness1": 0.0, "roundness2": 0.0, "fluxfit": s["fluxfit"],
+            "snrfit": s["fluxfit"] / s["fluxerr"], "redchi": 1.0, "npixfit": s["npixfit"],
+            "flagsfit": 0, "cfit": 0.0, "rblabel": -1} for s in sources]
         read = self.catalog(run) if catalog is None else catalog
         expects = [{"product": product, "key": key, "binding": expects}
                    for product in ("diffimages", "sources")]
@@ -155,7 +169,7 @@ class World:
         job = create_job(self.conn, run, "difference", {"epoch": epoch, "sca": sca}, (), expects)
         epoch_rows = associate_epoch({aid: (owner, ra0, dec0) for owner, aid, ra0, dec0 in read},
                                      sources, job=job, radius=RADIUS)
-        outputs = {"diffimages": [diffimage], "sources": sources,
+        outputs = {"diffimages": [diffimage], "sources": sources, "xsources": xsources,
                    "objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": FIELD}
                                for o in epoch_rows.founded],
                    "memberships": [{**m, "field": FIELD} for m in epoch_rows.memberships]}
