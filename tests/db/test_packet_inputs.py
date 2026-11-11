@@ -282,7 +282,8 @@ def test_a_packet_job_reads_its_sources_from_child_tables_never_the_parent(conne
     result = run_job(recording, job, tmp_path.as_uri(), packet.run)
 
     assert result["published"]
-    for function in ("memberships_of(", "memberships_in(", "objects_in(", "forced_in("):
+    for function in ("memberships_of(", "packet_membership_rows(", "packet_origin_rows(",
+                     "packet_reuse_rows("):
         assert any(f"FROM {function}" in s for s in statements), function  # the stage's reads were seen
     assert [s for s in statements if PARENT_READ.search(s)] == []
     children = [s for s in statements if re.search(r'FROM "sources_\d{8}_8" s', s)]

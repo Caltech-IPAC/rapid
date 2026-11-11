@@ -47,7 +47,10 @@ the pipeline imports.
   job's rows went to in `job_fields`. In SQL, `<parent>_in(fields)` returns
   the rows in those fields' children, `objects_in(fields, run)` and
   `xobjects_in(fields, run)` the run's rows of them (the run's filter inside
-  each child's query, so the readers hold no other run's rows), `<parent>_of(jobs)` the rows those
+  each child's query, so the readers hold no other run's rows), the packet
+  stage's `packet_origin_rows`, `packet_membership_rows` and
+  `packet_reuse_rows` the rows its three reads keep, of every run (each read's
+  filter inside each child's query), `<parent>_of(jobs)` the rows those
   jobs wrote (through `job_fields`), and `objects_official_in(fields)`
   `objects_official`'s rows of those fields, each from the children only.
 
