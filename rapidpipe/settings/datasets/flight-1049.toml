@@ -42,3 +42,21 @@ dq_mask_bits = 0x2110C01
 # (-0.08 to +0.16, -0.56 to -0.35) px, as WCS offset; by hand the
 # propagation puts the WCS at (-0.09 to -0.04, -0.06 to -0.04) px.
 gaia_proper_motion = true
+
+[difference.sci_image]
+# False is meant for in-flight data, as commissioning a7778505 sets it, though its ini comment still says to enable it for real data (Azalee, 2026-11-10).
+repair_extreme_artifact_pixels = false
+
+[difference.sfft]
+# Commissioning's [SFFT] value (dev 025e42b3's socsims setting, carried onto commissioning, not a flight measurement): no cross-convolution, SFFT's difference PSF is the science PSF (Azalee, 2026-11-10).
+crossconv_flag = false
+
+[difference.gainmatch]
+# Commissioning a7778505's thresholds, which effectively remove the gain-match magnitude cut (AB scale, zprefimg added once) (Azalee, 2026-11-10).
+magrefthresmin = 10.0
+magrefthresmax = 30.0
+refmagkeep = 30.0
+
+[difference.psfcat_diffimage]
+# DAOStarFinder's sharpness ceiling; 1.8 admits more extended detections into the difference sources than dev's 1.0, set from analysis of on-orbit data, as commissioning a7778505 (Azalee, 2026-11-10).
+sharphi = 1.8
