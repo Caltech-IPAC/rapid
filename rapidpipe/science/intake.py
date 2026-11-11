@@ -29,6 +29,12 @@ distortion reference, the gWCS is re-derived from the file's own
 replacing the one tweakreg left. Without one the file's gWCS is used, as
 `dev` does.
 
+A departure from `dev` (Azalee, 2026-11-05): the SOC reader's ``FILTER`` is
+the Roman name the file gives (``F146``), not `dev`'s RAPID spelling
+(``W146``), so the reference stage's nominal zero point table is keyed by
+it; the OpenUniverse and RimTimSim readers keep the RAPID spelling, and
+every reader of ``FILTER`` accepts either.
+
 `dev`'s hard-coded tuning is the caller's: the SIP degree and its maximum
 pixel error, the gzip level and the nominal zeropoints (used only when the
 file carries no photometric calibration). `dev`'s ``print`` lines are log
@@ -266,8 +272,13 @@ def compute_zptmag(dm, optical_element: str, nominal_zptmag: Mapping[str, float]
 
 
 def build_primary_header(dm, asdf_tree, input_asdf_file, nominal_zptmag: Mapping[str, float],
-                         swname: str, swvers: str, created: str) -> fits.Header:
-    """The primary header: the pipeline's short keywords, then every scalar ASDF metadata leaf."""
+                         swname: str, swvers: str, created: str, *,
+                         roman_filter_name: bool = False) -> fits.Header:
+    """The primary header: the pipeline's short keywords, then every scalar ASDF metadata leaf.
+
+    ``FILTER`` is the Roman name (``F146``) when ``roman_filter_name``, as the
+    SOC reader writes it, else `dev`'s RAPID spelling (``W146``).
+    """
     hdr = fits.Header()
     hdr["SWNAME"] = (swname, "software that made this file")
     hdr["SWVERS"] = (swvers, "version of that software")
@@ -282,7 +293,8 @@ def build_primary_header(dm, asdf_tree, input_asdf_file, nominal_zptmag: Mapping
     optical_element = str(dm.meta.instrument.optical_element).strip()
     if optical_element not in ROMAN_TO_RAPID_FILTER_NAMES:
         raise ConversionError(f"unexpected optical element {optical_element}")
-    hdr["FILTER"] = (ROMAN_TO_RAPID_FILTER_NAMES[optical_element], "filter used")
+    filter_name = optical_element if roman_filter_name else ROMAN_TO_RAPID_FILTER_NAMES[optical_element]
+    hdr["FILTER"] = (filter_name, "filter used")
 
     detector = str(dm.meta.instrument.detector).strip()
     hdr["DETECTOR"] = (detector, "detector assembly")
@@ -482,13 +494,15 @@ def build_table_hdu(node_name, table):
 
 def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_error: float,
                     nominal_zptmag: Mapping[str, float], swname: str, swvers: str,
-                    created: str, dq_mask_bits: int = 0) -> dict[str, Any]:
+                    created: str, dq_mask_bits: int = 0,
+                    roman_filter_name: bool = False) -> dict[str, Any]:
     """Write the FITS file of an open data model one HDU at a time.
 
     Returns ``hdus`` (the EXTNAMEs), ``dq_masked`` (pixels the DQ mask set
     NaN, None when nothing was masked) and ``sci_nan_input`` (the science
     image's own NaN pixels before the mask). The HDUs go to
     ``<fits_path>.partial``, moved into place only after the last.
+    ``roman_filter_name`` is :func:`build_primary_header`'s.
     """
     import asdf
 
@@ -498,7 +512,8 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
     except Exception as exc:  # noqa: BLE001
         log.warning("could not read the raw ASDF tree of %s (%s); continuing", asdf_path, exc)
         asdf_tree = {}
-    primary_hdr = build_primary_header(dm, asdf_tree, asdf_path, nominal_zptmag, swname, swvers, created)
+    primary_hdr = build_primary_header(dm, asdf_tree, asdf_path, nominal_zptmag, swname, swvers, created,
+                                       roman_filter_name=roman_filter_name)
     exptime = primary_hdr["EXPTIME"]
     image_nodes = asdf_image_nodes(dm)
     if not image_nodes or image_nodes[0][0] != SCIENCE_NODE_NAME:
@@ -569,13 +584,14 @@ def asdf_to_fits(asdf_path, fits_path, *, distortion=None, **conversion) -> dict
 
     With ``distortion`` (a reference file's path) the gWCS is re-derived
     first (:func:`rederive_wcs`) and the result carries ``wcs_shift_px``.
+    This is the SOC reader, so ``FILTER`` is the Roman name.
     """
     import roman_datamodels as rdm
 
     dm = rdm.open(asdf_path, memmap=True)
     try:
         shift = None if distortion is None else rederive_wcs(dm, distortion)
-        result = build_fits_file(dm, asdf_path, fits_path, **conversion)
+        result = build_fits_file(dm, asdf_path, fits_path, roman_filter_name=True, **conversion)
         return result if shift is None else {**result, "wcs_shift_px": shift}
     finally:
         dm.close()

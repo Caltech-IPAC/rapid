@@ -14,7 +14,10 @@ re-derived): no PV or SIP is added.
 
 Departures (reference page): ``FID`` is not stamped (a database id; the
 ``refimages`` row carries ``fid``); the foundation's identifiers are added
--- ``RPRUN``, ``RPJOB``, ``RPATTMPT`` and ``RPSTAGE`` (``reference``).
+-- ``RPRUN``, ``RPJOB``, ``RPATTMPT`` and ``RPSTAGE`` (``reference``);
+and ``ZPSOURCE`` after ``MAGZP``, which zero point scaled the inputs
+(``header``, each frame's ``ZPTMAG``, or ``nominal``, the per-filter table
+under commissioning's ``use_nominal_zptmag``, 8a4a172d).
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ class StampValues:
     infobits: int
     status: int
     infobit_cards: tuple[tuple[str, int, str], ...]
+    zptmag_source: str = "header"
 
 
 def infile_keyword(i: int) -> str:
@@ -73,6 +77,7 @@ def stamp_cards(values: StampValues) -> list[tuple[str, Any, str | None]]:
         ("JDSTART", values.jdstart, "Obs. JD of earliest image used [days]"),
         ("JDEND", values.jdend, "Obs. JD of latest image used [days]"),
         ("MAGZP", values.zprefimg, "Zero point of reference image [mag]"),
+        ("ZPSOURCE", values.zptmag_source, "Inputs scaled by: header ZPTMAG or nominal"),
         ("TOTEXPTM", values.total_refimage_exptime, "Total input-image exposure time [s]"),
         ("INFOBITS", int(values.infobits), format_infobits_comment(values.infobits)),
         ("STATUS", int(values.status), "Overall quality: 1 = usable, 0 = bad"),
