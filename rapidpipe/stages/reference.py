@@ -66,6 +66,9 @@ Departures from `dev` (reference page):
 - `dev` never checks a tool's exit code; this stage fails when awaicgen
   or SExtractor leaves no output, and when the catalog has no source
   with a usable FWHM (`dev`'s ``nanmin`` raises there).
+- The mosaic catalog's ``MAG_ZEROPOINT`` is ``zprefimg``, the ``MAGZP``
+  the coadd was scaled to, set at run time (:func:`catalog_settings`,
+  commissioning 810a26e9), where `dev`'s table leaves it 0.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
@@ -329,6 +332,25 @@ def _require_output(path: Path, tool: str, exit_code: int) -> None:
         raise RuntimeError(f"{tool} exited {exit_code} and did not write {path.name}")
 
 
+def catalog_settings(settings: dict[str, Any], zprefimg: float) -> dict[str, Any]:
+    """A copy of ``[sextractor_refimage]`` with ``sextractor_mag_zeropoint`` set to the coadd's zero point (commissioning 810a26e9).
+
+    Parameters
+    ----------
+    settings : dict
+        The job's ``[reference]`` table; not changed.
+    zprefimg : float
+        The ``MAGZP`` the coadd was scaled to.
+
+    Returns
+    -------
+    dict
+        The SExtractor table the mosaic catalog runs with.
+    """
+    logger.info("reference-image SExtractor MAG_ZEROPOINT = %s", zprefimg)
+    return {**settings["sextractor_refimage"], "sextractor_mag_zeropoint": str(zprefimg)}
+
+
 def run(job: JobContext) -> None:
     settings = job.settings["reference"]
     rtid = int(job.scope["field"])
@@ -396,7 +418,7 @@ def run(job: JobContext) -> None:
 
     with step("catalog"):
         catalog_name, sex_exit = catalog.generate_reference_image_catalog(
-            kit.runner, out_dir, settings["sextractor_refimage"], paths["cfg_path"],
+            kit.runner, out_dir, catalog_settings(settings, zprefimg), paths["cfg_path"],
             names["image"], names["uncertainty"], executable=paths["sextractor"])
     _require_output(o(catalog_name), "SExtractor", sex_exit)
     try:
