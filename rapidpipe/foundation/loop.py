@@ -109,20 +109,19 @@ One pass, in order:
   min_frames`` of them; its scope's SCA is the first in order among the
   rows that will be differenced against it. A dithered visit's later
   epoch so gets a reference from earlier epochs centred in other fields.
-- With ``[reference.selection] selection_type = "coverage"`` (commissioning
-  d586136b, ebd95254, debbc6e4; ``rapidpipe.products.coverage``) the frames
-  are chosen by how much of the reference they cover: the candidates are
-  the selected official rows of the filter whose ``overlapfields`` meet any
-  tile under the reference's footprint, walked in ``mjdobs`` order, then
-  distance from the reference's centre, then L2 key; a frame whose footprint
-  misses the reference is skipped, and selection stops once
-  ``max_coverage_fraction`` of its pixels reach ``max_coverage_depth`` or at
-  ``max_frames``. The job names exactly the selected frames, and
-  ``min_frames`` is not used. A field whose estimated fraction at
-  ``min_coverage_depth`` is below ``min_coverage_fraction`` less
-  ``coverage_estimate_tolerance`` gets no job and is reported under
-  ``held`` ("estimated coverage X < Z"), with or without the bound, every
-  pass, so it is planned once enough frames arrive.
+- With ``[reference.selection] selection_type = "coverage"``
+  (``rapidpipe.products.coverage``) the frames are chosen by how much of the
+  reference they cover: the candidates are the selected official rows of the
+  filter whose ``overlapfields`` meet any tile under the reference's
+  footprint, walked in ``mjdobs`` order, then distance from the reference's
+  centre, then L2 key; a frame whose footprint misses the reference is
+  skipped, and selection stops once ``max_coverage_fraction`` of its pixels
+  reach ``max_coverage_depth`` or at ``max_frames``. The job names exactly
+  the selected frames, and ``min_frames`` is not used. A field whose
+  estimated fraction at ``min_coverage_depth`` is below
+  ``min_coverage_fraction`` less ``coverage_estimate_tolerance`` gets no job
+  and is reported under ``held`` ("estimated coverage X < Z"), with or
+  without the bound, every pass, so it is planned once enough frames arrive.
 - A reference job that ``declined`` (its coverage map short of the
   minimum: nothing published, ``rapidpipe.foundation.publish``) is neither
   pending nor failed: its field is reported under ``held`` with the reason
@@ -607,9 +606,8 @@ def select_by_coverage(reference: dict, pool: list[tuple[tuple, dict]],
 
     For each ``(field, fid)`` of ``needs``: the candidates are the rows of
     ``pool`` of that filter whose ``overlapfields`` meet any tile under
-    the reference's footprint (commissioning's ``overlapfields &&``,
-    d586136b), walked in ``mjdobs`` order, then distance from the
-    reference's centre, then L2 key, through
+    the reference's footprint (``overlapfields &&``), walked in ``mjdobs``
+    order, then distance from the reference's centre, then L2 key, through
     :func:`rapidpipe.products.coverage.select_refimage_inputs`. A build or
     verify fills ``needs[(field, fid)]`` with the selected frames; a reject
     is held.

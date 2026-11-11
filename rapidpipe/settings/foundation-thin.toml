@@ -334,17 +334,16 @@ max_frames = 25
 # reference only from its official L2 rows with mjdobs < before_mjd, once
 # the selection's intake has drained, and differences only the rows at or
 # after it; absent, a reference coadds every epoch (rapidpipe.foundation.loop).
-# selection_type: "nframes" is `dev`'s rule above (the field's own rows, the
-# first max_frames); "coverage" is commissioning's (d586136b, ebd95254,
-# debbc6e4): the loop takes rows under any tile of the reference's footprint,
-# in mjdobs, distance, key order, skips frames that miss it and stops once
-# max_coverage_fraction of its pixels reach max_coverage_depth or at
-# max_frames; it holds the field when the estimated fraction at
-# min_coverage_depth is below min_coverage_fraction less
+# selection_type: "nframes" is the rule above (the field's own rows, the first
+# max_frames); under "coverage" the loop takes rows under any tile of the
+# reference's footprint, in mjdobs, distance, key order, skips frames that
+# miss it and stops once max_coverage_fraction of its pixels reach
+# max_coverage_depth or at max_frames; it holds the field when the estimated
+# fraction at min_coverage_depth is below min_coverage_fraction less
 # coverage_estimate_tolerance, and the stage declines a coadd whose coverage
 # map is below min_coverage_fraction (rapidpipe.products.coverage). min_frames
-# is not used under "coverage". The coverage keys carry commissioning's
-# values; "nframes" ignores them (Azalee, 2026-11-10).
+# is not used under "coverage", and "nframes" ignores the coverage keys
+# (Azalee, 2026-11-10).
 selection_type = "nframes"
 min_coverage_depth = 1
 min_coverage_fraction = 0.5

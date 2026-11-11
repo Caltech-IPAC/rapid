@@ -36,22 +36,22 @@ least ``[selection] min_frames``; frames past ``max_frames`` are not
 coadded and are named in the manifest. Every frame's HDU 1 ``FILTER``,
 normalised to the RAPID spelling, must be the scope's filter.
 
-Under ``[selection] selection_type = "coverage"`` (commissioning
-d586136b, ebd95254, debbc6e4, 702d0cad; ``rapidpipe.products.coverage``)
-the loop has chosen the frames by their coverage of the reference, and
-``min_frames`` is not used: the stage estimates the named frames' coverage
-from their ``l2files`` corners (step ``coverage_estimate``), coadds those
-that meet the reference (a frame that misses it is skipped), and measures
-the fraction of the coverage map's pixels at ``min_coverage_depth`` or
-deeper (step ``verify``). An estimate below ``min_coverage_fraction`` less
-``coverage_estimate_tolerance``, or a measured fraction below
-``min_coverage_fraction``, declines the reference: the stage ends
-normally, writes no table and says why in the manifest's ``declined``, and
-the publisher marks the job ``declined`` (nothing loaded, nothing bound).
-A reference that passes carries ``COVFRAC``, ``COVDEPTH`` and ``COVTARG``
-in its header and ``covfrac`` and ``covdepth`` on its row; the manifest's
-``reference.coverage`` names the selected and skipped ``rid``\\ s, the
-estimate and the measured fraction, declined or not.
+Under ``[selection] selection_type = "coverage"``
+(``rapidpipe.products.coverage``) the loop has chosen the frames by their
+coverage of the reference, and ``min_frames`` is not used: the stage
+estimates the named frames' coverage from their ``l2files`` corners (step
+``coverage_estimate``), coadds those that meet the reference (a frame that
+misses it is skipped), and measures the fraction of the coverage map's
+pixels at ``min_coverage_depth`` or deeper (step ``verify``). An estimate
+below ``min_coverage_fraction`` less ``coverage_estimate_tolerance``, or a
+measured fraction below ``min_coverage_fraction``, declines the reference:
+the stage ends normally, writes no table and says why in the manifest's
+``declined``, and the publisher marks the job ``declined`` (nothing
+loaded, nothing bound). A reference that passes carries ``COVFRAC``,
+``COVDEPTH`` and ``COVTARG`` in its header and ``covfrac`` and
+``covdepth`` on its row; the manifest's ``reference.coverage`` names the
+selected and skipped ``rid``\\ s, the estimate and the measured fraction,
+declined or not.
 
 Outputs under ``job.path``: ``ref/`` holds the mosaic, its coverage and
 uncertainty maps (awaicgen's names, beside one another, as the import
