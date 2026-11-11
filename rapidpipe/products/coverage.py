@@ -1,17 +1,15 @@
 # ported-from: none
 """The reference image's coverage: which frames it is coadded from, chosen by how much of it they cover.
 
-Ported from commissioning's ``pipeline/referenceImageSubs.py`` (d586136b,
-ebd95254, debbc6e4): ``make_refimage_wcs``, ``coverage_sample_grid``,
+Holds ``make_refimage_wcs``, ``coverage_sample_grid``,
 ``compute_footprint_mask``, ``coverage_fraction`` and
 ``select_refimage_inputs``, with the tolerance a setting
-(``[reference.selection] coverage_estimate_tolerance``, commissioning's
-``COVERAGE_ESTIMATE_TOLERANCE``) and the decision its own function
-(:func:`coverage_decision`) so the stage judges the frames the loop named
-with the same rule. Beside them, the reference's footprint as Roman tiles
-(:func:`reference_tiles`, the pool ``rapidpipe loop`` widens to under
-``selection_type = "coverage"``) and the order its candidates are walked in
-(:func:`candidate_order`).
+(``[reference.selection] coverage_estimate_tolerance``) and the decision its
+own function (:func:`coverage_decision`) so the stage judges the frames the
+loop named with the same rule. Beside them, the reference's footprint as
+Roman tiles (:func:`reference_tiles`, the pool ``rapidpipe loop`` widens to
+under ``selection_type = "coverage"``) and the order its candidates are
+walked in (:func:`candidate_order`).
 
 Here, not in ``rapidpipe.science``, because both the loop
 (``rapidpipe.foundation``, which may import ``products`` but not
@@ -30,9 +28,9 @@ from astropy.wcs import WCS
 
 from rapidpipe.products.spatial import RomanTessellationClosedForm, overlapping_fields
 
-#: The sampling step of the coverage estimate, reference pixels (commissioning's ``COVERAGE_GRID_STEP``).
+#: The sampling step of the coverage estimate, reference pixels.
 COVERAGE_GRID_STEP = 25
-#: Commissioning's ``COVERAGE_ESTIMATE_TOLERANCE``, the default of ``coverage_estimate_tolerance``.
+#: The default of ``coverage_estimate_tolerance``.
 COVERAGE_ESTIMATE_TOLERANCE = 0.05
 #: ``[reference.selection] selection_type``'s values: the first ``max_frames`` frames, or coverage.
 SELECTION_TYPES = ("nframes", "coverage")
@@ -169,7 +167,7 @@ def select_refimage_inputs(w: WCS, naxis1: int, naxis2: int, candidate_corners: 
     Selection stops once ``max_coverage_fraction`` of the reference's
     pixels reach ``max_coverage_depth``, or at ``max_n_images_to_coadd``
     frames; a candidate whose footprint misses the reference (its tile is
-    under the reference's edge, debbc6e4) is skipped and does not count
+    under the reference's edge) is skipped and does not count
     toward the cap.
 
     Parameters
@@ -274,9 +272,8 @@ def tile_center(rtid: int) -> tuple[float, float]:
 def reference_tiles(w: WCS, naxis1: int, naxis2: int) -> list[int]:
     """The Roman tiles under a reference image's whole footprint, the loop's ``"coverage"`` pool.
 
-    Commissioning's launcher takes them from ``roman_tessellation_db.get_overlapping_rtids``
-    of the reference's corners (d586136b); here :func:`rapidpipe.products.spatial.overlapping_fields`
-    of the reference's WCS, which works on the tangent plane, with no inset.
+    They are :func:`rapidpipe.products.spatial.overlapping_fields` of the reference's WCS, which
+    works on the tangent plane, with no inset.
 
     Parameters
     ----------
