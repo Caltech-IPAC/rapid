@@ -46,7 +46,7 @@ program_id = 1049
 gaia_proper_motion = true
 
 [difference.sci_image]
-# False is meant for in-flight data, as commissioning a7778505 sets it, though its ini comment still says to enable it for real data (Azalee, 2026-11-10).
+# False is meant for in-flight data (Azalee, 2026-11-10).
 repair_extreme_artifact_pixels = false
 
 [difference.sfft]
@@ -64,15 +64,15 @@ repair_extreme_artifact_pixels = false
 sfft_zero_margin = "2"
 sfft_bsmask_isoarea = "2000"
 sfft_bsmask_isofactor = "2.0"
-# Commissioning's [SFFT] value (dev 025e42b3's socsims setting, carried onto commissioning, not a flight measurement): no cross-convolution, SFFT's difference PSF is the science PSF (Azalee, 2026-11-10).
+# The SOC simulations' value, not a flight measurement: no cross-convolution, SFFT's difference PSF is the science PSF (Azalee, 2026-11-10).
 crossconv_flag = false
 
 [difference.gainmatch]
-# Commissioning a7778505's thresholds, which effectively remove the gain-match magnitude cut (AB scale, zprefimg added once) (Azalee, 2026-11-10).
+# Thresholds that effectively remove the gain-match magnitude cut (AB scale, zprefimg added once) (Azalee, 2026-11-10).
 magrefthresmin = 10.0
 magrefthresmax = 30.0
 refmagkeep = 30.0
 
 [difference.psfcat_diffimage]
-# DAOStarFinder's sharpness ceiling; 1.8 admits more extended detections into the difference sources than dev's 1.0, set from the OpenUniverse sharpness distribution, which 1.0 cut a significant fraction of, as commissioning a7778505 (Azalee, 2026-11-11).
+# DAOStarFinder's sharpness ceiling; 1.8 admits more extended detections into the difference sources than the base's 1.0, set from the OpenUniverse sharpness distribution, which 1.0 cut a significant fraction of (Azalee, 2026-11-11).
 sharphi = 1.8
