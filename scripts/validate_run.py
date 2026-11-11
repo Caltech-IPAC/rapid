@@ -418,9 +418,9 @@ def packet_set_failures(job: int) -> tuple[list[str], Counter]:
     forced = {r["forced_id"]: r for r in read_output(job, "forced").to_pylist()}
     (run_row,) = q("SELECT r.settings FROM jobs j JOIN runs r ON r.id = j.run WHERE j.id = %s", (job,))
     size = 2 * int(run_row["settings"]["packet"]["stamp_half_width"]) + 1
-    # The index's aid and sid name xobjects and xsources under [packet] alert_catalog "xsources".
-    x = "x" if run_row["settings"]["packet"].get("alert_catalog", "sources") == "xsources" else ""
-    members = members_by_aid(job, sorted({(r["object_job"], r["aid"]) for r in index}), x)
+    # The index's aid and sid name xobjects and xsources (rapid_docs decision-packets-from-xsources;
+    # the sources path was retired 2026-11-11).
+    members = members_by_aid(job, sorted({(r["object_job"], r["aid"]) for r in index}), "x")
     containers = {}
     for row in index:
         where = f"packet job {job} sid {row['sid']}"

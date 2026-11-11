@@ -291,7 +291,7 @@ def test_the_packet_readers_give_the_rows_the_shipped_reads_keep(connect, tmp_pa
     and forced rows of an open, a closed and an unbound packet set. Each reader returns what the
     read it replaces returned, for every own set and every pair and image chosen, other runs'
     rows included."""
-    from rapidpipe.stages.packet import ALERT_CATALOGS, MEMBERSHIPS_SQL, ORIGINS_SQL, REUSE_SQL
+    from rapidpipe.stages.packet import ALERT_CATALOG, MEMBERSHIPS_SQL, ORIGINS_SQL, REUSE_SQL
 
     conn = connect()
     run_a, run_b = new_run(conn), new_run(conn)
@@ -317,7 +317,7 @@ def test_the_packet_readers_give_the_rows_the_shipped_reads_keep(connect, tmp_pa
     _bind(conn, "packets", packets[0], 1)
     _bind(conn, "packets", packets[1], 2, closed=True)              # packets[2] is never bound
 
-    for name, catalog in ALERT_CATALOGS.items():
+    for name, catalog in ((ALERT_CATALOG.parent, ALERT_CATALOG),):
         pairs = [([a], [1]), ([a, a], [1, 3]), ([a, a, b, c], [1, 4, 1, 4]), ([b], [1]), ([], [])]
         for jobs, aids in pairs:
             for fields in ([7, 9], [9], [7, 8], []):
@@ -330,7 +330,7 @@ def test_the_packet_readers_give_the_rows_the_shipped_reads_keep(connect, tmp_pa
                         conn, catalog.sql(_SHIPPED_MEMBERSHIPS), members), (name, members)
         everything = {"fields": [7, 9], "jobs": [a, a, a], "aids": [1, 3, 4], "own": b}
         shipped = _sorted_rows(conn, catalog.sql(_SHIPPED_MEMBERSHIPS), everything)
-        assert len(shipped) == (4 if name == "sources" else 3), name    # the case is not empty
+        assert len(shipped) == 3, name                                 # the case is not empty
     for fields in ([7, 9], [9], [8], []):
         for pids in ([1], [1, 2], [2, 5], [3], []):
             assert _sorted_rows(conn, REUSE_SQL, (fields, pids)) == _sorted_rows(
