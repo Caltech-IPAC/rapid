@@ -150,7 +150,7 @@ FLIGHT_DIFFERENCE = {("sci_image", "repair_extreme_artifact_pixels"): False,
 
 
 def test_the_flight_overlay_carries_commissionings_difference_values():
-    """Flight 1049's resolved body holds commissioning a7778505's difference values and crossconv_flag false."""
+    """Flight 1049's resolved body holds the flight difference values and crossconv_flag false."""
     body, _ = resolve(SHIPPED, FLIGHT)
     for (table, key), value in FLIGHT_DIFFERENCE.items():
         assert body["difference"][table][key] == value, f"{table}.{key}"
@@ -159,7 +159,7 @@ def test_the_flight_overlay_carries_commissionings_difference_values():
 @pytest.mark.parametrize("path", sorted(p for p in (SETTINGS / "datasets").glob("*.toml") if p != FLIGHT),
                          ids=lambda p: p.name)
 def test_the_base_and_the_sim_overlays_keep_devs_difference_values(path):
-    """The base keeps dev's values for the flight keys, and a sim overlay resolves to its own value where it sets one, else the base's."""
+    """The base keeps its own values for the flight keys, and a sim overlay resolves to its own value where it sets one, else the base's."""
     base = tomllib.loads(SHIPPED.read_text())["difference"]
     assert {(t, k): base[t][k] for t, k in FLIGHT_DIFFERENCE} == {
         ("sci_image", "repair_extreme_artifact_pixels"): True, ("sfft", "crossconv_flag"): True,
