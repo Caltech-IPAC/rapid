@@ -450,6 +450,7 @@ def _reference(job: JobContext, source: Path, reference: dict) -> dict:
         "fid": int(header["FID"]), "filename": copies[REFERENCE_IMAGE][0],
         "checksum": copies[REFERENCE_IMAGE][1], "status": STATUS_GOOD, "infobits": 0,
         "nframes": header.get("NFRAMES"), "cov5percent": header.get("COV5PERC"),
+        "covfrac": header.get("COVFRAC"), "covdepth": header.get("COVDEPTH"),
     }
     return {"refimages": [refimage],
             "refimcatalogs": [{"rfid": reference["rfid"], "cattype": REFERENCE_CATALOG_TYPE,

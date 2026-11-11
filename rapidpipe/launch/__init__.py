@@ -96,7 +96,7 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
             conn.rollback()
             with conn.cursor() as cur:
                 cur.execute("UPDATE jobs SET state = 'failed', ended = now(), refusal = %s"
-                            " WHERE id = %s AND state <> 'published'", (failure_reason(exc), job_id))
+                            " WHERE id = %s AND state NOT IN ('published', 'declined')", (failure_reason(exc), job_id))
             conn.commit()
         raise
     if conn is not None:

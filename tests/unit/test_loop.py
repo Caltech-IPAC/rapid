@@ -58,6 +58,13 @@ admitted, a selection with passes is refused.
 socsims lite (``socsims-lite``): the listing pages the SOC observations and
 keeps ``_cal_lite.fits.gz`` stems. ``--expids``: a stem or row is admitted
 only when its expid is in one of the inclusive ranges, with the other terms.
+Coverage (``[reference.selection] selection_type = "coverage"``): a row under
+a neighbouring tile of the reference's footprint is a candidate, and not
+under ``"nframes"``; candidates are walked by ``mjdobs``, then distance from
+the reference's centre, then key, to ``max_frames``; a field short of
+coverage is held, with or without the bound, and planned once a new frame
+lifts its estimate; frames across R.A. 0 are taken, nearest first; a field
+whose job declined is held, not failed, until its frames change.
 """
 
 from __future__ import annotations
@@ -799,3 +806,117 @@ def test_expids_admit_stems_and_rows_inside_any_range_with_the_other_terms():
     assert SEL.summary()["expids"] == "all"
     with pytest.raises(ValueError, match="low end"):
         loop.Selection.parse("F146", "8", "all", expids="5-4")
+
+
+# Coverage selection (``[reference.selection] selection_type = "coverage"``, commissioning d586136b,
+# ebd95254, debbc6e4): frames placed on the sky, their fields and overlapfields from the tessellation.
+
+THIN_MOSAIC = {"naxis1": 9100, "naxis2": 9100, "cdelt1": -0.000030555555556, "cdelt2": 0.000030555555556,
+               "rotation": 0.0, "ra_center": "", "dec_center": ""}
+COVERAGE = {"selection_type": "coverage", "min_frames": 2, "max_frames": 50, "min_coverage_depth": 1,
+            "min_coverage_fraction": 0.5, "max_coverage_depth": 4, "max_coverage_fraction": 1.0,
+            "coverage_estimate_tolerance": 0.05}
+PIX = 0.11 / 3600.0
+
+
+def covering(**selection) -> dict:
+    return {**SETTINGS, "reference": {"selection": {**COVERAGE, **selection}, "mosaic": THIN_MOSAIC}}
+
+
+def sky_row(ra: float, dec: float, mjd: float, job: int, size: float = 0.05) -> dict:
+    """An official L2 row of a square ``size``-degree frame centred on ``(ra, dec)``, as intake writes it."""
+    from rapidpipe.products.coverage import make_refimage_wcs
+    from rapidpipe.products.spatial import overlapping_fields, tessellation_field
+    n = int(size / PIX)
+    w = make_refimage_wcs(ra % 360.0, dec, n, n, -PIX, PIX, 0.0)
+    sky = w.pixel_to_world([-0.5, n - 0.5, n - 0.5, -0.5], [-0.5, -0.5, n - 0.5, n - 0.5])
+    field = tessellation_field(ra % 360.0, dec)
+    return {"field": field, "mjdobs": mjd, "job": job, "ra0": ra % 360.0, "dec0": dec,
+            "overlapfields": overlapping_fields(ra % 360.0, dec, *w.wcs.crpix, -PIX, 0.0, 0.0, PIX, n, n, field=field),
+            "corners": (list(sky.ra.deg), list(sky.dec.deg))}
+
+
+FIELD = 3034797                               # centred on (150.0293, 2.01472); its tile is 0.088 x 0.075 deg
+CENTRE = (150.0293, 2.01472)
+
+
+def references(subs: list[dict], field: int = FIELD) -> list[dict]:
+    return [s for s in stages(subs, "reference") if s["scope"]["field"] == field]
+
+
+def test_coverage_takes_a_row_under_a_neighbouring_tile_of_the_footprint_and_nframes_does_not():
+    ra, dec = CENTRE
+    own, beside = (expid(1, 1, 2), 8, 8), (expid(1, 1, 1), 8, 8)
+    l2 = {own: sky_row(ra, dec, 1.0, 20), beside: sky_row(ra + 0.1, dec, 1.0, 21)}
+    assert l2[own]["field"] == FIELD and FIELD not in l2[beside]["overlapfields"]
+    subs, counts = loop.plan(snap(settings=covering(min_coverage_fraction=0.01), l2=l2), [], SEL)
+    (ref,) = references(subs)
+    # Same mjdobs: the nearer frame first, though its key is the higher.
+    assert [i["source_job"] for i in ref["inputs"]] == [20, 21] and counts["held"] == []
+
+    nframes = {**SETTINGS, "reference": {"selection": {"min_frames": 1}}}
+    (ref,) = references(loop.plan(snap(settings=nframes, l2=l2), [], SEL)[0])
+    assert [i["source_job"] for i in ref["inputs"]] == [20]
+
+
+def test_coverage_walks_rows_in_mjdobs_then_distance_then_key_order_and_stops_at_max_frames():
+    ra, dec = CENTRE
+    l2 = {(expid(1, 1, 3), 8, 8): sky_row(ra + 0.05, dec, 2.0, 22),
+          (expid(1, 1, 2), 8, 8): sky_row(ra - 0.02, dec, 2.0, 21),
+          (expid(1, 1, 4), 8, 8): sky_row(ra + 0.02, dec, 2.0, 24),      # ties 21 on distance: the key decides
+          (expid(1, 1, 1), 8, 8): sky_row(ra + 0.1, dec, 1.0, 20)}
+    subs, _ = loop.plan(snap(settings=covering(min_coverage_fraction=0.01), l2=l2), [], SEL)
+    (ref,) = references(subs)
+    assert [i["source_job"] for i in ref["inputs"]] == [20, 21, 24, 22]
+    subs, _ = loop.plan(snap(settings=covering(min_coverage_fraction=0.01, max_frames=2), l2=l2), [], SEL)
+    (ref,) = references(subs)
+    assert [i["source_job"] for i in ref["inputs"]] == [20, 21]
+
+
+@pytest.mark.parametrize("bound", [None, 2.5])
+def test_a_field_short_of_coverage_is_held_with_or_without_a_bound_and_planned_once_a_frame_lifts_it(bound):
+    ra, dec = CENTRE
+    settings = covering(**({} if bound is None else {"before_mjd": bound}))
+    small, large, later = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8), (expid(3, 1, 1), 8, 8)
+    l2 = {small: sky_row(ra, dec, 1.0, 20), later: sky_row(ra, dec, 3.0, 22)}
+    listed = [stem(1, 1, 1), stem(3, 1, 1)]
+    subs, counts = loop.plan(snap(settings=settings, l2=l2, published_stems=set(listed)), listed, SEL)
+    assert references(subs) == [] and counts["new"] == 0 and not any(counts["pending"].values())
+    (held,) = [h for h in counts["held"] if h["field"] == FIELD]
+    assert held["reason"].startswith("estimated coverage 0.0") and "< 0.5" in held["reason"]
+
+    l2[large] = sky_row(ra, dec, 2.0, 21, size=0.3)
+    listed.append(stem(2, 1, 1))
+    subs, counts = loop.plan(snap(settings=settings, l2=l2, published_stems=set(listed)), listed, SEL)
+    (ref,) = references(subs)
+    assert [i["source_job"] for i in ref["inputs"]] == ([20, 21] if bound else [20, 21, 22])
+    assert [h for h in counts["held"] if h["field"] == FIELD] == []
+
+
+def test_coverage_across_ra_zero_takes_the_frames_on_both_sides_nearest_first():
+    field = 3033090                              # centred on (0.0, 2.01472), its tile across R.A. 0
+    dec = 2.01472
+    l2 = {(expid(1, 1, 1), 8, 8): sky_row(0.06, dec, 1.0, 20),
+          (expid(1, 1, 2), 8, 8): sky_row(-0.03, dec, 1.0, 21),
+          (expid(1, 1, 3), 8, 8): sky_row(-0.1, dec, 1.0, 22, size=0.04)}
+    assert {r["field"] for r in l2.values()} >= {field} and l2[(expid(1, 1, 2), 8, 8)]["ra0"] > 359.0
+    subs, counts = loop.plan(snap(settings=covering(min_coverage_fraction=0.01), l2=l2), [], SEL)
+    (ref,) = references(subs, field)
+    assert [i["source_job"] for i in ref["inputs"]] == [21, 20, 22]
+
+
+def test_a_declined_field_is_held_until_its_frames_change_and_never_counted_failed():
+    ra, dec = CENTRE
+    a, b = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
+    l2 = {a: sky_row(ra, dec, 1.0, 20, size=0.3)}
+    gone = {"id": 70, "stage": "reference", "state": "declined", "refusal": "measured coverage 0.4800 < 0.5",
+            "scope": {"field": FIELD, "fid": 8, "sca": 8}}
+    subs, counts = loop.plan(snap(settings=covering(), l2=l2, jobs=[gone], declined={70: frozenset({a})}), [], SEL)
+    assert references(subs) == [] and counts["failed"] == []
+    assert counts["held"] == [{"field": FIELD, "fid": 8,
+                               "reason": "job 70 declined these frames: measured coverage 0.4800 < 0.5"}]
+
+    l2[b] = sky_row(ra, dec, 2.0, 21, size=0.3)
+    subs, counts = loop.plan(snap(settings=covering(), l2=l2, jobs=[gone], declined={70: frozenset({a})}), [], SEL)
+    (ref,) = references(subs)
+    assert [i["source_job"] for i in ref["inputs"]] == [20, 21] and counts["held"] == []

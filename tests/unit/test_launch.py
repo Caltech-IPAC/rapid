@@ -88,7 +88,7 @@ def test_a_raising_batch_request_leaves_the_row_failed_with_the_reason_and_propa
     with pytest.raises(RuntimeError, match="TooManyRequestsException"):
         launch.submit(7, "difference", job_definition="definition", conn=conn, client=_ThrottledBatch())
     ((sql, params),) = conn.statements
-    assert "SET state = 'failed'" in sql and "state <> 'published'" in sql
+    assert "SET state = 'failed'" in sql and "state NOT IN ('published', 'declined')" in sql
     assert params == ("RuntimeError: TooManyRequestsException: the queue's rate", 7) and conn.committed
 
 

@@ -23,6 +23,14 @@ field that gained an object or a membership and its neighbours) against
 the objects founded in them since its read before they load (:mod:`rapidpipe.foundation.catalog`),
 the outcome recorded in the stored manifest as ``reconcile``.
 
+A stage that ends normally having made nothing to publish declines: its
+manifest names no outputs and carries ``declined``, the reason (a
+reference whose coverage map is short of ``[reference.selection]
+min_coverage_fraction``). The publisher loads no rows and binds nothing:
+it records the manifest, the reason in ``refusal`` and state ``declined``
+(no ``published_attempt``), and a declined job, like a published one, is
+never published again.
+
 A third, ``empty_ok``, lists the tables a stage declares may validly load
 zero rows (a difference's ``sources`` when nothing passes the cut). The
 automatic binding is refused for a job that expects a product whose table
@@ -127,6 +135,10 @@ def lock_wait(tries: int) -> float:
     return random.uniform(0, min(LOCK_RETRY_CAP_S, LOCK_RETRY_INITIAL_S * 2 ** doublings))
 
 
+#: The job states the publisher never publishes again: its rows loaded, or declined with none.
+FINAL = ("published", "declined")
+
+
 class PublishError(Exception):
     """An attempt whose manifest or declared outputs could not be verified; nothing was published."""
 
@@ -157,12 +169,17 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     timeout); the stages' reads of a child plan the same with or without
     its statistics (publish-analyze's plan check).
 
+    A manifest that carries ``declined`` stops after the job row's lock:
+    the job is marked ``declined`` with its manifest and the reason in
+    ``refusal``, and nothing is loaded or bound.
+
     Returns ``{"job", "attempt", "published", "group", "refusal", "live"}``:
     ``published`` is whether this call published, ``group`` the automatic
     binding's change group or ``None``, ``live`` whether the job's run was
     live when it bound (``None`` when the job expects nothing, or was
     already published); a call that published adds ``metrics``, its lock
-    and hold timings (the module's docstring), seconds to 3 decimals.
+    and hold timings (the module's docstring), seconds to 3 decimals. A declined job's adds
+    ``declined``, the reason.
     """
     root = prefix.rstrip("/") + "/"
     manifest = rows = None
@@ -173,7 +190,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             row = cur.fetchone()
             if row is None:
                 raise NotFound(f"job {job_id} does not exist")
-            if row[0] != "published":
+            if row[0] not in FINAL:
                 manifest = _verified_manifest(root)
                 rows = {output["table"]: _rows(get(root + output["path"]))
                         for output in manifest["outputs"]}
@@ -193,10 +210,18 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 cur.execute("SELECT state, run, published_attempt, refusal FROM jobs"
                             " WHERE id = %s FOR UPDATE", (job_id,))
                 state, run, published_attempt, refusal = cur.fetchone()
-                if state == "published":
+                if state in FINAL:
                     conn.commit()
                     return {"job": job_id, "attempt": published_attempt, "published": False,
-                            "group": None, "refusal": refusal, "live": None}
+                            "group": None, "refusal": refusal, "live": None,
+                            **({"declined": refusal} if state == "declined" else {})}
+                if manifest.get("declined"):
+                    cur.execute("UPDATE jobs SET state = 'declined', manifest = %s, refusal = %s,"
+                                " ended = clock_timestamp() WHERE id = %s",
+                                (Json({"prefix": prefix, **manifest}), manifest["declined"], job_id))
+                    conn.commit()
+                    return {"job": job_id, "attempt": attempt, "published": False, "group": None,
+                            "refusal": manifest["declined"], "live": None, "declined": manifest["declined"]}
                 if not object_catalog.held(cur, run, locked):
                     for output in manifest["outputs"]:
                         table = output["table"]
