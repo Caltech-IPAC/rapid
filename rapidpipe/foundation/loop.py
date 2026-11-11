@@ -38,7 +38,8 @@ admitted when its ``expid`` is in any of them, with the other terms. A SOC
 range is a contiguous stretch of a pass's observations (pass 2 whole and
 pass 5 observation 3 visits 61 to 64 are ``2000000-2999999,5036101-5036401``).
 
-"Pending" is a job of the run in state ``launched`` or ``running``. A job
+"Pending" is a job of the run in state ``launched`` or ``running``; a
+``declined`` job is neither pending nor failed (below). A job
 of the run in state ``failed`` is reported (``failed``, with its scope) and
 not resubmitted, and the work that does not depend on it goes on, so a
 selection drains around it: its key counts as taken until a person reruns it (``job run --job <id>``, or
@@ -108,6 +109,26 @@ One pass, in order:
   min_frames`` of them; its scope's SCA is the first in order among the
   rows that will be differenced against it. A dithered visit's later
   epoch so gets a reference from earlier epochs centred in other fields.
+- With ``[reference.selection] selection_type = "coverage"`` (commissioning
+  d586136b, ebd95254, debbc6e4; ``rapidpipe.products.coverage``) the frames
+  are chosen by how much of the reference they cover: the candidates are
+  the selected official rows of the filter whose ``overlapfields`` meet any
+  tile under the reference's footprint, walked in ``mjdobs`` order, then
+  distance from the reference's centre, then L2 key; a frame whose footprint
+  misses the reference is skipped, and selection stops once
+  ``max_coverage_fraction`` of its pixels reach ``max_coverage_depth`` or at
+  ``max_frames``. The job names exactly the selected frames, and
+  ``min_frames`` is not used. A field whose estimated fraction at
+  ``min_coverage_depth`` is below ``min_coverage_fraction`` less
+  ``coverage_estimate_tolerance`` gets no job and is reported under
+  ``held`` ("estimated coverage X < Z"), with or without the bound, every
+  pass, so it is planned once enough frames arrive.
+- A reference job that ``declined`` (its coverage map short of the
+  minimum: nothing published, ``rapidpipe.foundation.publish``) is neither
+  pending nor failed: its field is reported under ``held`` with the reason
+  while the frames it would name are the declined job's, and planned again
+  once they differ (a new frame selected), so the same coadd is never
+  rebuilt.
 - With ``[reference.selection] before_mjd`` set, the reference's epochs are
   bounded: it names only those rows with ``mjdobs < before_mjd``, and
   waits until the selection's intake has drained (no
@@ -150,6 +171,7 @@ import psycopg2.extras
 
 from rapidpipe.foundation import attempts
 from rapidpipe.foundation.official import NotFound
+from rapidpipe.products import coverage
 from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
 
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
@@ -356,12 +378,13 @@ class Snapshot:
     jobs: list[dict]
     psfs: dict[tuple[int, int, str], tuple[int, int]]          # (fid, sca, kind) -> (job, binding)
     exposures: set[int]                                          # expids with an open binding
-    l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job}
+    l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job, ra0, dec0, corners}
     refs: dict[tuple[int, int], int]                             # (field, fid) -> job
     diffs: dict[tuple[int, int, int], int]                       # key -> difference job
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
     packets: dict[tuple[int, int, int], int]                     # key -> packet set job
     catalogs: dict[str, dict]                                    # name -> the dataset's {"key", "job"}
+    declined: dict[int, frozenset] = dataclasses.field(default_factory=dict)  # declined reference job -> its L2 keys
 
 
 def _rows(cur, sql: str, params=()) -> list[dict]:
@@ -389,9 +412,16 @@ def snapshot(conn, run: int) -> Snapshot:
         bound = _rows(cur, "SELECT id, product, key, job FROM official WHERE closed_at IS NULL"
                            " AND job IS NOT NULL AND key->>'dataset' = %s", (d,))
         l2 = {_l2key(r): {"field": r["field"], "overlapfields": r["overlapfields"], "mjdobs": r["mjdobs"],
-                          "job": r["job"]}
-              for r in _rows(cur, "SELECT expid, sca, fid, field, overlapfields, mjdobs, job FROM l2files_official"
+                          "job": r["job"], "ra0": r["ra0"], "dec0": r["dec0"],
+                          "corners": ([r[f"ra{i}"] for i in range(1, 5)], [r[f"dec{i}"] for i in range(1, 5)])}
+              for r in _rows(cur, "SELECT expid, sca, fid, field, overlapfields, mjdobs, job, ra0, dec0,"
+                                  " ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4 FROM l2files_official"
                                   " WHERE dataset = %s", (d,))}
+        declined = defaultdict(set)
+        for r in _rows(cur, "SELECT i.job, i.key FROM job_inputs i JOIN jobs j ON j.id = i.job"
+                            " WHERE j.run = %s AND j.stage = 'reference' AND j.state = 'declined'"
+                            " AND i.kind = 'input' AND i.product = 'l2files'", (run,)):
+            declined[r["job"]].add(_l2key(r["key"]))
     conn.commit()
     by = defaultdict(list)
     for b in bound:
@@ -413,7 +443,7 @@ def snapshot(conn, run: int) -> Snapshot:
         diffs={_l2key(b["key"]): b["job"] for b in by["diffimages"]},
         sources={_l2key(b["key"]): b["job"] for b in by["sources"]},
         packets={_l2key(b["key"]): b["job"] for b in by["packets"]},
-        catalogs=catalogs)
+        catalogs=catalogs, declined={job: frozenset(keys) for job, keys in declined.items()})
 
 
 #: The Batch job name's suffix of the loop's one automatic rerun of a job (``launch.submit``'s
@@ -469,7 +499,7 @@ def reconcile(conn, run: int, client: Any, spot: dict | None = None,
     started = time.monotonic()
     with conn.cursor() as cur:
         cur.execute("SELECT id, stage, state, batch_job_id, refusal FROM jobs WHERE run = %s"
-                    " AND state <> 'published' ORDER BY id", (run,))
+                    " AND state NOT IN ('published', 'declined') ORDER BY id", (run,))
         rows = [r for r in cur.fetchall() if r[3]]
     conn.commit()
     ids = [r[3] for r in rows]
@@ -550,6 +580,82 @@ def _fid(band: str, fids: dict[str, int]) -> int:
     raise NotFound(f"no filters row for {band}")
 
 
+def reference_center(reference: dict, field: int) -> tuple[float, float]:
+    """The reference's centre: ``[reference.mosaic]`` ``ra_center``/``dec_center`` when set, else the field's.
+
+    Parameters
+    ----------
+    reference : dict
+        The run's ``[reference]`` table.
+    field : int
+        The reference's field (Roman tile).
+
+    Returns
+    -------
+    tuple of float
+        ``(ra, dec)`` [deg], as the reference stage centres its mosaic.
+    """
+    mosaic = reference["mosaic"]
+    if mosaic.get("ra_center", "") == "":
+        return coverage.tile_center(field)
+    return float(mosaic["ra_center"]), float(mosaic["dec_center"])
+
+
+def select_by_coverage(reference: dict, pool: list[tuple[tuple, dict]],
+                       needs: dict[tuple[int, int], list]) -> dict[tuple[int, int], str]:
+    """Choose each needed reference's frames by coverage (``selection_type = "coverage"``), in place.
+
+    For each ``(field, fid)`` of ``needs``: the candidates are the rows of
+    ``pool`` of that filter whose ``overlapfields`` meet any tile under
+    the reference's footprint (commissioning's ``overlapfields &&``,
+    d586136b), walked in ``mjdobs`` order, then distance from the
+    reference's centre, then L2 key, through
+    :func:`rapidpipe.products.coverage.select_refimage_inputs`. A build or
+    verify fills ``needs[(field, fid)]`` with the selected frames; a reject
+    is held.
+
+    Parameters
+    ----------
+    reference : dict
+        The run's ``[reference]`` table.
+    pool : list of (key, row)
+        The selected official L2 rows a reference may take (before the bound, when set).
+    needs : dict
+        ``(field, fid)`` to an empty list, filled with the chosen ``(expid, sca, job)``.
+
+    Returns
+    -------
+    dict
+        ``(field, fid)`` to the reason it is held, ``"estimated coverage X < Z ..."``.
+    """
+    chosen, mosaic = reference["selection"], reference["mosaic"]
+    naxis1, naxis2 = int(mosaic["naxis1"]), int(mosaic["naxis2"])
+    held = {}
+    tiles_of: dict[int, tuple] = {}
+    for field, fid in sorted(needs):
+        if field not in tiles_of:
+            center = reference_center(reference, field)
+            w = coverage.make_refimage_wcs(*center, naxis1, naxis2, float(mosaic["cdelt1"]),
+                                           float(mosaic["cdelt2"]), float(mosaic["rotation"]))
+            tiles_of[field] = (center, w, set(coverage.reference_tiles(w, naxis1, naxis2)))
+        center, w, tiles = tiles_of[field]
+        candidates = sorted(((k, row) for k, row in pool if k[2] == fid and tiles.intersection(row["overlapfields"])),
+                            key=lambda kv: coverage.candidate_order(kv[1]["mjdobs"], kv[1]["ra0"], kv[1]["dec0"],
+                                                                    kv[0], center))
+        picked, estimate, _, decision = coverage.select_refimage_inputs(
+            w, naxis1, naxis2, [row["corners"] for _, row in candidates],
+            float(chosen["min_coverage_depth"]), float(chosen["min_coverage_fraction"]),
+            float(chosen["max_coverage_depth"]), float(chosen["max_coverage_fraction"]), int(chosen["max_frames"]),
+            float(chosen["coverage_estimate_tolerance"]))
+        if decision == "reject":
+            held[field, fid] = (f"estimated coverage {estimate:.3f} < {chosen['min_coverage_fraction']}"
+                                f" (pixels at depth {chosen['min_coverage_depth']} or more, {len(picked)} of"
+                                f" {len(candidates)} candidate frames)")
+            continue
+        needs[field, fid].extend((k[0], k[1], row["job"]) for k, row in (candidates[i] for i in picked))
+    return held
+
+
 def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
          max_intake: int = 100, max_submissions: int | None = None) -> tuple[list[dict], dict]:
     """Every submission one pass makes, and the pass's counts; reads nothing but its arguments.
@@ -569,7 +675,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         run_jobs[job["stage"]].append(job)
     pending = {s: [j for j in run_jobs[s] if j["state"] in PENDING] for s in STAGES}
     failed = [j for j in snap.jobs if j["state"] == "failed" or (j["state"] == "published" and j.get("refusal"))]
-    taken = {s: [j for j in run_jobs[s] if j["state"] != "published" or j.get("refusal")] for s in STAGES}
+    taken = {s: [j for j in run_jobs[s] if j["state"] in ("launched", "running", "failed")
+                 or (j["state"] == "published" and j.get("refusal"))] for s in STAGES}
 
     def key(expid, sca, fid):
         return {"dataset": d, "expid": expid, "sca": sca, "fid": fid}
@@ -631,25 +738,54 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     after = {k: v for k, v in selected.items() if bound is None or v["mjdobs"] >= float(bound)}
 
     # Reference: per (field, filter) a row to be differenced has as its own field, from the rows
-    # (before the bound, when set) whose overlapfields list it, of any SCA, once no intake is pending;
-    # with the bound, once the selection's intake has drained.
-    min_frames = int(snap.settings["reference"]["selection"]["min_frames"])
+    # (before the bound, when set) whose overlapfields list it ("nframes") or any tile under the
+    # reference ("coverage"), of any SCA, once no intake is pending; with the bound, once the
+    # selection's intake has drained.
+    chosen = snap.settings["reference"]["selection"]
+    mode = chosen.get("selection_type", "nframes")
+    if mode not in coverage.SELECTION_TYPES:
+        raise ValueError(f"[reference.selection] selection_type {mode!r} is not one of {coverage.SELECTION_TYPES}")
+    min_frames = int(chosen["min_frames"])
     held_refs = {(int(j["scope"]["field"]), int(j["scope"]["fid"])) for j in taken["reference"]}
+    declined = defaultdict(list)                # (field, fid) -> its declined jobs' (L2 keys, job, reason)
+    for j in run_jobs["reference"]:
+        if j["state"] == "declined":
+            declined[int(j["scope"]["field"]), int(j["scope"]["fid"])].append(
+                (snap.declined.get(j["id"], frozenset()), j["id"], j.get("refusal")))
     scope_sca = {}                              # (field, fid) -> the first SCA of the rows it serves
     for (_, sca, fid), row in after.items():
         scope_sca[row["field"], fid] = min(sca, scope_sca.get((row["field"], fid), sca))
-    frames = {need: [] for need in scope_sca}
-    for (expid, sca, fid), row in sorted(selected.items(), key=lambda kv: (kv[1]["mjdobs"], kv[0])):
-        if bound is not None and (expid, sca, fid) in after:
-            continue
-        for field in row["overlapfields"]:
-            if (field, fid) in frames:
-                frames[field, fid].append((expid, sca, row["job"]))
+    pool = sorted(((k, row) for k, row in selected.items() if bound is None or k not in after),
+                  key=lambda kv: (kv[1]["mjdobs"], kv[0]))
+    frames: dict[tuple[int, int], list] = {need: [] for need in scope_sca}
+    held_why: dict[tuple[int, int], str] = {}
     ready = not intake_pending and (bound is None or all(s in snap.published_stems for s in admitted))
+    if mode == "nframes":
+        for (expid, sca, fid), row in pool:
+            for field in row["overlapfields"]:
+                if (field, fid) in frames:
+                    frames[field, fid].append((expid, sca, row["job"]))
+        held_why = {need: f"{len(rows)} official L2 rows before before_mjd {bound}, fewer than min_frames {min_frames}"
+                    for need, rows in frames.items() if bound is not None and len(rows) < min_frames}
+    elif ready:
+        skip = set(snap.refs) | held_refs
+        held_why = select_by_coverage(snap.settings["reference"], pool,
+                                      {need: rows for need, rows in frames.items() if need not in skip})
     held = []
     if ready:
         for (field, fid), rows in sorted(frames.items()):
-            if len(rows) < min_frames or (field, fid) in snap.refs or (field, fid) in held_refs:
+            if (field, fid) in snap.refs or (field, fid) in held_refs:
+                continue
+            if (field, fid) in held_why:
+                held.append({"field": field, "fid": fid, "reason": held_why[field, fid]})
+                continue
+            if mode == "nframes" and len(rows) < min_frames:
+                continue
+            same = [(job, why) for keys, job, why in declined[field, fid]
+                    if keys == {(e, s, fid) for e, s, _ in rows}]
+            if same:
+                held.append({"field": field, "fid": fid,
+                             "reason": f"job {same[-1][0]} declined these frames: {same[-1][1]}"})
                 continue
             held_refs.add((field, fid))
             out.append({"stage": "reference", "scope": {"field": field, "fid": fid, "sca": scope_sca[field, fid]},
@@ -657,10 +793,6 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
                                    for e, s, j in rows],
                         "expects": [{"product": "refimages",
                                      "key": {"dataset": d, "field": field, "fid": fid}, "binding": None}]})
-        held = [{"field": field, "fid": fid,
-                 "reason": f"{len(rows)} official L2 rows before before_mjd {bound}, fewer than min_frames {min_frames}"}
-                for (field, fid), rows in sorted(frames.items())
-                if bound is not None and (field, fid) not in snap.refs and (field, fid) not in held_refs]
 
     # Difference: per official L2 row with an official reference, after the bound when one is set.
     held_diffs = {scope_l2(j) for j in taken["difference"]}
@@ -765,13 +897,13 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
 
 
 #: The job states ``job wait`` waits for.
-ENDED = ("published", "failed")
+ENDED = ("published", "failed", "declined")
 
 
 def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: float,
          interval: float = 30.0, sleep: Callable[[float], None] = time.sleep,
          clock: Callable[[], float] = time.monotonic) -> dict:
-    """Block until every job of ``jobs`` is ``published`` or ``failed``, or ``timeout`` seconds pass.
+    """Block until every job of ``jobs`` is ``published``, ``failed`` or ``declined``, or ``timeout`` seconds pass.
 
     Each check first reconciles the jobs' runs with Batch (``batch``, a Batch
     client, or ``None`` for local jobs), so a container that died without its
@@ -792,7 +924,7 @@ def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: 
                 raise NotFound(f"no job {', '.join(map(str, missing))}")
             retrying = set()
             if batch is not None:
-                for run in sorted({run for run, state in rows.values() if state != "published"}):
+                for run in sorted({run for run, state in rows.values() if state not in ("published", "declined")}):
                     retrying |= set(reconcile(conn, run, batch)["retrying"])
                 with conn.cursor() as cur:
                     cur.execute("SELECT id, run, state FROM jobs WHERE id = ANY(%s)", (list(jobs),))

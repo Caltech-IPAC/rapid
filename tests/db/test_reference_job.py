@@ -4,7 +4,10 @@ Contract: under a live run, a reference job whose inputs are two published
 ``l2files`` rows coadds them (fake tools), and its ``refimages`` row binds
 to the job's expected key; the official views show the row, its two
 ``refimimages`` members (the named L2 rows) and its mosaic catalog, all
-under the one ``rfid`` the database drew.
+under the one ``rfid`` the database drew. Under ``selection_type =
+"coverage"`` the published row carries ``covfrac`` and ``covdepth``, and a
+coadd whose coverage map is short of the minimum declines: the job exits 0,
+its row ``declined`` with the reason, no ``refimages`` row and no binding.
 """
 
 from __future__ import annotations
@@ -72,3 +75,46 @@ def test_job_local_publishes_a_bound_reference_from_two_named_l2_rows(connect, t
                  (rfid,)) == [(7000,), (7001,)]
     assert query(conn, "SELECT cattype FROM refimcatalogs_official WHERE rfid = %s",
                  (rfid,)) == [(1,)]
+
+
+def test_job_local_under_coverage_publishes_covfrac_or_declines_with_nothing_published(connect, tmp_path,
+                                                                                         monkeypatch, capsys):
+    conn = connect()
+    paths = write_frames(tmp_path / "l2")[:2]
+    monkeypatch.setattr(reference, "toolkit", fakereftools.fake_toolkit)
+    monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", (tmp_path / "outputs").as_uri())
+    key = {"dataset": DATASET, "field": RTID, "fid": FID}
+    outcomes = {}
+    for minimum, tolerance in ((0.3, 0.05), (0.95, 0.7)):
+        run = create_run(conn, "tester", "coverage", "abc123",
+                         settings(selection={"selection_type": "coverage", "min_coverage_fraction": minimum,
+                                             "coverage_estimate_tolerance": tolerance}), f"S{minimum}", DATASET)
+        change(conn, [{"open": {"survey": f"S{minimum}", "dataset": DATASET, "run": run}}], "tester", "live")
+        l2_job = create_job(conn, run, "import", {})
+        ra, dec = fakereftools.TILE_CENTRE
+        half = fakereftools.NAXIS * fakereftools.PIXEL_SCALE_DEG / 2
+        rows = [l2_row(100 + n, 7000 + 10 * run + n, path, FRAMES[n][4]) for n, path in enumerate(paths)]
+        for row in rows:                    # the frames' own corners, in order around them
+            row.update(ra1=ra + half, dec1=dec - half, ra2=ra - half, dec2=dec - half,
+                       ra3=ra - half, dec3=dec + half, ra4=ra + half, dec4=dec + half)
+        publish(conn, l2_job, 1, write_attempt(tmp_path / f"import-{run}", {"l2files": rows}))
+        inputs = [{"product": "l2files", "source_job": l2_job,
+                   "key": {"dataset": DATASET, "expid": 100 + n, "sca": SCA, "fid": FID}} for n in range(2)]
+        code = cli.main(["job", "local", "--run", str(run), "--stage", "reference",
+                         "--scope", json.dumps({"field": RTID, "fid": FID, "sca": SCA}),
+                         "--inputs", json.dumps(inputs),
+                         "--expects", json.dumps([{"product": "refimages", "key": key, "binding": None}])])
+        outcomes[minimum] = (code, json.loads(capsys.readouterr().out))
+
+    code, result = outcomes[0.3]
+    assert code == 0 and result["published"] and result["group"] is not None
+    ((covfrac, covdepth),) = query(conn, "SELECT covfrac, covdepth FROM refimages WHERE job = %s", (result["job"],))
+    assert 0.3 <= covfrac < 1.0 and covdepth == 1.0
+
+    code, result = outcomes[0.95]
+    assert code == 0 and not result["published"] and result["declined"].startswith("measured coverage ")
+    assert query(conn, "SELECT state, refusal, published_attempt FROM jobs WHERE id = %s", (result["job"],)) == [
+        ("declined", result["declined"], None)]
+    assert query(conn, "SELECT count(*) FROM refimages WHERE job = %s", (result["job"],)) == [(0,)]
+    assert query(conn, "SELECT count(*) FROM official WHERE job = %s", (result["job"],)) == [(0,)]

@@ -43,7 +43,9 @@ jobs of ``--run``:
   published with equal source rows but for job and pid, and at most one is
   bound.
 - ``counts``: the run has jobs and none is failed or still launched or
-  running (a run that failed on purpose reads not clean too); the jobs per
+  running (a run that failed on purpose reads not clean too); a ``declined``
+  job (a reference short of its coverage: nothing published, its field held)
+  is no failure and is printed with the others; the jobs per
   stage and state, the rows per table and the open bindings are printed.
   With ``--scas``, such a job whose scope names another SCA is a second
   loop's under the same run and is reported, not counted (two loops on one
