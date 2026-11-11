@@ -44,13 +44,22 @@ def build_sfft_command_args(python_cmd,
                             sfft_bsmask_value: str,
                             sfft_bsmask_radius: str,
                             sfft_use_gainmatch_catalogs: bool,
-                            sfft_use_segmentation: bool | None) -> list[str]:
+                            sfft_use_segmentation: bool | None,
+                            sfft_zero_margin: str = "",
+                            sfft_bsmask_isoarea: str = "",
+                            sfft_bsmask_isofactor: str = "") -> list[str]:
     """`dev` ``build_sfft_command_args``.
 
     `dev` falls back to a science-file-name test when its ``[SFFT]`` table
     has no ``sfft_bsmask_value``; here an empty ``sfft_bsmask_value``
     setting selects that same fallback. ``sfft_use_segmentation`` of
     ``None`` defaults to ``crossconv_flag``, as an absent `dev` key does.
+    ``sfft_zero_margin``, ``sfft_bsmask_isoarea`` and
+    ``sfft_bsmask_isofactor`` are commissioning's kernel-fit masking
+    (ed2f1a73): each empty one is left off the command, as commissioning
+    leaves off a key absent from its ``[SFFT]``, so with all three empty the
+    command is `dev`'s; ``--bsmaskisofactor`` is passed only with
+    ``--bsmaskisoarea``.
     """
     if sfft_bsmask_value == "":
         logger.warning("*** Warning: [sfft] sfft_bsmask_value is empty; falling back to the "
@@ -75,6 +84,14 @@ def build_sfft_command_args(python_cmd,
 
     sfft_cmd += ["--bsmaskvalue", str(sfft_bsmask_value),
                  "--bsmaskradius", str(sfft_bsmask_radius)]
+
+    if sfft_bsmask_isoarea != "":
+        sfft_cmd += ["--bsmaskisoarea", str(sfft_bsmask_isoarea)]
+        if sfft_bsmask_isofactor != "":
+            sfft_cmd += ["--bsmaskisofactor", str(sfft_bsmask_isofactor)]
+
+    if sfft_zero_margin != "":
+        sfft_cmd += ["--zeromargin", str(sfft_zero_margin)]
 
     # Without cross-convolution the SFFT difference PSF is the science PSF.
     sfft_cmd += ["--scipsf", filename_scipsf]
