@@ -6,14 +6,17 @@ absent one; ``put`` leaves a ``file://`` prefix alone and uploads a
 directory to an ``s3://`` prefix with ``manifest.json`` last; ``attempts``
 names the attempt directories present under an ``s3://`` job prefix; an
 ``unsigned`` get asks for an unsigned client; the
-download cache is made under ``TMPDIR`` and removed at process exit.
+download cache is made under ``TMPDIR`` and removed at process exit; a
+download is the job's ``s3_read`` step with its bytes, a cached one is not;
+``put``'s ``before_last`` runs after every other upload and before the
+manifest's.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from rapidpipe.foundation import prefix
+from rapidpipe.foundation import prefix, steps
 
 from .fakes3 import FakeS3
 
@@ -37,6 +40,27 @@ def test_get_downloads_an_s3_object_once(s3):
     again = prefix.get("s3://bucket/run/1/a.parquet")
     assert first == again and first.read_bytes() == b"rows"
     assert [c for c in s3.calls if c[0] == "download_file"] == [("download_file", "run/1/a.parquet")]
+
+
+def test_a_download_is_counted_as_the_s3_read_step_and_a_cached_one_is_not(s3):
+    steps.reset()
+    s3.seed("bucket", "run/1/a.parquet", b"rows")
+    prefix.get("s3://bucket/run/1/a.parquet")
+    prefix.get("s3://bucket/run/1/a.parquet")
+    counted = steps.metrics()
+    steps.reset()
+    assert counted["s3_read_bytes"] == 4 and counted["step_s3_read_s"] >= 0
+
+
+def test_before_last_runs_before_the_manifest_is_uploaded(s3, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    for name in ("manifest.json", "a.parquet"):
+        (work / name).write_bytes(b"x")
+    seen = []
+    prefix.put(work, "s3://bucket/r/", before_last=lambda: seen.append(
+        [key for op, key in s3.calls if op == "upload_file"]))
+    assert seen == [["r/a.parquet"]]
 
 
 def test_get_of_an_absent_s3_object_is_file_not_found(s3):

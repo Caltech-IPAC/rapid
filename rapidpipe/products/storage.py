@@ -69,6 +69,7 @@ def publish_dir(
     *,
     client: Any = None,
     last: str = "manifest.json",
+    before_last: Any = None,
 ) -> None:
     """Publish everything beneath ``src_dir`` to ``location``.
 
@@ -80,7 +81,9 @@ def publish_dir(
     relative paths as keys under the prefix, uploading the file named
     ``last`` (the manifest) after every other file -- so a reader that
     lists the prefix and finds the manifest can trust every other object
-    is already there.
+    is already there. ``before_last``, when given, is called after every
+    other file is uploaded and before the last is, so the last can record
+    the upload (the job's ``s3_write`` seconds).
     """
     if not location.is_s3():
         assert location.path is not None
@@ -109,6 +112,8 @@ def publish_dir(
         key = _key(location, relative)
         s3.upload_file(str(path), location.bucket, key)
 
+    if before_last is not None:
+        before_last()
     if last_path is not None:
         key = _key(location, last)
         s3.upload_file(str(last_path), location.bucket, key)

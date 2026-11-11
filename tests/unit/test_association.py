@@ -9,7 +9,7 @@ is centred on, whose job is the difference job; a source across a field
 boundary joins the neighbouring field's object and founds nothing. The
 job's manifest names the fields the publisher locks (each field that
 gained an object or a membership and its neighbours), and the publisher
-takes those locks in ascending field order and reconciles against the
+takes those locks all at once or none and reconciles against the
 objects founded since the read in all of them. At publish, a founded
 object within the radius of one founded since the read is not inserted,
 its memberships go to that object rebased to its origin, and the rebased
@@ -30,7 +30,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import rapidpipe.stages.difference as difference
-from rapidpipe.foundation.catalog import attach, between, fields, lock
+from rapidpipe.foundation.catalog import attach, between, fields, try_lock
 from rapidpipe.products.spatial import ra_offset, tessellation_field
 from rapidpipe.science.crossmatch.catalog import new_object_id
 from rapidpipe.science.crossmatch.memory import associate_epoch
@@ -82,12 +82,15 @@ class Recorder:
     def fetchall(self):
         return self.rows
 
+    def fetchone(self):
+        return self.rows[0]
 
-def test_the_publisher_locks_each_field_once_in_ascending_order_in_one_statement():
-    cur = Recorder()
-    lock(cur, 3, [9, 4, 7, 4])
+
+def test_the_publisher_tries_each_fields_lock_once_in_ascending_order_in_one_statement():
+    cur = Recorder(rows=[(True,)])
+    assert try_lock(cur, 3, [9, 4, 7, 4])
     ((statement, params),) = cur.calls
-    assert statement.count("pg_advisory_xact_lock") == 3
+    assert statement.count("pg_try_advisory_xact_lock") == 3 and "pg_advisory_xact_lock" not in statement
     assert params == [3, 4, 3, 7, 3, 9]
 
 
@@ -95,7 +98,7 @@ def test_the_reconcile_reads_every_locked_field_and_an_old_manifest_its_one_fiel
     cur = Recorder()
     between(cur, JOB, 3, {"dataset": "D", "survey": "S", "fields": [8, 7], "radius": R}, [40, 41])
     ((statement, params),) = cur.calls
-    assert "objects_in(%s::integer[])" in statement and params == ([7, 8], 3, "D", "S", JOB, [40, 41])
+    assert "objects_in(%s::integer[], %s)" in statement and params == ([7, 8], 3, "D", "S", JOB, [40, 41])
     assert fields({"dataset": "D", "survey": "S", "field": 7, "radius": R}) == [7]
 
 
@@ -150,6 +153,23 @@ def test_memberships_onto_objects_already_read_are_untouched():
     kept, members, counts = attach(JOB, [], epoch.memberships, [(44, 777, 10.0, 5.0, 6)], R)
     assert members == epoch.memberships and counts["reconciled"] == 0
     assert math.isclose(members[0]["ddec"], 0.1 * R)
+
+
+def test_a_founder_attaches_to_every_object_within_the_radius_in_their_order_however_many_are_far():
+    """The reconcile's matches are every one of ``others`` within the radius of a founded object,
+    in ``others``' order, among many far in declination (run 177's holder tested 1.27e9 pairs)."""
+    others = [(40 + i, i, 10.0, 5.0 + i * 3 * R, 6) for i in range(2000)]   # a column, 3" apart
+    others.insert(0, (39, 999, 10.0 + 0.5 * R, 5.0 + 1000 * 3 * R + 0.2 * R, 6))  # near aid 1000
+    founded = [{"aid": 1, "ra0": 10.0 + 0.2 * R, "dec0": 5.0 + 1000 * 3 * R},
+               {"aid": 2, "ra0": 10.0, "dec0": 5.0 + 1000.5 * 3 * R}]           # between two, far
+    memberships = [{"object_job": JOB, "aid": 1, "field": 7, "source_job": JOB, "sid": 1,
+                    "dra": 0.0, "ddec": 0.0, "flux": 1.0}]
+
+    kept, members, counts = attach(JOB, founded, memberships, others, R)
+
+    assert [o["aid"] for o in kept] == [2]
+    assert [(m["object_job"], m["aid"]) for m in members] == [(39, 999), (1040, 1000)]
+    assert counts == {"objects_between": 2001, "reconciled": 1, "attached_memberships": 2}
 
 
 def _boundary(a: int, b: int) -> tuple[float, float, float, float]:

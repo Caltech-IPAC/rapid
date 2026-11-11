@@ -81,6 +81,7 @@ from astropy.nddata import NDData
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.foundation.steps import step
 from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
 from rapidpipe.science import intake_rimtimsim
 from rapidpipe.science.intake_openuniverse import parse_stem
@@ -152,7 +153,8 @@ def run(job: JobContext) -> None:
                 log.warning("psf: %s is not in the ePSF cache; fetching it from CRDS", name)
                 fetched_from = url
         if reference is None:
-            reference = fetch(url, Path(scratch) / name)
+            with step("crds_fetch"):
+                reference = fetch(url, Path(scratch) / name)
         lap("fetch")
         reference_bytes = reference.stat().st_size
         with asdf.open(reference, lazy_load=True, memmap=False) as af:
@@ -164,7 +166,8 @@ def run(job: JobContext) -> None:
             oversample = int(meta["oversample"])
             model = gridded_model(np.asarray(af["roman"]["psf"]), meta)
         lap("model")
-    stamp, recorded = reduce(model, oversample, size)
+    with step("reduce"):
+        stamp, recorded = reduce(model, oversample, size)
     lap("reduce")
 
     provenance = {"epsf": name, "context": cal["context"], "position": list(POSITION),

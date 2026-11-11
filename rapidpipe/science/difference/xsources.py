@@ -15,7 +15,7 @@
   computed only for the sources that pass the database prefilter and lie
   inside the image (:func:`fit_selection`, `dev`'s
   ``photutils_cols_prefilter_only``). Last, RuBR-AT's ``rb_score`` and
-  ``rb_label``, from :func:`rb_input` through the sidecar of
+  ``rb_label``, from :func:`rb_input` through the classifier of
   :mod:`.realbogus`.
 - The loader ``loadSECatIntoDBSourcesTable.py`` keeps a source that lies
   inside the image more than two pixels from its edge
@@ -23,7 +23,9 @@
   (:func:`prefilter`: sumrat, rb and the 3 px aperture's S/N, each cut
   only where its value is finite). It maps the source onto the
   ``xsources`` columns (:func:`xsource_rows`) with a tessellation field and
-  HEALPix indices of its own.
+  HEALPix indices of its own. An imported epoch's extra columns are the
+  ones `dev` wrote into its catalogs, read back as the loader reads them
+  (:func:`catalog_extra_columns`).
 
 Three things differ from `dev`:
 
@@ -89,6 +91,11 @@ EXTRA_COLUMNS = (
     ("reduced_chi2", "redchi", False), ("n_pixels_fit", "npixfit", True),
     ("flags", "flagsfit", True), ("cfit", "cfit", False), ("rb_label", "rblabel", True),
 )
+
+
+#: `dev`'s fill value for an extra column it could not compute (its ini's four
+#: ``fill_value`` keys, all -999.0), which its XSources loader loads as null.
+CATALOG_FILL_VALUE = -999.0
 
 
 def read_catalog(path: Path):
@@ -469,7 +476,7 @@ def fit_selection(catalog, pixel: dict[str, np.ndarray], naxis1: int, naxis2: in
 
 def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
                   settings: dict[str, Any]) -> tuple[dict[str, np.ndarray], int]:
-    """`dev`'s ``compute_extra_cols_sxtractor`` but RuBR-AT, which runs in the sidecar.
+    """`dev`'s ``compute_extra_cols_sxtractor`` but RuBR-AT, which the stage adds (:func:`rb_input`).
 
     Parameters
     ----------
@@ -479,7 +486,7 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
         That image, its uncertainty image and its PSF.
     settings : dict
         The stage's ``[difference]`` table: ``sumrat``, ``extra_catalog_cols``,
-        ``psfcat_diffimage`` and ``database_prefilter``.
+        ``psfcat_diffimage`` and ``xsources_database_prefilter`` (:func:`prefilter_table`).
 
     Returns
     -------
@@ -493,7 +500,7 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
     out = dict(columns.pixel_columns(data, x0, y0, settings))
     e = settings["extra_catalog_cols"]
     p = settings["psfcat_diffimage"]
-    f = settings["database_prefilter"]
+    f = prefilter_table(settings)
     if e["photutils_cols_prefilter_only"]:
         ny, nx = np.shape(data)
         index = fit_selection(catalog, out, nx, ny,
@@ -514,14 +521,34 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
     return out, len(index)
 
 
+def prefilter_table(settings: dict[str, Any]) -> dict[str, Any]:
+    """The run's xsources prefilter thresholds, ``[difference.xsources_database_prefilter]``.
+
+    Parameters
+    ----------
+    settings : dict
+        The run's ``[difference]`` table.
+
+    Returns
+    -------
+    dict
+        The table; a run body stored before the split has the shared
+        ``[difference.database_prefilter]`` instead, which this returns
+        (rapid_docs decisions.md, sources-prefilter).
+    """
+    if "xsources_database_prefilter" in settings:
+        return settings["xsources_database_prefilter"]
+    return settings["database_prefilter"]
+
+
 def threshold(table: dict[str, Any], key: str) -> float | None:
-    """A ``[difference.database_prefilter]`` threshold; ``""`` is none."""
+    """A ``[difference.xsources_database_prefilter]`` threshold; ``""`` is none."""
     value = table.get(key, "")
     return None if value == "" else float(value)
 
 
 def rb_input(extra: dict[str, np.ndarray]):
-    """The table the RuBR-AT sidecar scores, in :data:`.realbogus.CATALOG_COLUMNS`' names.
+    """The table the RuBR-AT classifier scores, in :data:`.realbogus.CATALOG_COLUMNS`' names.
 
     Parameters
     ----------
@@ -545,6 +572,34 @@ def rb_input(extra: dict[str, np.ndarray]):
     table = {"id": np.arange(len(extra["x_fit"]), dtype=np.int64), "flux_err": flux_err}
     table.update({name: extra[name] for name in names})
     return pa.table(table)
+
+
+def catalog_extra_columns(catalog) -> dict[str, np.ndarray]:
+    """The extra columns `dev`'s pipeline wrote into a SExtractor catalog, as its XSources loader reads them.
+
+    Parameters
+    ----------
+    catalog : astropy.table.Table
+        A catalog as :func:`read_catalog` gives it, with the upper-case extra
+        columns ``compute_extra_cols_sxtractor`` appends (``FLAGS_FIT`` for
+        the fit's ``flags``), or without them where `dev` could not add them.
+
+    Returns
+    -------
+    dict of str to numpy.ndarray
+        Each of :data:`EXTRA_COLUMNS`' computed names, one float per row, NaN
+        where the column is absent, holds :data:`CATALOG_FILL_VALUE` or is not finite.
+    """
+    out = {}
+    for name, _, _ in EXTRA_COLUMNS:
+        source = "FLAGS_FIT" if name == "flags" else name.upper()
+        if source not in catalog.colnames:
+            out[name] = np.full(len(catalog), np.nan)
+            continue
+        values = np.ma.filled(np.ma.asarray(catalog[source], dtype=np.float64), np.nan)
+        values[(values == CATALOG_FILL_VALUE) | ~np.isfinite(values)] = np.nan
+        out[name] = values
+    return out
 
 
 def xsource_rows(catalog, extra: dict[str, np.ndarray], *, isdiffpos: bool, key: dict, pid: int,
@@ -641,8 +696,8 @@ def xsources_table(parts: Sequence[dict[str, np.ndarray]]):
 
 
 __all__: Sequence[str] = (
-    "EDGE_MARGIN", "EXTRA_COLUMNS", "PHOTUTILS_COLUMNS", "SEXTRACTOR_COLUMNS", "aperture_snr",
-    "daofind_columns", "extra_columns", "fit_selection", "photutils_columns",
-    "positions_within_image", "prefilter", "rb_input", "read_catalog", "snap_to_daofind_peak", "threshold",
+    "CATALOG_FILL_VALUE", "EDGE_MARGIN", "EXTRA_COLUMNS", "PHOTUTILS_COLUMNS", "SEXTRACTOR_COLUMNS", "aperture_snr",
+    "catalog_extra_columns", "daofind_columns", "extra_columns", "fit_selection", "photutils_columns",
+    "positions_within_image", "prefilter", "prefilter_table", "rb_input", "read_catalog", "snap_to_daofind_peak", "threshold",
     "xsource_rows", "xsources_table",
 )

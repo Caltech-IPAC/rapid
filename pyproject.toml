@@ -29,8 +29,8 @@ rapidpipe = "rapidpipe.cli.main:main"
 # cdf, containers and scripts directories that are not importable
 # packages, and setuptools' flat-layout auto-discovery refuses to guess
 # among them. modules* and database* are namespace directories (no
-# __init__.py) holding the two helpers rapidpipe imports:
-# modules.sip_tpv (science/difference/resample.py) and
+# __init__.py) holding the helpers rapidpipe imports:
+# modules.rubrat (science/difference/realbogus.py) and
 # database.modules.utils.roman_tessellation_db (science/spatial.py).
 packages.find = {include = ["rapidpipe*", "modules*", "database*"]}
 

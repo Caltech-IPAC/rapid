@@ -57,10 +57,12 @@ jobs:
           docker exec "$cid" apt-get update -qq
           docker exec "$cid" apt-get install -y --no-install-recommends postgresql-18-q3c
 
-      - name: install postgresql client
+      - name: install postgresql client and pgbouncer
+        # pgbouncer: tests/db/test_publish_pool.py runs its own, a pool of three, in front of
+        # the service (publish-pool-wedge, run 177).
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends postgresql-client
+          sudo apt-get install -y --no-install-recommends postgresql-client pgbouncer
 
       - name: create the empty target database
         run: |

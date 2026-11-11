@@ -1,18 +1,11 @@
 """Canonical generator for the Roman sky tessellation at NSIDE=512.
 
-TWO COPIES, ONE SOURCE. This file lives in rapid_systems
-(``tools/tessellation/roman_tessellation.py``) and is duplicated
-byte-for-byte into the pipeline repo at
-``database/modules/utils/roman_tessellation.py``. rapid_systems is where
-it is EDITED; the pipeline copy exists because the pipeline needs the
-closed form at runtime and the two repos deploy independently — a
-cross-repo import would couple their release cycles for one
-self-contained module whose only dependency is numpy.
-
-The duplication is enforced, not trusted: the pipeline repo's
-``database/modules/utils/test/test_roman_tessellation.py`` compares the
-two files byte-for-byte whenever both are present, and says so plainly
-when only one is. Edit here, copy there.
+ONE COPY. Until 2026-10-13 this file was a byte-for-byte duplicate of
+rapid_systems ``tools/tessellation/roman_tessellation.py``, edited there
+and copied here; rapid_systems deleted its copy with the SMDC-era
+tables' consumers (532d2f80), so this file is the one source and is
+edited here. Its contract is asserted by
+``tests/unit/test_tessellation.py``.
 
 This module is the *authority* for the tessellation: it produces all
 6,291,458 rows deterministically from closed-form rules, with the 2024

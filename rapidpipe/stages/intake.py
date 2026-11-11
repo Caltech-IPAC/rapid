@@ -109,6 +109,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
+from rapidpipe.foundation.steps import step
 from rapidpipe.science import intake_openuniverse, intake_rimtimsim
 from rapidpipe.science.alerts.crossmatch import (
     GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, epoch_offset_years, propagate_positions)
@@ -180,35 +181,40 @@ def run(job: JobContext) -> None:
         fits_path = Path(scratch) / f"{stem}_cal.fits"
         distortion = None
         if settings["rederive_wcs"]:
-            distortion = fetch_reference(job.settings["psf"]["crds_server"],
-                                         ref_file(asdf_path, "distortion"), Path(scratch))
+            with step("distortion"):
+                distortion = fetch_reference(job.settings["psf"]["crds_server"],
+                                             ref_file(asdf_path, "distortion"), Path(scratch))
             lap("distortion")
-        conversion = READERS[reader]["convert"](
-            asdf_path, fits_path, distortion=distortion, sip_degree=int(settings["sip_degree"]),
-            sip_max_pix_error=float(settings["sip_max_pix_error"]),
-            nominal_zptmag=settings["nominal_zptmag"], swname="rapidpipe intake",
-            swvers=f"job {job.job}",  # the job names its run, the run its revision
-            created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            dq_mask_bits=int(settings["dq_mask_bits"]))
+        with step("convert"):
+            conversion = READERS[reader]["convert"](
+                asdf_path, fits_path, distortion=distortion, sip_degree=int(settings["sip_degree"]),
+                sip_max_pix_error=float(settings["sip_max_pix_error"]),
+                nominal_zptmag=settings["nominal_zptmag"], swname="rapidpipe intake",
+                swvers=f"job {job.job}",  # the job names its run, the run its revision
+                created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                dq_mask_bits=int(settings["dq_mask_bits"]))
         lap("convert")
         shift = [float(v) for v in settings["crpix_shift"]]
         if any(shift):
             _shift_crpix(fits_path, shift)
-        gzip_file(fits_path, job.path / fits_name, int(settings["gzip_level"]))
+        with step("gzip"):
+            gzip_file(fits_path, job.path / fits_name, int(settings["gzip_level"]))
         lap("gzip")
-        with fits.open(fits_path) as hdul:
-            primary, header = hdul[0].header.copy(), hdul[1].header.copy()
-            n_pixels = int(hdul[1].data.size)
-            nan_output = int(np.count_nonzero(np.isnan(hdul[1].data)))
-            gaia = _gaia_metrics(job, hdul[1].data, WCS(header), header)
+        with step("gaia"):
+            with fits.open(fits_path) as hdul:
+                primary, header = hdul[0].header.copy(), hdul[1].header.copy()
+                n_pixels = int(hdul[1].data.size)
+                nan_output = int(np.count_nonzero(np.isnan(hdul[1].data)))
+                gaia = _gaia_metrics(job, hdul[1].data, WCS(header), header)
         if reader == "soc-l2":
             _check_key(stem, ids, header)  # the openuniverse reader checks its file's own in the conversion
         fid = FIDS[header["FILTER"]]
         psf = _science_psf(job, fid, ids["sca"])
         _check_epsf(stem, primary, psf)
-        limmag = limiting_magnitude(fits_path, psf,
-                                    settings["limmag_nsigma"], settings["limmag_clip_sigma"],
-                                    settings["limmag_maxiters"])
+        with step("limmag"):
+            limmag = limiting_magnitude(fits_path, psf,
+                                        settings["limmag_nsigma"], settings["limmag_clip_sigma"],
+                                        settings["limmag_maxiters"])
         lap("limmag" if gaia is None else "limmag_gaia")
         fits_bytes = fits_path.stat().st_size
 

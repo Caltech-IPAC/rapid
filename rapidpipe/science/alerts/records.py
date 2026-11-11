@@ -1,4 +1,4 @@
-# ported-from: alerts/providers.py @ 883e3876
+# ported-from: alerts/providers.py @ 82bbca68
 """The alert's normalized records, ported from `dev`'s ``alerts/providers.py``.
 
 `dev`'s provider translates database rows into these dataclasses and the
@@ -81,6 +81,10 @@ class Source:
     roundness1: float | None = None
     roundness2: float | None = None
     peak: float | None = None
+    # aperture flux and its error (new, not dev's: an xsource's FLUX_APER_1
+    # and FLUXERR_APER_1, rapid_docs decision-packets-from-xsources; None for a source)
+    apflux: float | None = None
+    apfluxerr: float | None = None
     exptime: float | None = None
     # Roman observation identifiers, from the exposures row (migration
     # 20261015; null for exposures ingested before it). `pass` is a Python

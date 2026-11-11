@@ -292,14 +292,17 @@ CREATE TEMPORARY TABLE packets_filed ON COMMIT DROP AS
     SELECT p.job, p.dataset, p.expid, p.sca, p.fid, p.object_job, p.aid, f.field, p.source_job,
            p.sid, p.trigger_mjd, p.band, p.schema_version, p.filename, p.byte_offset, p.byte_length
     FROM packets_unsplit p LEFT JOIN object_field f ON f.job = p.object_job AND f.aid = p.aid;
+-- Joins, not a subquery per row: on SMDC the subquery scanned the whole of
+-- packets_filed for each of forced's 11.97 M rows (retire-runs-1-68).
 CREATE TEMPORARY TABLE forced_filed ON COMMIT DROP AS
-    SELECT r.job, r.forced_id, r.aid,
-           coalesce((SELECT min(p.field) FROM packets_filed p WHERE p.job = r.job AND p.aid = r.aid),
-                    (SELECT min(o.field) FROM object_field o WHERE o.aid = r.aid
-                     HAVING count(DISTINCT o.field) = 1)) AS field,
+    SELECT r.job, r.forced_id, r.aid, coalesce(p.field, o.field) AS field,
            r.rid, r.pid, r.expid, r.sca, r.fid, r.band, r.mjdobs, r.ra, r.dec, r.x, r.y,
            r.psf_flux, r.psf_fluxerr, r.science_flux, r.science_fluxerr, r.flags, r.time_proc
-    FROM forced_unsplit r;
+    FROM forced_unsplit r
+    LEFT JOIN (SELECT job, aid, min(field) AS field FROM packets_filed GROUP BY 1, 2) p
+           ON p.job = r.job AND p.aid = r.aid
+    LEFT JOIN (SELECT aid, min(field) AS field FROM object_field GROUP BY aid
+               HAVING count(DISTINCT field) = 1) o ON o.aid = r.aid;
 
 DO $$
 DECLARE

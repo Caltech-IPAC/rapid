@@ -49,7 +49,7 @@ def settings(**prefilter) -> dict:
                                    "photutils_cols_num_processes": 1,
                                    "photutils_cols_prefilter_only": True},
             "psfcat_diffimage": {"fwhm": 2.0, "fit_shape": [17, 17], "aperture_radius": 8.0},
-            "database_prefilter": {"sumrat_prefilter_threshold": 0.4, "rb_prefilter_threshold": 0.0,
+            "xsources_database_prefilter": {"sumrat_prefilter_threshold": 0.4, "rb_prefilter_threshold": 0.0,
                                    "snr_prefilter_threshold": 5.0, **prefilter}}
 
 
@@ -142,10 +142,10 @@ def test_the_rows_keep_devs_cuts_and_map_onto_the_xsources_columns():
     negative = {k: v[3:4] for k, v in extra.items()}
     positive_rows, read = xsources.xsource_rows(
         catalog, extra, isdiffpos=True, key=KEY, pid=11, mjdobs=61348.5, naxis1=120, naxis2=120,
-        thresholds=thresholds(settings()["database_prefilter"]))
+        thresholds=thresholds(settings()["xsources_database_prefilter"]))
     negative_rows, _ = xsources.xsource_rows(
         catalog[3:4], negative, isdiffpos=False, key=KEY, pid=11, mjdobs=61348.5, naxis1=120,
-        naxis2=120, thresholds=thresholds(settings()["database_prefilter"]))
+        naxis2=120, thresholds=thresholds(settings()["xsources_database_prefilter"]))
     assert read == 5
     assert sorted(positive_rows["num"].tolist()) == [3, 4, 5]    # 1 fails S/N, 2 fails rb <= 0
     table = xsources.xsources_table([positive_rows, negative_rows])
@@ -165,7 +165,7 @@ def test_a_missing_extra_value_is_null_and_rblabel_minus_one_stays():
              "rb_label": np.array([-1.0])}
     rows, _ = xsources.xsource_rows(catalog, extra, isdiffpos=True, key=KEY, pid=1, mjdobs=1.0,
                                     naxis1=120, naxis2=120,
-                                    thresholds=thresholds(settings()["database_prefilter"]))
+                                    thresholds=thresholds(settings()["xsources_database_prefilter"]))
     (row,) = xsources.xsources_table([rows]).to_pylist()
     assert row["sumrat"] is None and row["rb"] is None and row["fluxfit"] is None
     assert row["rblabel"] == -1
@@ -198,7 +198,7 @@ def test_a_value_that_cannot_be_computed_is_null_and_nothing_fails(damage):
     extra, _ = xsources.extra_columns(catalog, data, error, psf(), body)
     rows, _ = xsources.xsource_rows(catalog, extra, isdiffpos=True, key=KEY, pid=1, mjdobs=1.0,
                                     naxis1=120, naxis2=120,
-                                    thresholds=thresholds(settings()["database_prefilter"]))
+                                    thresholds=thresholds(settings()["xsources_database_prefilter"]))
     table = {r["num"]: r for r in xsources.xsources_table([rows]).to_pylist()}
     third = table[3]                                                 # the source at (61.1, 91.3)
     if damage in ("nan_patch", "all_nan"):
@@ -211,3 +211,24 @@ def test_a_value_that_cannot_be_computed_is_null_and_nothing_fails(damage):
         assert table[4]["sumrat"] is not None                        # the bright source, untouched
     if damage in ("nan_patch", "zero_uncertainty"):
         assert table[4]["fluxfit"] == pytest.approx(500.0, rel=0.15)
+
+
+def test_devs_extra_columns_read_back_from_its_catalog_with_its_fill_value_null(tmp_path):
+    lines = ["#   1 NUMBER                 x", "#   2 FLAGS                  x",
+             "#   3 SUMRAT                 x", "#   4 FLAGS_FIT              x",
+             "#   5 RB_SCORE               x", "1 2 0.5 4 -999.0", "2 0 -999.0 -999.0 0.75"]
+    path = tmp_path / "cat.txt"
+    path.write_text("\n".join(lines) + "\n")
+    extra = xsources.catalog_extra_columns(xsources.read_catalog(path))
+    assert set(extra) == {name for name, _, _ in xsources.EXTRA_COLUMNS}
+    np.testing.assert_array_equal(extra["sumrat"], [0.5, np.nan])
+    np.testing.assert_array_equal(extra["flags"], [4.0, np.nan])   # FLAGS_FIT, not SExtractor's FLAGS
+    np.testing.assert_array_equal(extra["rb_score"], [np.nan, 0.75])
+    assert np.isnan(extra["cfit"]).all() and len(extra["cfit"]) == 2
+
+
+def test_the_xsources_prefilter_is_its_table_or_an_older_bodys_shared_one():
+    table = {"sumrat_prefilter_threshold": 0.4}
+    assert xsources.prefilter_table({"xsources_database_prefilter": table,
+                                     "database_prefilter": {}}) is table
+    assert xsources.prefilter_table({"database_prefilter": table}) is table   # before the split

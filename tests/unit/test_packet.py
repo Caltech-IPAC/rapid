@@ -40,13 +40,14 @@ from rapidpipe.foundation import prefix
 from rapidpipe.science.catalogs.readers import catalog_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
-    CatalogInput, Read, WindowImage, _plain, _separation, covering, neighbour, reliability,
-    window_reach, write_set)
+    CatalogInput, Read, WindowImage, _plain, _separation, alert_catalog, cap_triggers, covering,
+    measure_forced, neighbour, reliability, window_reach, write_set, xsource_fields)
 from tests.support.catalogs import ra_offset, write_gaia_store, write_hp6_store, write_lvs_store
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
 SETTINGS = {"stamp_half_width": 64, "prv_window_days": 365.25, "forced_window_days": 30.0,
+            "max_alerts": 2000,
             "gaia_match": True, "ned_match": True, "lvs_match": True,
             "gaia_radius_arcsec": 1.0, "gaia_max_matches": 3,
             "ned_radius_arcsec": 10.0, "ned_max_matches": 3, "ned_host_selection": False,
@@ -275,6 +276,43 @@ def test_forced_rows_a_predecessor_holds_are_reused_not_measured(tmp_path):
     assert carried == {MJD[1]: 12345.0, MJD[2]: pytest.approx(forced[(7, 202)]["psf_flux"], rel=1e-6)}
 
 
+def test_the_cap_keeps_the_highest_absolute_snr_triggers_in_sid_order():
+    """dev's _cut_to_max_sources by |S/N|: a strong negative source outranks a weak positive one,
+    a missing S/N ranks last, order by sid is kept, -1 keeps everything and 0 keeps none."""
+    def trigger(sid, fluxfit, fluxerr):
+        return Source(sid=sid, aid=sid, expid=2, sca=8, mjdobs=MJD[2], ra=RA0, dec=DEC0, xfit=1.0,
+                      yfit=1.0, band="W146", xerr=0.1, yerr=0.1, fluxfit=fluxfit, fluxerr=fluxerr,
+                      flags=0, field=1, pid=102, exptime=60.0)
+    triggers = [trigger(1, 50.0, 10.0),      # S/N 5
+                trigger(2, -900.0, 10.0),    # S/N -90: a negative source, the strongest
+                trigger(3, 300.0, 10.0),     # S/N 30
+                trigger(4, 100.0, 0.0)]      # no S/N
+    kept, dropped = cap_triggers(triggers, 2)
+    assert [s.sid for s in kept] == [2, 3] and dropped == 2
+    kept, dropped = cap_triggers(triggers, 3)
+    assert [s.sid for s in kept] == [1, 2, 3] and dropped == 1
+    assert cap_triggers(triggers, -1) == (triggers, 0)
+    assert cap_triggers(triggers, 4) == (triggers, 0)
+    assert cap_triggers(triggers, 0) == ([], 4)
+
+
+def test_an_image_without_a_science_psf_is_measured_on_its_difference_only(tmp_path):
+    """dev 01f89299: no psfs row for the image's filter and SCA skips the science product; the
+    difference is still measured and the row is kept, its science fluxes null."""
+    write_epoch(tmp_path / "e1", [(50, 50, 400.0)])
+    ra, dec = (float(v[0]) for v in wcs().all_pix2world([50.0], [50.0], 1))
+    image = WindowImage(pid=101, rid=201, expid=1, sca=8, fid=8, band="W146", mjdobs=MJD[1],
+                        corners=corners(), diff=tmp_path / "e1" / "zogy_diffimage_masked.fits",
+                        diff_psf=tmp_path / "e1" / "diffpsf.fits",
+                        diff_uncert=tmp_path / "e1" / "zogy_diffimage_uncert_masked.fits",
+                        sci=tmp_path / "e1" / "bkg_subbed_science_image.fits", sci_psf=None)
+    rows, measured = measure_forced([image], [fp.Position(7, ra, dec)], {}, 61000.0)
+    (row,) = rows
+    assert measured == 1 and row["rid"] == 201 and abs(row["psf_flux"] - 400.0) < 50.0
+    assert row["science_flux"] is None and row["science_fluxerr"] is None
+    assert row["x"] == pytest.approx(50.0, abs=1e-6) and row["flags"] == 0   # dev's one-based x
+
+
 def test_a_gzipped_epoch_gives_the_packets_a_plain_one_gives(tmp_path):
     assert neighbour("diffpsf.fits", "s3://b/p/zogy_diffimage_masked.fits.gz") == "diffpsf.fits.gz"
     assert neighbour("diffpsf.fits", "s3://b/p/zogy_diffimage_masked.fits") == "diffpsf.fits"
@@ -376,3 +414,51 @@ def test_reliability_is_the_threshold_and_the_models_version_or_the_set_one():
     assert reliability(run) == (0.5134, "m-other")
     run["packet"]["rb_version"] = "named"
     assert reliability(run) == (0.5134, "named")
+
+
+def _xsource_row(**columns) -> dict:
+    """An xsource row as the packet stage reads it, fitted unless ``columns`` say otherwise."""
+    return {"source_job": 11, "sid": 3, "x": 50.0, "y": 40.0, "fluxap1": 380.0, "fluxerrap1": 12.0,
+            "fluxfit": 400.0, "snrfit": 40.0, "flagsfit": 4, "redchi": 1.25, **columns}
+
+
+@pytest.mark.parametrize("unfitted", [{"fluxfit": None}, {"snrfit": None}, {"snrfit": 0.0},
+                                      {"fluxfit": float("nan")}, {"snrfit": float("inf")}])
+def test_an_unfitted_xsource_takes_the_3px_aperture_and_flags_0(unfitted):
+    fields = xsource_fields(_xsource_row(**unfitted))
+    assert (fields["fluxfit"], fields["fluxerr"], fields["flags"]) == (380.0, 12.0, 0)
+    assert (fields["apflux"], fields["apfluxerr"]) == (380.0, 12.0)
+
+
+def test_a_fitted_xsource_carries_its_fit_and_zero_based_pixels():
+    fields = xsource_fields(_xsource_row())
+    assert (fields["fluxfit"], fields["fluxerr"], fields["flags"]) == (400.0, 10.0, 4)
+    assert (fields["apflux"], fields["apfluxerr"]) == (380.0, 12.0)
+    assert (fields["xfit"], fields["yfit"], fields["redchi"]) == (49.0, 39.0, 1.25)
+    source = Source.from_row({**fields, "expid": 1, "sca": 8, "mjdobs": MJD[1], "ra": RA0,
+                              "dec": DEC0, "band": "F184"})
+    assert source.snr == 40.0                      # [packet] max_alerts ranks by the fit's S/N
+
+
+def test_alert_catalog_is_sources_for_a_body_without_the_key_and_refuses_another_value():
+    assert alert_catalog({"packet": {}}) == "sources"
+    assert alert_catalog({"packet": {"alert_catalog": "xsources"}}) == "xsources"
+    with pytest.raises(ValueError, match="alert_catalog"):
+        alert_catalog({"packet": {"alert_catalog": "objects"}})
+
+
+def test_the_base_settings_ship_xsources():
+    import tomllib
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parents[2] / "rapidpipe" / "settings" / "foundation-thin.toml"
+    assert alert_catalog(tomllib.loads(base.read_text())) == "xsources"
+
+
+def test_the_xsources_catalog_reads_the_xsources_tables():
+    from rapidpipe.stages.packet import ALERT_CATALOGS, MEMBERSHIPS_SQL, ORIGINS_SQL, TRIGGER_SQL
+
+    x = ALERT_CATALOGS["xsources"]
+    assert "FROM xmemberships_of(" in x.sql(TRIGGER_SQL) and "xsid AS sid" in x.sql(TRIGGER_SQL)
+    assert "(NULL::xobjects," in x.sql(ORIGINS_SQL)
+    assert "(NULL::xmemberships," in x.sql(MEMBERSHIPS_SQL)

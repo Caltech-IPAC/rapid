@@ -1,0 +1,17 @@
+# The nightly drift gate's spread (scripts/compare_runs.py --spread): for each
+# drift column, the lowest and highest value recorded on the injected HLWAS
+# epoch 4040101 (r00342-inj1, pointing 001_0001, SCA 8, F146) by runs 152
+# (rapid-rebuild:94), 167 (:105), 168 (:106) and 170 (:107), read from SMDC's
+# job_metrics and official rows on 2026-11-08. Run 167 stopped before the
+# packet stage, so packets and false positives come from 152, 168 and 170
+# alone. The four runs span three code states (152 before the uncapped
+# sources and max_alerts 2000, 167 alerting from sources, 168 and 170 from
+# xsources), so each range is that sample's, not one revision's repeatability:
+# 168, 170 and 172 (:108) are equal on every column but the seconds. Values
+# are as job_metrics stores them; a widened range is a reviewed edit here.
+packets = [266, 338]
+core = [-2.6046798937060997e-05, -2.5551767284687504e-05]
+ring = [-0.0092202221195117, -0.009220176276742667]
+"detected at the threshold" = [99, 171]
+"false positives" = [95.0, 149.0]
+"difference s" = [226.102597, 350.518784]

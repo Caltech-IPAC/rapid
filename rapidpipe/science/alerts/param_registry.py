@@ -7,11 +7,11 @@ in the usage line and the bright-footprint comment on ``psfFitFlags``; the
 three reliability params (``reliability``, ``reliabilityThreshold``,
 ``reliabilityVersion``) are `dev`'s since rb-port, their sources the
 rebuild's (``[packet]`` for `dev`'s ``[ALERTS]``, ``[difference.rubrat]``
-for ``[RUBRAT]``). The `.avsc` files it describes are copied verbatim from
-``alerts/schema/00/07/`` into this package's ``schema/00/07/``; `dev`'s
-``gen_schema.py`` (which writes them from this registry) is not ported --
-:func:`rapidpipe.science.alerts.assemble.schema_problems` checks the two
-agree instead.
+for ``[RUBRAT]``). The `.avsc` files it describes are written from this
+registry by ``python -m rapidpipe.science.alerts.gen_schema`` (`dev`'s
+``gen_schema.py``) into this package's ``schema/<major>/<minor>/``;
+:func:`rapidpipe.science.alerts.assemble.load_schema` refuses a set that
+differs from the registry.
 
 `dev`'s original header follows.
 
@@ -241,9 +241,9 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.isdiffpos (inverted; renamed per schema spreadsheet)",
                     getter=lambda d: not d.isdiffpos),
     Param("apFlux",        ["null", "float"],  "Aperture flux on difference image (stub) [nJy]",
-                    STUB, "aperture photometry (not in DB flow; SExtractor MAG_AUTO in file flow)"),
+                    IMPLEMENTED, "xsources.fluxap1 (FLUX_APER_1, 3 px; null for a source)", attr="apflux"),
     Param("apFluxErr",     ["null", "float"],  "Uncertainty in apFlux (stub) [nJy]",
-                    STUB, "aperture photometry"),
+                    IMPLEMENTED, "xsources.fluxerrap1 (FLUXERR_APER_1)", attr="apfluxerr"),
     # --- Forced Photometry ---------------------------------------------------- #TODO
     Param("scienceFlux",   ["null", "float"],  "Forced PSF flux on science image (stub) [nJy]", #TODO: why is this not in diaForcedSource???
                     STUB, _FP),
@@ -578,7 +578,7 @@ _REF_SRC = ("computed at assembly from the reference-image mosaic SExtractor "
 
 REF_MATCH_PARAMS = (
     Param("sourceId",      "string",           "SExtractor NUMBER of the reference source, unique within "
-                                               "this field's mosaic catalog",
+                                               "this field's mosaic catalog", #TODO: change to refCatID
                         IMPLEMENTED, _REF_SRC, attr="source_id"),
     Param("ra",            "double",           "Right ascension of the reference source; ICRS [deg]",
                         IMPLEMENTED, _REF_SRC),

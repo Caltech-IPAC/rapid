@@ -44,7 +44,7 @@ aws-msk-iam-sasl-signer-python>=1.0
 galsim>=2.8
 # The intake stage (rapidpipe.science.intake) reads SOC L2 ASDF files with asdf
 # and roman_datamodels, whose gWCS is a gwcs object fitted to FITS-SIP; the
-# difference stage's modules/sip_tpv converts SIP to PV with sympy.
+# difference stage's sip_tpv converts SIP to PV with sympy.
 asdf>=5.0
 roman_datamodels>=1.1
 # The intake's GBTDS WCS fix ([intake] rederive_wcs) re-derives the gWCS with
@@ -52,6 +52,17 @@ roman_datamodels>=1.1
 romancal>=1.1
 gwcs>=1.0
 sympy>=1.12
+# The difference stage converts SIP to PV with the installed sip_tpv
+# (science/difference/resample.py), which replaced the vendored copy; the
+# pipeline environment carries 1.1, and the floor rises to 2 with the
+# rapid-python re-platform (Ben, 2026-11-07).
+sip_tpv>=1.1
+# The difference stage's real/bogus classifier (rapidpipe.science.difference.realbogus)
+# runs the RuBR-AT model, an ONNX file exported from the training checkpoint,
+# on onnxruntime in the stage's own process: ONNX is the model contract and
+# TensorFlow and Keras stay out of the pipeline (Ben, 2026-11-07). The floor
+# is the version exercised, 1.31.1; nothing older has run.
+onnxruntime>=1.31
 # rapidpipe.science.catalogs.store streams the NED collection, NED-LVS and
 # LINCC's Gaia leaves over HTTP with requests (imported at module scope;
 # the pipeline image's conda environment carries it through astroquery).

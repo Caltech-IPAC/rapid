@@ -52,13 +52,15 @@ from rapidpipe.products.diffimage import catalog_outcome_bit
 from rapidpipe.science.alerts import forced
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES
 from rapidpipe.science.difference.tools import ToolFailed
-from rapidpipe.science.load.catalogs import source_set
+from rapidpipe.science.load.catalogs import source_set, sources_prefilter
 from rapidpipe.foundation.local import JobContext
 from tests.support.fakedifftools import (
     FakePsfCatalog,
+    FakeRbClassifier,
     FakeReferencePsf,
     FakeToolRunner,
     cdf_dir,
+    fake_rb_classifier,
     fake_rb_model,
     fake_sip_to_pv,
     write_epoch,
@@ -82,6 +84,11 @@ def schema_columns(table: str) -> set[str]:
 # dev's socsims [SFFT] block: no cross-convolution, so SFFT writes its plain file names.
 SOCSIMS_SFFT = {"crossconv_flag": False, "sfft_bsmask_value": "20000.0", "sfft_bsmask_radius": "30.0",
                 "sfft_use_gainmatch_catalogs": False, "sfft_use_segmentation": False}
+
+
+#: [difference.sources_database_prefilter] with every cut off.
+NO_SOURCES_PREFILTER = {"sumrat_prefilter_threshold": "", "rb_prefilter_threshold": "",
+                        "snr_prefilter_threshold": ""}
 
 
 def settings(**tables) -> dict:
@@ -164,7 +171,7 @@ def fakes(monkeypatch, refpsf):
     runner, catalog = FakeToolRunner(), FakePsfCatalog()
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
         runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog, reference_psf=refpsf,
-        rb_model=fake_rb_model))
+        rb_model=fake_rb_model, rb_classifier=fake_rb_classifier))
     return runner, catalog
 
 
@@ -314,7 +321,7 @@ def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fak
 
     monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
         runner=runner, sip_to_pv=kit.sip_to_pv, psf_catalog=zogy_ids_apart,
-        reference_psf=kit.reference_psf, rb_model=kit.rb_model))
+        reference_psf=kit.reference_psf, rb_model=kit.rb_model, rb_classifier=kit.rb_classifier))
     prefix = run_difference(tmp_path, files)
     work = prefix / "diff"
     sfft_catalog = pq.read_table(work / "sfftdiffimage_masked_psfcat.parquet")
@@ -324,7 +331,7 @@ def test_the_published_source_set_is_sffts_positive_catalog(tmp_path, files, fak
     expected, _ = source_set(
         sfft_catalog, KEY, PID, MJDOBS, header["NAXIS1"], header["NAXIS2"],
         max_sources=THIN["difference"]["max_sources"],
-        sumrat_prefilter_threshold=THIN["difference"]["database_prefilter"]["sumrat_prefilter_threshold"])
+        **sources_prefilter(THIN["difference"]))
     sources = read(prefix, "sources")
     assert [(s["sid"], s["xfit"], s["yfit"]) for s in sources] == [
         (s["sid"], s["xfit"], s["yfit"]) for s in expected.to_pylist()]
@@ -387,7 +394,7 @@ def test_sfft_with_the_prefilter_disabled_keeps_the_set_before_it(tmp_path, file
     """No sumrat on any source, so the prefilter would drop every one; "" bypasses all of it."""
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
     prefix = run_difference(tmp_path, files,
-                            body=settings(database_prefilter={"sumrat_prefilter_threshold": ""}))
+                            body=settings(sources_database_prefilter=NO_SOURCES_PREFILTER))
     expected = _unprefiltered(prefix, "sfftdiffimage_masked_psfcat.parquet")
     assert expected and [s["sid"] for s in read(prefix, "sources")] == expected
 
@@ -490,9 +497,6 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
         "zogy",
         "sextractor", "sextractor",     # ZOGY positive, negative
         "sextractor", "sextractor",     # SFFT positive, negative
-        "rubrat",                       # the real/bogus sidecar on SFFT's positive PSF-fit catalog
-        "rubrat",                       # and on its positive SExtractor sources (xsources); the
-                                        # fake negative SExtractor catalog is empty, so not scored
         "sextractor", "sextractor",     # naive positive, negative
         "sfft",
     ]
@@ -501,6 +505,46 @@ def test_tools_run_in_dev_order_with_the_reference_background_from_bkgest(tmp_pa
     reference_bkgest = [c for c in runner.calls if c[0].endswith("bkgest")][1]
     assert reference_bkgest[reference_bkgest.index("-i") + 1] == (
         "awaicgen_output_mosaic_image_resampled_bkgest_input.fits")
+
+
+def test_the_classifier_is_loaded_once_from_the_fetched_model_and_scores_every_catalog(
+        tmp_path, fakes, monkeypatch):
+    """The real/bogus classifier runs in the stage's process: loaded once per job from the
+    model ``rb_model`` fetched, it scores both PSF-fit catalogs and the SExtractor sources."""
+    runner, catalog = fakes
+    loaded, classifier = [], FakeRbClassifier()
+
+    def load(model, rubrat):
+        loaded.append(model.prefix)
+        return classifier
+
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog,
+        reference_psf=FakeReferencePsf(), rb_model=fake_rb_model, rb_classifier=load))
+    prefix = run_difference(tmp_path, write_epoch(tmp_path / "inputs", vanished=True))
+    d = manifest(prefix)["difference"]
+    assert loaded == [d["rb"]["model"]]
+    rows = [d["rb"]["rows"], d["rb_negative"]["rows"]]
+    assert [call["rows"] for call in classifier.calls[:2]] == rows
+    assert len(classifier.calls) == 2 + len(d["xsources"]["scored"])
+
+
+def test_each_scoring_call_s_rows_and_session_runs_are_the_job_s_metrics(tmp_path, fakes, monkeypatch):
+    """The four scoring calls (both PSF-fit catalogs, both xsources signs) on the job's one
+    session: each its rows and session runs, and the session's settings, in the metrics."""
+    runner, catalog = fakes
+    classifier = FakeRbClassifier()
+    monkeypatch.setattr(difference, "toolkit", lambda: difference.Toolkit(
+        runner=runner, sip_to_pv=fake_sip_to_pv, psf_catalog=catalog,
+        reference_psf=FakeReferencePsf(), rb_model=fake_rb_model,
+        rb_classifier=lambda model, rubrat: classifier))
+    prefix = run_difference(tmp_path, write_epoch(tmp_path / "inputs", vanished=True))
+    m = manifest(prefix)["metrics"]
+    calls = ["psf_positive", "psf_negative"] + [f"xs_{s}" for s in manifest(prefix)["difference"]["xsources"]["scored"]]
+    assert [m[f"rb_{c}_rows"] for c in calls] == [call["rows"] for call in classifier.calls]
+    assert all(m[f"rb_{c}_runs"] == 1 for c in calls)
+    assert m["rb_intra_op_threads"] == m["rb_vcpus"] == 1 and m["rb_inter_op_threads"] == 1
+    assert m["rb_score_ms"] >= 0
 
 
 def test_zogy_gets_the_reference_psf_measured_on_the_resampled_reference(
@@ -521,7 +565,8 @@ def test_the_manifest_records_the_reference_psf_metrics(tmp_path, files, fakes, 
     metrics = recorded["metrics"]
     assert {"refpsf_sigma_px", "refpsf_stars", "sci_psf_sigma_px", "psf_centroid_offset_x_px",
             "psf_centroid_offset_y_px", "ref_sigma_px", "ref_sci_sigma_ratio", "noise_correlation",
-            "usable_fraction", "n_candidates", "n_sources", "n_sources_snr_gt20"} <= set(metrics)
+            "usable_fraction", "n_candidates", "n_sources", "n_sources_snr_gt20",
+            "refpsf_s", "pixel_columns_s", "gzip_s"} <= set(metrics)
     # Every metric is a number; one the job cannot make is absent (the fake finds no stars).
     assert all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in metrics.values())
     assert not {"core_fraction", "registration_dx_px"} & set(metrics)
@@ -595,7 +640,8 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
     published image's pixels; the SFFT catalogs and the source set gain sumrat, nneg and nbad."""
     (tmp_path / "with").mkdir()
     (tmp_path / "without").mkdir()
-    unfiltered = settings(database_prefilter={"sumrat_prefilter_threshold": ""})  # no sumrat, no cut
+    unfiltered = settings(sources_database_prefilter=NO_SOURCES_PREFILTER,  # no sumrat, no cut
+                          xsources_database_prefilter={"sumrat_prefilter_threshold": ""})
     after = run_difference(tmp_path / "with", files, body=unfiltered)
     monkeypatch.setattr(difference.columns, "add_pixel_columns", lambda *args: 0)
     before = run_difference(tmp_path / "without", files, body=unfiltered)
@@ -718,6 +764,7 @@ def test_two_science_psfs_fail(tmp_path, files, fakes):
 def test_the_shipped_difference_table_is_valid_and_refuses_fake_sources():
     difference.check_settings(THIN["difference"])
     assert THIN["difference"]["max_sources"] == THIN["import"]["max_sources"] == -1   # no cap, as dev
+    assert THIN["packet"]["max_alerts"] == 2000                                       # the one cap
     difference.check_settings(settings(max_sources=0)["difference"])                 # 0 keeps none
     with pytest.raises(ValueError, match="fake-source"):
         difference.check_settings(settings(fake_sources={"inject_fake_sources_flag": True})["difference"])
@@ -796,3 +843,18 @@ def test_reference_psf_science_takes_the_metrics_stars_from_the_reference_catalo
     assert recorded["n_residual_stars"] == 3
     assert recorded["n_sources_ring_snr_gt20"] == 1                 # 10 px from the star at (50, 60)
     assert {"core_fraction", "ring_fraction", "registration_dy_px"} <= set(recorded)
+
+
+def test_the_sources_and_the_xsources_prefilters_are_set_apart(tmp_path, files, fakes):
+    """sources_database_prefilter cuts the source set alone, xsources_database_prefilter the xsources alone."""
+    def run(name, **tables):
+        (tmp_path / name).mkdir()
+        prefix = run_difference(tmp_path / name, files, body=settings(**tables))
+        return ([(s["isdiffpos"], s["sid"]) for s in read(prefix, "sources")],
+                [(x["isdiffpos"], x["num"]) for x in read(prefix, "xsources")])
+
+    sources, xsources_rows = run("shipped")
+    assert sources and xsources_rows
+    shut = {"sumrat_prefilter_threshold": 1e9}   # every finite sumrat is at or below it
+    assert run("x", xsources_database_prefilter=shut) == (sources, [])
+    assert run("s", sources_database_prefilter=shut) == ([], xsources_rows)

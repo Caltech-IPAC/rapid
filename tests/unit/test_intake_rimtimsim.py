@@ -5,7 +5,7 @@ FITS file is PRIMARY and SCI, its science image the file's DN (its NaN
 kept), its WCS the file's, its keywords the file's own filter, SCA,
 exposure time, start and ZPTMAG, the exposure number as ``OBSERVTN``; a
 file whose own filter or SCA contradicts its name fails, and one not in DN,
-without ``ZPTMAG``, or asked for a DQ mask is refused; under the dataset's
+without a positive ``ZPTMAG``, or asked for a DQ mask is refused; under the dataset's
 overlay the stage reads ``<root><stem>.fits.gz`` and declares rows keyed by
 the exposure number with RimTimSim's ``program_id``.
 A socsims lite file (``<SOC stem>_cal_lite.fits.gz``): the SOC stem parses
@@ -103,8 +103,8 @@ def test_a_file_whose_own_filter_or_sca_contradicts_its_name_fails(tmp_path, car
         convert(tmp_path, **cards)
 
 
-@pytest.mark.parametrize("cards,bits", [({"BUNIT": "e/s"}, 0), ({"ZPTMAG": None}, 0), ({}, 1)])
-def test_a_file_not_in_dn_without_zptmag_or_asked_for_a_dq_mask_is_refused(tmp_path, cards, bits):
+@pytest.mark.parametrize("cards,bits", [({"BUNIT": "e/s"}, 0), ({"ZPTMAG": None}, 0), ({"ZPTMAG": 0.0}, 0), ({}, 1)])
+def test_a_file_not_in_dn_without_a_positive_zptmag_or_asked_for_a_dq_mask_is_refused(tmp_path, cards, bits):
     with pytest.raises(ConversionError):
         convert(tmp_path, dq_mask_bits=bits, **cards)
 

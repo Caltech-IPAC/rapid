@@ -1,4 +1,4 @@
-# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 883e3876
+# ported-from: alerts/produce.py, alerts/providers.py, alerts/forced_phot.py @ 82bbca68
 """``packet``: one difference image's alert packets, schema 00.07, from named inputs.
 
 Foundation plan v5, Part 2: a new port of `dev`'s ``alerts/`` package. It
@@ -17,8 +17,8 @@ dataset (the run's). Recorded inputs at launch, every one an ``input`` row:
   :data:`rapidpipe.products.diffimage.INFORMATIONAL_SOURCE_FLAGS` are
   cleared, so a source in a bright footprint is a trigger and its packet
   carries the bit in ``psfFitFlags``) that the difference job made a
-  member of an object are the triggers; `dev`'s 2,000-per-chip cap is not
-  ported (plan, Part 2). A trigger in several objects takes the lowest
+  member of an object are the triggers, cut to the ``[packet] max_alerts``
+  of highest |S/N| (shipped 2,000, `dev`'s per-chip cap; -1 keeps all). A trigger in several objects takes the lowest
   ``aid`` (`dev`'s rule).
 - ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``).
 - ``catalogs``: the dataset's catalog copies, at most one per name among
@@ -57,6 +57,18 @@ manifest's ``reads``, which the publisher writes to ``job_inputs``:
 A late epoch's memberships therefore appear in packets issued after it
 arrives, never in those already sent.
 
+``[packet] alert_catalog`` names the tables read (rapid_docs
+``decision-packets-from-xsources``; :data:`ALERT_CATALOGS`): ``"xsources"``,
+shipped, reads the set's xsources, the ``xobjects`` and the
+``xmemberships`` where this docstring says sources, objects and
+memberships, each xsource read as a :class:`Source` by
+:func:`xsource_fields`; ``"sources"``, and a run body without the key,
+reads ``sources``, ``objects`` and ``memberships``. An xsource triggers
+when its SExtractor ``flags`` equal ``[associate] xsource_flags``. The
+``sources`` input and the ``sources`` reads name the source sets either
+way: a set's xsources are official through its ``sources`` binding. The
+index's ``aid`` and ``sid`` are the ``xaid`` and ``xsid`` under ``"xsources"``.
+
 The job's ``expects`` row names the previous packet binding for its key,
 or none.
 
@@ -73,14 +85,25 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   (:mod:`rapidpipe.science.alerts.forced`) at the object's founding
   position on every window image whose footprint holds it, both the
   difference image (with its PSF and uncertainty) and the background-
-  subtracted science image (with the science PSF; no uncertainty image is
-  imported, so `dev`'s :func:`~rapidpipe.science.alerts.forced.error_array`
+  subtracted science image (with that image's own science PSF, below; no
+  uncertainty image is imported, so `dev`'s
+  :func:`~rapidpipe.science.alerts.forced.error_array`
   fallback applies), merged one row per (object, image) as `dev`'s
   ``_run_forced`` merges them. An (object, image) pair whose
   ``forced_id`` an official packet set holds is copied from it. The difference
   image measured is the window's published one (SFFT since the
   differencer switch, with ``sfftdiffpsf.fits``, as `dev`'s ``diff_flavor =
   sfft``; ZOGY's ``diffpsf.fits`` for a window image published before it).
+  Each window image's science PSF is the ``psfs`` row of its filter and
+  SCA that its difference job named as an input, read from ``job_inputs``
+  and recorded (:func:`science_psfs`); an image whose job named none (an
+  import) takes the packet job's own named ``psfs`` input when the key
+  matches, else the key's official row; an image with no row at all is
+  measured on its difference image only, logged and counted in the
+  summary's ``window_without_science_psf`` (`dev` 01f89299 skips the
+  science product the same way; it takes the best ``psfs`` row per
+  filter and SCA at the read, where this takes the row the image was
+  differenced with).
 - ``gaiaMatches``, ``nedMatches`` and ``lvsMatches``: each from the chip's
   cone of its copy, the footprint's centre and half-diagonal widened by the
   match radius and `dev`'s slack, and for Gaia by the largest proper motion
@@ -94,7 +117,7 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   groups read; the set still issues. ``refStarMatches``/``refGalaxyMatches``
   from the reference mosaic catalog, likewise; ``ssMatches`` null (not run:
   deferred by the plan).
-- ``reliability`` from ``sources.rb`` (the difference job's real/bogus
+- ``reliability`` from ``sources.rb`` or ``xsources.rb`` (the difference job's real/bogus
   score, SFFT only), and on a scored trigger ``reliabilityThreshold`` and
   ``reliabilityVersion`` from ``[packet] rb_threshold`` and ``rb_version``
   (:func:`reliability`); all three null on an unscored source.
@@ -110,7 +133,7 @@ decompressed once per job when it is first read (:func:`_plain`), to a
 plain file beside its staged copy, or in the download cache for a
 ``file://`` product, which is never changed; forced photometry and the cutouts then
 read the plain file, so the trigger's difference and science images, read
-by both, and the science PSF, read on every window image, are not
+by both, and a science PSF shared by several window images, are not
 decompressed again.
 
 Outputs under the prefix: ``packets/<expid>-<sca>-<fid>.avro`` (one Avro
@@ -125,7 +148,15 @@ The manifest's ``metrics``: ``n_packets``, the set's packets, and
 ``n_packets_snr_gt20``, those whose source's fit flux over its error is
 above 20, and ``n_packets_bright_footprint``, those whose source carries
 the bright-footprint flag
-(:data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`).
+(:data:`rapidpipe.products.diffimage.SOURCE_FLAG_BRIGHT_FOOTPRINT`; 0
+under ``"xsources"``, whose flags are the fit's); and the job's seconds by
+step, wall clock: ``packet_read_s``, the reads (:func:`_read`: the one
+transaction and the window's difference images and PSFs fetched);
+``packet_forced_s``, the forced photometry measured on the window;
+``packet_matching_s``, the catalog and reference-catalog matches;
+``packet_cutouts_s``, the trigger's three images read and every stamp cut;
+``packet_assembly_s``, the packets built and written, the stamps' seconds
+excluded. The last four are the ``packet`` summary's ``timing_s``.
 """
 
 from __future__ import annotations
@@ -149,6 +180,7 @@ from psycopg2.extras import RealDictCursor
 from rapidpipe.foundation.children import set_children
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import cache_dir, get, is_staged
+from rapidpipe.foundation.steps import step
 from rapidpipe.products.diffimage import INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
@@ -217,31 +249,136 @@ SOURCE_JOINS = (
     " LEFT JOIN surveys sv ON sv.program_id = e.program_id")
 
 #: The trigger set's memberships: its sources' objects and their fields, from the children of
-#: ``memberships`` its difference job wrote (``memberships_of``), never the parent.
-TRIGGER_SQL = ("SELECT sid, object_job, aid, field FROM memberships_of(ARRAY[%s]::bigint[])"
-               " ORDER BY sid, aid, object_job")
+#: ``memberships`` its difference job wrote (``memberships_of``), never the parent; under
+#: ``"xsources"`` its xsources' xobjects from ``xmemberships`` (``{aid}`` ``xaid``, ``{sid}`` ``xsid``).
+TRIGGER_SQL = ("SELECT {sid} AS sid, object_job, {aid} AS aid, field FROM {memberships}_of(ARRAY[%s]::bigint[])"
+               " ORDER BY {sid}, {aid}, object_job")
 
-#: The triggers' objects' founding positions, from their fields' children of ``objects``.
-ORIGINS_SQL = ("SELECT o.aid, o.ra0, o.dec0 FROM objects_in(%s::integer[]) o WHERE (o.job, o.aid) IN"
-               " (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))")
+#: The triggers' objects' founding positions, from their fields' children of ``objects``, the
+#: (job, aid) pairs' filter inside each child's query (``packet_origin_rows``).
+ORIGINS_SQL = ("SELECT o.{aid} AS aid, o.ra0, o.dec0 FROM packet_origin_rows(NULL::{objects},"
+               " %s::integer[], %s::bigint[], %s::bigint[]) o")
 
 #: The memberships of the triggers' objects whose source set is official, and the set's own, from
 #: the objects' fields' children of ``memberships`` (an object's memberships are filed under its field).
+#: An xmembership's set is official through its ``sources`` binding, as its xsources are. Both
+#: conditions are inside each child's query (``packet_membership_rows``).
 MEMBERSHIPS_SQL = (
-    "SELECT m.aid, m.source_job, m.sid FROM memberships_in(%(fields)s::integer[]) m"
-    " WHERE (m.object_job, m.aid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(aids)s::bigint[]))"
-    " AND (m.job = %(own)s OR EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
-    " AND o.product = 'sources' AND o.job = m.job))")
+    "SELECT m.{aid} AS aid, m.source_job, m.{sid} AS sid FROM packet_membership_rows(NULL::{memberships},"
+    " %(fields)s::integer[], %(jobs)s::bigint[], %(aids)s::bigint[], %(own)s::bigint) m")
 
 #: Those members' source rows, from one child table of ``sources`` (never the parent: a query
 #: there visits every child, rapidpipe.foundation.children).
 MEMBER_ROWS_SQL = (
-    f"SELECT {SOURCE_COLUMNS} FROM {{child}} s{SOURCE_JOINS}"
-    " WHERE (s.job, s.sid) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(sids)s::bigint[]))")
+    "SELECT {columns} FROM {{child}} s" + SOURCE_JOINS
+    + " WHERE (s.job, s.{sid}) IN (SELECT * FROM unnest(%(jobs)s::bigint[], %(sids)s::bigint[]))")
 
 #: The job's own source set's alertable rows, from its child table.
-OWN_ROWS_SQL = (f"SELECT {SOURCE_COLUMNS} FROM {{child}} s{SOURCE_JOINS}"
-                " WHERE s.job = %s AND s.flags & ~%s = %s ORDER BY s.sid")
+OWN_ROWS_SQL = "SELECT {columns} FROM {{child}} s" + SOURCE_JOINS + " WHERE s.job = %s AND {alertable} ORDER BY s.{sid}"
+
+#: An xsource row as it is read: the columns :func:`xsource_fields` maps to a :class:`Source`.
+XSOURCE_COLUMNS = (
+    "s.job AS source_job, s.dataset, s.xsid AS sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.x, s.y,"
+    " s.fluxap1, s.fluxerrap1, s.fluxfit, s.snrfit, s.flagsfit, s.redchi, s.npixfit, s.cfit,"
+    " s.sharpness, s.roundness1, s.roundness2, s.field, s.hp6, s.hp9, s.pid, s.isdiffpos, s.rb,"
+    " s.rblabel" + SOURCE_COLUMNS[SOURCE_COLUMNS.index(", f.filter AS band"):])
+
+
+@dataclasses.dataclass(frozen=True)
+class AlertCatalog:
+    """The tables ``[packet] alert_catalog`` makes a packet set from, and how their rows are read.
+
+    ``alertable`` is the own set's trigger condition, its one ``%s`` the
+    flags value (the sources' also takes the informational bits first).
+    """
+    parent: str
+    objects: str
+    memberships: str
+    aid: str
+    sid: str
+    columns: str
+    alertable: str
+
+    def sql(self, template: str) -> str:
+        """``template`` with this catalog's tables and columns."""
+        return template.format(parent=self.parent, objects=self.objects, memberships=self.memberships,
+                               aid=self.aid, sid=self.sid, columns=self.columns,
+                               alertable=self.alertable)
+
+
+#: ``[packet] alert_catalog``'s values (rapid_docs decision-packets-from-xsources).
+ALERT_CATALOGS = {
+    "sources": AlertCatalog("sources", "objects", "memberships", "aid", "sid", SOURCE_COLUMNS,
+                            "s.flags & ~%s = %s"),
+    "xsources": AlertCatalog("xsources", "xobjects", "xmemberships", "xaid", "xsid", XSOURCE_COLUMNS,
+                             "s.flags = %s"),
+}
+
+
+def alert_catalog(settings: dict) -> str:
+    """The run's ``[packet] alert_catalog``: ``"sources"`` for a run body stored before the key.
+
+    Parameters
+    ----------
+    settings : dict
+        The run's settings body.
+
+    Returns
+    -------
+    str
+        ``"xsources"`` or ``"sources"``.
+
+    Raises
+    ------
+    ValueError
+        When the value is neither.
+    """
+    name = settings["packet"].get("alert_catalog", "sources")
+    if name not in ALERT_CATALOGS:
+        raise ValueError(f"[packet] alert_catalog must be one of {sorted(ALERT_CATALOGS)}, got {name!r}")
+    return name
+
+
+def _finite(value) -> float | None:
+    """``value`` as a float, or None when it is null or not finite."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def xsource_fields(row: dict) -> dict:
+    """An xsource row (:data:`XSOURCE_COLUMNS`) as :class:`Source` fields, the ruling's mapping.
+
+    The PSF fit of `dev`'s extra columns gives ``fluxfit``, ``fluxerr``
+    (``fluxfit / snrfit``) and ``flags`` (``flagsfit``); an xsource not
+    fitted (``fluxfit`` or ``snrfit`` null or not finite, or ``snrfit``
+    0) takes the 3 px aperture, ``FLUX_APER_1`` and ``FLUXERR_APER_1``,
+    and flags 0. ``apflux``, ``apfluxerr`` are always the 3 px aperture;
+    ``xfit``, ``yfit`` are ``XWIN_IMAGE``, ``YWIN_IMAGE`` made zero-based.
+
+    Parameters
+    ----------
+    row : dict
+        One xsource row with its exposure's columns, as read.
+
+    Returns
+    -------
+    dict
+        The row's :class:`Source` fields, the exposure's columns unchanged.
+    """
+    out = dict(row)
+    x, y = out.pop("x"), out.pop("y")
+    fluxap, fluxerrap = _finite(out.pop("fluxap1")), _finite(out.pop("fluxerrap1"))
+    fluxfit, snrfit = _finite(out.pop("fluxfit")), _finite(out.pop("snrfit"))
+    flagsfit = out.pop("flagsfit")
+    fitted = fluxfit is not None and snrfit                # snrfit neither null nor 0
+    out.update(xfit=float(x) - 1.0, yfit=float(y) - 1.0, apflux=fluxap, apfluxerr=fluxerrap,
+               fluxfit=fluxfit if fitted else fluxap,
+               fluxerr=fluxfit / snrfit if fitted else fluxerrap,
+               flags=int(flagsfit or 0) if fitted else 0)
+    return out
+
 
 #: The window's candidate difference images: official, or the trigger's own, of the dataset, by L2
 #: mjdobs, centred within ``reach`` degrees of the trigger image's centre (two of its half-diagonals,
@@ -261,11 +398,12 @@ WINDOW_SQL = (
 
 #: Official packet sets' forced rows on the window's images, from the triggers' objects' fields'
 #: children of ``forced`` (a forced row is filed under its object's field), each with its set's key,
-#: the key of its open binding.
+#: the key of its open binding. The images and the binding are filtered inside each child's query
+#: (``packet_reuse_rows``); the join supplies the key.
 REUSE_SQL = ("SELECT f.*, o.key ->> 'dataset' AS p_dataset, (o.key ->> 'expid')::integer AS p_expid,"
              " (o.key ->> 'sca')::smallint AS p_sca, (o.key ->> 'fid')::smallint AS p_fid"
-             " FROM forced_in(%s::integer[]) f JOIN official o ON o.closed_at IS NULL"
-             " AND o.product = 'packets' AND o.job = f.job WHERE f.pid = ANY(%s)")
+             " FROM packet_reuse_rows(%s::integer[], %s::integer[]) f JOIN official o"
+             " ON o.closed_at IS NULL AND o.product = 'packets' AND o.job = f.job")
 
 
 @dataclasses.dataclass
@@ -284,7 +422,7 @@ class WindowImage:
     diff_psf: Path
     diff_uncert: Path | None
     sci: Path
-    sci_psf: Path
+    sci_psf: Path | None                          # None: no psfs row for the image; science not measured
 
 
 @dataclasses.dataclass
@@ -329,6 +467,23 @@ class Read:
     catalogs: dict[str, CatalogInput]            # by name, the ones the job names
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
+    catalog: str = "sources"                     # [packet] alert_catalog
+    capped: int = 0                              # triggers dropped by [packet] max_alerts
+
+
+def cap_triggers(triggers: list[Source], max_alerts: int) -> tuple[list[Source], int]:
+    """`dev`'s ``_cut_to_max_sources``: the ``max_alerts`` triggers of highest |S/N|, in their
+    order, and how many were dropped; -1 keeps every trigger (`dev`'s 0), 0 keeps none.
+
+    `dev` ranks by signed S/N with a missing one last; here the absolute
+    value, so a negative source (``isdiffpos`` false, once the source set
+    carries them) ranks by its strength. A missing S/N still ranks last.
+    """
+    if max_alerts < 0 or len(triggers) <= max_alerts:
+        return triggers, 0
+    ranked = sorted(triggers, key=lambda s: (s.snr is None, -abs(s.snr or 0.0)))
+    kept = {s.sid for s in ranked[:max_alerts]}
+    return [s for s in triggers if s.sid in kept], len(triggers) - max_alerts
 
 
 def _one(inputs: list[dict], product: str, job: int) -> dict:
@@ -344,13 +499,14 @@ def _key_where(key: dict, alias: str) -> tuple[str, list]:
 
 
 def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
-                 fields: list[int]) -> list[dict]:
+                 fields: list[int], catalog: AlertCatalog = ALERT_CATALOGS["sources"]) -> list[dict]:
     """The members of the triggers' objects, each with its object's ``member_aid``.
 
     The memberships first (:data:`MEMBERSHIPS_SQL`), then the members' rows
     from the child tables of ``sources`` that hold them, one query per child
     (:data:`MEMBER_ROWS_SQL`), never the parent. A member appears once per
-    object, ordered by object, source set and source id.
+    object, ordered by object, source set and source id. Under ``catalog``
+    ``xsources``: the xobjects' xmemberships and the xsources' children.
 
     Parameters
     ----------
@@ -362,16 +518,18 @@ def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
         The job's own source set, whose memberships count before it is official.
     fields : list of int
         The objects' fields, whose children of ``memberships`` hold their memberships.
+    catalog : AlertCatalog, optional
+        The tables read (:data:`ALERT_CATALOGS`).
 
     Returns
     -------
     list of dict
-        One row per (object, member) with :data:`SOURCE_COLUMNS` and ``member_aid``.
+        One row per (object, member) with the catalog's columns and ``member_aid``.
     """
-    cur.execute(MEMBERSHIPS_SQL, {"jobs": object_jobs, "aids": aids, "own": own,
+    cur.execute(catalog.sql(MEMBERSHIPS_SQL), {"jobs": object_jobs, "aids": aids, "own": own,
                                   "fields": sorted(set(fields))})
     links = {(r["aid"], r["source_job"], r["sid"]) for r in cur.fetchall()}
-    children = set_children(cur, "sources", {job for _, job, _ in links})
+    children = set_children(cur, catalog.parent, {job for _, job, _ in links})
     wanted: dict[str, set[tuple[int, int]]] = {}
     for _, job, sid in links:
         if job in children:
@@ -379,7 +537,7 @@ def _member_rows(cur, object_jobs: list[int], aids: list[int], own: int,
     found: dict[tuple[int, int], dict] = {}
     for child, keys in sorted(wanted.items()):
         keys = sorted(keys)
-        cur.execute(sql.SQL(MEMBER_ROWS_SQL).format(child=sql.Identifier(child)),
+        cur.execute(sql.SQL(catalog.sql(MEMBER_ROWS_SQL)).format(child=sql.Identifier(child)),
                     {"jobs": [k[0] for k in keys], "sids": [k[1] for k in keys]})
         for row in cur.fetchall():
             found[(row["source_job"], row["sid"])] = dict(row)
@@ -406,19 +564,28 @@ def _read(job: JobContext) -> Read:
         raise ValueError(f"job {job.job}: [packet] switches on {switched_on} but the job names {names}")
     ref_in = _one(inputs, "refimages", job.job)
     window_days = float(job.settings["packet"]["forced_window_days"])
+    max_alerts = job.settings["packet"]["max_alerts"]
+    catalog_name = alert_catalog(job.settings)
+    catalog = ALERT_CATALOGS[catalog_name]
+    alertable_flags = ((INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS) if catalog_name == "sources"
+                       else (int(job.settings["associate"]["xsource_flags"]),))
+    as_source = (lambda r: Source.from_row(r)) if catalog_name == "sources" else (
+        lambda r: Source.from_row(xsource_fields(r)))
+    if not isinstance(max_alerts, int) or isinstance(max_alerts, bool) or max_alerts < -1:
+        raise ValueError(f"[packet] max_alerts must be an integer, -1 for no cap, got {max_alerts!r}")
     reads: list[dict] = []
 
     with job.connect() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        own_child = set_children(cur, "sources", [source_job]).get(source_job)
+        own_child = set_children(cur, catalog.parent, [source_job]).get(source_job)
         rows = []
         if own_child is not None:                # none: the set loaded no rows
-            cur.execute(sql.SQL(OWN_ROWS_SQL).format(child=sql.Identifier(own_child)),
-                        (source_job, INFORMATIONAL_SOURCE_FLAGS, ALERTABLE_FLAGS))
+            cur.execute(sql.SQL(catalog.sql(OWN_ROWS_SQL)).format(child=sql.Identifier(own_child)),
+                        (source_job, *alertable_flags))
             rows = cur.fetchall()
-        alertable = [Source.from_row(r) for r in rows]
+        alertable = [as_source(r) for r in rows]
         exposures = {(r["dataset"], r["expid"]): r["exposure_job"] for r in rows}
 
-        cur.execute(TRIGGER_SQL, (source_job,))
+        cur.execute(catalog.sql(TRIGGER_SQL), (source_job,))
         aid_of, object_job, field_of = {}, {}, {}
         for r in cur.fetchall():                 # ordered by aid: the lowest is first
             if r["sid"] not in aid_of:
@@ -426,21 +593,27 @@ def _read(job: JobContext) -> Read:
                 object_job[r["aid"]] = r["object_job"]
                 field_of[r["aid"]] = r["field"]
         triggers = [s for s in alertable if s.sid in aid_of]
+        triggers, capped = cap_triggers(triggers, max_alerts)
+        if capped:
+            logger.info("job %s: keeping the %d highest-|S/N| of %d triggers; %d dropped"
+                        " ([packet] max_alerts, dev's temporary stand-in for a real/bogus cut)",
+                        job.job, len(triggers), len(triggers) + capped, capped)
         aids = sorted({aid_of[s.sid] for s in triggers})
         fields = sorted({field_of[a] for a in aids})
-        cur.execute(ORIGINS_SQL, (fields, [object_job[a] for a in aids], aids))
+        cur.execute(catalog.sql(ORIGINS_SQL), (fields, [object_job[a] for a in aids], aids))
         origin = {r["aid"]: (r["ra0"], r["dec0"]) for r in cur.fetchall()}
 
         members: dict[int, list[tuple[int, Source]]] = {}
         objects: dict[int, tuple[float, float, Sums]] = {
             aid: (*origin[aid], Sums(*origin[aid])) for aid in aids}
         member_sets = set()
-        for row in _member_rows(cur, [object_job[a] for a in aids], aids, source_job, fields):
+        for row in _member_rows(cur, [object_job[a] for a in aids], aids, source_job, fields,
+                                catalog):
             aid = row.pop("member_aid")
-            member = Source.from_row(row)
+            member = as_source(row)
             member.aid = aid
             members.setdefault(aid, []).append((row["source_job"], member))
-            objects[aid][2].add(row["ra"], row["dec"], row["fluxfit"])
+            objects[aid][2].add(member.ra, member.dec, member.fluxfit)
             member_sets.add(row["source_job"])
             exposures[row["dataset"], row["expid"]] = row["exposure_job"]
         reads += [{"product": "exposures", "key": {"dataset": d, "expid": e}, "source_job": j}
@@ -454,7 +627,11 @@ def _read(job: JobContext) -> Read:
         cur.execute("SELECT filename FROM psfs WHERE job = %s AND "
                     + _key_where(psf_in["key"], "psfs")[0],
                     (psf_in["source_job"], *_key_where(psf_in["key"], "psfs")[1]))
-        sci_psf = get(cur.fetchone()["filename"])
+        named_psf = cur.fetchone()
+        if named_psf is None:
+            raise ValueError(f"job {job.job}: no psfs row {psf_in['key']} in job {psf_in['source_job']}")
+        named_psf = {"job": psf_in["source_job"], "key": dict(psf_in["key"]),
+                     "filename": named_psf["filename"]}
 
         cur.execute("SELECT d.ra0, d.dec0, d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4,"
                     " l.mjdobs FROM diffimages d JOIN l2files l ON l.rid = d.rid"
@@ -467,10 +644,22 @@ def _read(job: JobContext) -> Read:
                                  "lo": own["mjdobs"] - window_days,
                                  "hi": own["mjdobs"] + TRIGGER_EPSILON_DAYS})
         images = []
-        for d in covering(cur.fetchall(), [objects[a][:2] for a in aids], source_job):
+        chosen = covering(cur.fetchall(), [objects[a][:2] for a in aids], source_job)
+        psf_rows, psf_reads = science_psfs(cur, chosen, key["dataset"], named_psf)
+        reads += psf_reads
+        fetched_psfs: dict[str, Path] = {}
+        for d in chosen:
             image_key = {"dataset": d["dataset"], "expid": d["expid"], "sca": d["sca"], "fid": d["fid"]}
             reads += [{"product": "diffimages", "key": image_key, "source_job": d["job"]},
                       {"product": "l2files", "key": image_key, "source_job": d["l2_job"]}]
+            psf_row = psf_rows.get(d["job"])
+            if psf_row is None:
+                logger.warning("job %s: window image pid=%s (expid %s sca %s fid %s) has no science"
+                               " psfs row; measured on its difference image only",
+                               job.job, d["pid"], d["expid"], d["sca"], d["fid"])
+                sci_psf = None
+            else:
+                sci_psf = fetched_psfs.setdefault(psf_row["filename"], get(psf_row["filename"]))
             diff = get(d["filename"])
             plain = diff.name.removesuffix(".gz")
             uncert = fp.DIFF_UNCERT_BASENAMES.get(plain)
@@ -520,13 +709,77 @@ def _read(job: JobContext) -> Read:
     trigger_image = [i for i in images if (i.expid, i.sca, i.fid) == (key["expid"], key["sca"], key["fid"])]
     if len(trigger_image) != 1:
         raise ValueError(f"job {job.job}: the trigger's difference image is not in its window")
-    return Read(key=key, source_job=source_job, object_job=object_job, field_of=field_of,
-                flags_zero=len(alertable), triggers=triggers,
+    return Read(key=key, source_job=source_job, catalog=catalog_name, object_job=object_job,
+                field_of=field_of,
+                flags_zero=len(alertable), triggers=triggers, capped=capped,
                 aid_of=aid_of, objects=objects, members=members, images=images,
                 trigger_image=trigger_image[0], reuse=reuse,
                 catalogs={name: _open_catalog(name, catalog_job, location)
                           for name, (catalog_job, location) in locations.items()},
                 refcat_path=get(ref["filename"]), reads=reads)
+
+
+#: The science ``psfs`` rows the window images' difference jobs named as inputs, by image job.
+IMAGE_PSFS_SQL = (
+    "SELECT i.job, p.job AS psf_job, p.fid, p.sca, p.filename FROM job_inputs i"
+    " JOIN psfs p ON p.job = i.source_job AND p.kind = 'science'"
+    " AND p.dataset = i.key ->> 'dataset' AND p.fid = (i.key ->> 'fid')::smallint"
+    " AND p.sca = (i.key ->> 'sca')::smallint"
+    " WHERE i.job = ANY(%s) AND i.kind = 'input' AND i.product = 'psfs'"
+    " AND i.key ->> 'kind' = 'science'")
+
+#: The official science ``psfs`` rows of a dataset for the given (fid, sca) pairs.
+OFFICIAL_PSFS_SQL = (
+    "SELECT job AS psf_job, fid, sca, filename FROM psfs_official"
+    " WHERE dataset = %s AND kind = 'science' AND (fid, sca) IN"
+    " (SELECT * FROM unnest(%s::smallint[], %s::smallint[]))")
+
+
+def science_psfs(cur, images: list[dict], dataset: str,
+                 named: dict) -> tuple[dict[int, dict | None], list[dict]]:
+    """Each window image's science PSF row, by the image's job, and the reads to record.
+
+    An image's PSF is, in order: the science ``psfs`` row its difference
+    job named as an input (what the image was differenced with); the
+    packet job's own named ``psfs`` input ``named`` (``job``, ``key``,
+    ``filename``) when its filter and SCA are the image's; the official
+    row for the image's filter and SCA at the read; or None. Every row
+    read that is not ``named`` (already among the job's inputs) is
+    returned as a ``psfs`` read, once.
+    """
+    jobs = sorted({d["job"] for d in images})
+    found: dict[int, dict] = {}
+    if jobs:
+        cur.execute(IMAGE_PSFS_SQL, (jobs,))
+        for row in cur.fetchall():
+            found[row["job"]] = {"psf_job": row["psf_job"], "fid": row["fid"], "sca": row["sca"],
+                                 "filename": row["filename"]}
+    named_pair = (int(named["key"]["fid"]), int(named["key"]["sca"]))
+    pending = sorted({(d["fid"], d["sca"]) for d in images
+                      if d["job"] not in found and (d["fid"], d["sca"]) != named_pair})
+    official: dict[tuple[int, int], dict] = {}
+    if pending:
+        cur.execute(OFFICIAL_PSFS_SQL, (dataset, [f for f, _ in pending], [s for _, s in pending]))
+        for row in cur.fetchall():
+            official[row["fid"], row["sca"]] = {"psf_job": row["psf_job"], "fid": row["fid"],
+                                                "sca": row["sca"], "filename": row["filename"]}
+    rows: dict[int, dict | None] = {}
+    for d in images:
+        if d["job"] in found:
+            rows[d["job"]] = found[d["job"]]
+        elif (d["fid"], d["sca"]) == named_pair:
+            rows[d["job"]] = {"psf_job": named["job"], "fid": d["fid"], "sca": d["sca"],
+                              "filename": named["filename"]}
+        else:
+            rows[d["job"]] = official.get((d["fid"], d["sca"]))
+    reads = []
+    for row in sorted({(r["psf_job"], r["fid"], r["sca"]) for r in rows.values() if r}):
+        psf_job, fid, sca = row
+        if psf_job == named["job"] and (fid, sca) == named_pair:
+            continue
+        reads.append({"product": "psfs", "key": {"dataset": dataset, "fid": fid, "sca": sca,
+                                                 "kind": "science"}, "source_job": psf_job})
+    return rows, reads
 
 
 def window_reach(image: dict) -> float:
@@ -612,6 +865,8 @@ def measure_forced(images: list[WindowImage], positions: list[fp.Position],
         merged: dict[int, dict] = {}
         for product, path, psf, uncert in (("diff", image.diff, image.diff_psf, image.diff_uncert),
                                            ("science", image.sci, image.sci_psf, None)):
+            if psf is None:                      # no science PSF: the difference alone, as dev
+                continue
             for m in fp.forced_photometry(str(_plain(path)), str(_plain(psf)), todo, rid=image.rid,
                                           product=product,
                                           uncert_path=str(_plain(uncert)) if uncert else None):
@@ -738,17 +993,24 @@ def _best_effort(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
 
 
 def run(job: JobContext) -> None:
-    read = _read(job)
-    summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
-                        sync_seed=f"{job.job}/{job.attempt}",
-                        reliability=reliability(job.settings))
+    t0 = time.perf_counter()
+    with step("read"):
+        read = _read(job)
+    read_s = time.perf_counter() - t0
+    with step("write_set"):
+        summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
+                            sync_seed=f"{job.job}/{job.attempt}",
+                            reliability=reliability(job.settings))
     # A source set with no triggers is a set of no packets, validly; one with triggers is not.
-    job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
-                        ("external", "external.parquet")],
-                       empty_ok=() if read.triggers else ("packets",), packet=summary, reads=read.reads,
-                       metrics={"n_packets": summary["packets"],
-                                "n_packets_snr_gt20": summary["packets_snr_gt20"],
-                                "n_packets_bright_footprint": summary["packets_bright_footprint"]})
+    with step("manifest"):
+        job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
+                            ("external", "external.parquet")],
+                           empty_ok=() if read.triggers else ("packets",), packet=summary, reads=read.reads,
+                           metrics={"n_packets": summary["packets"],
+                                    "n_packets_snr_gt20": summary["packets_snr_gt20"],
+                                    "n_packets_bright_footprint": summary["packets_bright_footprint"],
+                                    "packet_read_s": round(read_s, 3),
+                                    **{f"packet_{k}": v for k, v in summary["timing_s"].items()}})
 
 
 def reliability(settings: dict) -> tuple[float, str]:
@@ -777,46 +1039,49 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
     timing = {}
 
     t0 = time.perf_counter()
-    window = [i for i in read.images
-              if trigger_mjd - float(settings["forced_window_days"]) <= i.mjdobs
-              <= trigger_mjd + TRIGGER_EPSILON_DAYS]
-    aids = sorted({read.aid_of[s.sid] for s in read.triggers})
-    positions = [fp.Position(aid, *read.objects[aid][:2]) for aid in aids]
-    forced_rows, measured = measure_forced(window, positions, read.reuse, time_proc)
-    for row in forced_rows:                      # filed under its object's field, as reused rows are
-        row["field"] = read.field_of[row["aid"]]
-    forced_rows.sort(key=lambda r: (r["aid"], r["mjdobs"], r["rid"]))
+    with step("forced"):
+        window = [i for i in read.images
+                  if trigger_mjd - float(settings["forced_window_days"]) <= i.mjdobs
+                  <= trigger_mjd + TRIGGER_EPSILON_DAYS]
+        aids = sorted({read.aid_of[s.sid] for s in read.triggers})
+        positions = [fp.Position(aid, *read.objects[aid][:2]) for aid in aids]
+        forced_rows, measured = measure_forced(window, positions, read.reuse, time_proc)
+        for row in forced_rows:                      # filed under its object's field, as reused rows are
+            row["field"] = read.field_of[row["aid"]]
+        forced_rows.sort(key=lambda r: (r["aid"], r["mjdobs"], r["rid"]))
     timing["forced_s"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    ra = [s.ra for s in read.triggers]
-    dec = [s.dec for s in read.triggers]
-    n_triggers = len(read.triggers)
-    matches: dict[str, list] = {kind: [None] * n_triggers for kind in CATALOG_KINDS}
-    records: dict[str, dict] = {}
-    if read.triggers:
-        for kind, catalog in read.catalogs.items():
-            matches[kind], records[kind] = _best_effort(
-                catalog, read.trigger_image.corners, trigger_mjd, ra, dec, settings)
-    gaia, ned, lvs = (matches[kind] for kind in CATALOG_KINDS)
-    refcat = load_refcat(str(read.refcat_path)) if read.refcat_path else None
-    refs = (match_refcat(ra, dec, refcat, radius_arcsec=float(settings["refcat_radius_arcsec"]),
-                         n_max=int(settings["refcat_max_matches"]))
-            if refcat is not None and read.triggers else [None] * len(read.triggers))
+    with step("matching"):
+        ra = [s.ra for s in read.triggers]
+        dec = [s.dec for s in read.triggers]
+        n_triggers = len(read.triggers)
+        matches: dict[str, list] = {kind: [None] * n_triggers for kind in CATALOG_KINDS}
+        records: dict[str, dict] = {}
+        if read.triggers:
+            for kind, catalog in read.catalogs.items():
+                matches[kind], records[kind] = _best_effort(
+                    catalog, read.trigger_image.corners, trigger_mjd, ra, dec, settings)
+        gaia, ned, lvs = (matches[kind] for kind in CATALOG_KINDS)
+        refcat = load_refcat(str(read.refcat_path)) if read.refcat_path else None
+        refs = (match_refcat(ra, dec, refcat, radius_arcsec=float(settings["refcat_radius_arcsec"]),
+                             n_max=int(settings["refcat_max_matches"]))
+                if refcat is not None and read.triggers else [None] * len(read.triggers))
     timing["matching_s"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    half = int(settings["stamp_half_width"])
-    stamps = {}
-    for kind, stamp_path in (
-            ("difference", read.trigger_image.diff),
-            ("science", read.trigger_image.diff.with_name(
-                neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
-            ("template", read.trigger_image.diff.with_name(
-                neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name)))):
-        stamps[kind] = load_fits_image(_plain(stamp_path))
-        if stamps[kind][0] is None:  # the trigger's own images are required, not optional
-            raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
+    with step("cutouts"):
+        half = int(settings["stamp_half_width"])
+        stamps = {}
+        for kind, stamp_path in (
+                ("difference", read.trigger_image.diff),
+                ("science", read.trigger_image.diff.with_name(
+                    neighbour(CUTOUT_FILES["sci"], read.trigger_image.diff.name))),
+                ("template", read.trigger_image.diff.with_name(
+                    neighbour(CUTOUT_FILES["ref"], read.trigger_image.diff.name)))):
+            stamps[kind] = load_fits_image(_plain(stamp_path))
+            if stamps[kind][0] is None:  # the trigger's own images are required, not optional
+                raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
     timing["cutouts_s"] = time.perf_counter() - t0
 
     forced_by_aid: dict[int, list[dict]] = {}
@@ -824,72 +1089,80 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         forced_by_aid.setdefault(row["aid"], []).append(row)
 
     t0 = time.perf_counter()
-    schema = load_schema()
-    name = f"{read.key['expid']}-{read.key['sca']}-{read.key['fid']}.avro"
-    (path / "packets").mkdir()
-    avro = path / "packets" / name
-    order, external = [], []
-    cutout_s = 0.0
-    with avro.open("wb") as stream:
-        container = AlertContainer(stream, schema, sync_marker=sync_marker_for(sync_seed))
-        for source, gaia_matches, ned_matches, lvs_matches, ref_matches in zip(
-                read.triggers, gaia, ned, lvs, refs):
-            aid = read.aid_of[source.sid]
-            ra0, dec0, sums = read.objects[aid]
-            prv, count = history((read.source_job, source), read.members.get(aid, []),
-                                 float(settings["prv_window_days"]))
-            stats = sums.statistics()
-            obj = ObjectRecord(aid=aid, ra0=ra0, dec0=dec0, nsources=count,
-                               stdevra=None if math.isnan(stats["stdevra"]) else stats["stdevra"],
-                               stdevdec=None if math.isnan(stats["stdevdec"]) else stats["stdevdec"])
-            c0 = time.perf_counter()
-            cutouts = Cutouts(**{kind: extract_stamp(pixels, source.xfit + 1.0, source.yfit + 1.0,
-                                                     header=header, half_width=half)
-                                 for kind, (pixels, header) in stamps.items()})
-            cutout_s += time.perf_counter() - c0
-            lo = trigger_mjd - float(settings["forced_window_days"])
-            forced = [_forced_phot(r) for r in forced_by_aid.get(aid, [])
-                      if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
-            alert = assemble_alert(source, obj, prv, ss_matches=None, ref_matches=ref_matches,
-                                   ned_matches=ned_matches, lvs_matches=lvs_matches,
-                                   gaia_matches=gaia_matches,
-                                   cutouts=cutouts, forced=forced, time_proc=time_proc,
-                                   reliability=reliability)
-            container.write(alert)
-            container.flush()  # one record per block: the index's locator is exact
-            order.append((source, aid))
-            for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches)):
-                external.extend({"catid": str(m.source_id) if kind == "gaia" else m.prefname,
-                                 "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
-                                 "source_job": read.source_job, "sid": source.sid,
-                                 "catalog_job": read.catalogs[kind].job} for m in found or ())
+    with step("assembly"):
+        schema = load_schema()
+        name = f"{read.key['expid']}-{read.key['sca']}-{read.key['fid']}.avro"
+        (path / "packets").mkdir()
+        avro = path / "packets" / name
+        order, external = [], []
+        cutout_s = 0.0
+        with avro.open("wb") as stream:
+            container = AlertContainer(stream, schema, sync_marker=sync_marker_for(sync_seed))
+            for source, gaia_matches, ned_matches, lvs_matches, ref_matches in zip(
+                    read.triggers, gaia, ned, lvs, refs):
+                aid = read.aid_of[source.sid]
+                ra0, dec0, sums = read.objects[aid]
+                prv, count = history((read.source_job, source), read.members.get(aid, []),
+                                     float(settings["prv_window_days"]))
+                stats = sums.statistics()
+                obj = ObjectRecord(aid=aid, ra0=ra0, dec0=dec0, nsources=count,
+                                   stdevra=None if math.isnan(stats["stdevra"]) else stats["stdevra"],
+                                   stdevdec=None if math.isnan(stats["stdevdec"]) else stats["stdevdec"])
+                c0 = time.perf_counter()
+                with step("cutouts"):
+                    cutouts = Cutouts(**{kind: extract_stamp(pixels, source.xfit + 1.0, source.yfit + 1.0,
+                                                             header=header, half_width=half)
+                                         for kind, (pixels, header) in stamps.items()})
+                cutout_s += time.perf_counter() - c0
+                lo = trigger_mjd - float(settings["forced_window_days"])
+                forced = [_forced_phot(r) for r in forced_by_aid.get(aid, [])
+                          if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
+                alert = assemble_alert(source, obj, prv, ss_matches=None, ref_matches=ref_matches,
+                                       ned_matches=ned_matches, lvs_matches=lvs_matches,
+                                       gaia_matches=gaia_matches,
+                                       cutouts=cutouts, forced=forced, time_proc=time_proc,
+                                       reliability=reliability)
+                container.write(alert)
+                container.flush()  # one record per block: the index's locator is exact
+                order.append((source, aid))
+                for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches)):
+                    external.extend({"catid": str(m.source_id) if kind == "gaia" else m.prefname,
+                                     "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
+                                     "source_job": read.source_job, "sid": source.sid,
+                                     "catalog_job": read.catalogs[kind].job} for m in found or ())
     timing["cutouts_s"] += cutout_s
     timing["assembly_s"] = time.perf_counter() - t0 - cutout_s
 
-    with avro.open("rb") as stream:
-        blocks = [(b.offset, b.size, b.num_records) for b in fastavro.block_reader(stream)]
-    if len(blocks) != len(order) or any(n != 1 for *_, n in blocks):
-        raise RuntimeError(f"{avro}: {len(blocks)} blocks for {len(order)} records")
-    url = prefix + f"packets/{name}"
-    index = [{"dataset": dataset, "expid": read.key["expid"], "sca": read.key["sca"],
-              "fid": read.key["fid"], "object_job": read.object_job[aid], "aid": aid,
-              "field": read.field_of[aid],
-              "source_job": read.source_job, "sid": source.sid, "trigger_mjd": source.mjdobs,
-              "band": source.band, "schema_version": VERSION, "filename": url,
-              "byte_offset": offset, "byte_length": size}
-             for (source, aid), (offset, size, _) in zip(order, blocks)]
+    with step("index"):
+        with avro.open("rb") as stream:
+            blocks = [(b.offset, b.size, b.num_records) for b in fastavro.block_reader(stream)]
+        if len(blocks) != len(order) or any(n != 1 for *_, n in blocks):
+            raise RuntimeError(f"{avro}: {len(blocks)} blocks for {len(order)} records")
+        url = prefix + f"packets/{name}"
+        index = [{"dataset": dataset, "expid": read.key["expid"], "sca": read.key["sca"],
+                  "fid": read.key["fid"], "object_job": read.object_job[aid], "aid": aid,
+                  "field": read.field_of[aid],
+                  "source_job": read.source_job, "sid": source.sid, "trigger_mjd": source.mjdobs,
+                  "band": source.band, "schema_version": VERSION, "filename": url,
+                  "byte_offset": offset, "byte_length": size}
+                 for (source, aid), (offset, size, _) in zip(order, blocks)]
 
-    for rows, schema, filename in ((index, INDEX_SCHEMA, "packets.parquet"),
-                                   (forced_rows, FORCED_SCHEMA, "forced.parquet"),
-                                   (external, EXTERNAL_SCHEMA, "external.parquet")):
-        pq.write_table(pa.Table.from_pylist(rows, schema=schema), path / filename)
+        for rows, schema, filename in ((index, INDEX_SCHEMA, "packets.parquet"),
+                                       (forced_rows, FORCED_SCHEMA, "forced.parquet"),
+                                       (external, EXTERNAL_SCHEMA, "external.parquet")):
+            pq.write_table(pa.Table.from_pylist(rows, schema=schema), path / filename)
     return {"avro": f"packets/{name}", "avro_bytes": avro.stat().st_size,
             "flags_zero": read.flags_zero, "packets": len(order),
+            "triggers_dropped_by_cap": read.capped,
             "packets_snr_gt20": sum(1 for source, _ in order
                                     if source.fluxerr and source.fluxfit / source.fluxerr > 20),
+            # an xsource's flags are its fit's, which carry no bright-footprint bit
             "packets_bright_footprint": sum(1 for source, _ in order
-                                            if source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
-            "window_images": len(window), "forced_rows": len(forced_rows),
+                                            if read.catalog == "sources"
+                                            and source.flags & SOURCE_FLAG_BRIGHT_FOOTPRINT),
+            "window_images": len(window),
+            "window_without_science_psf": sum(1 for i in window if i.sci_psf is None),
+            "forced_rows": len(forced_rows),
             "forced_measured": measured, "forced_reused": len(forced_rows) - measured,
             **{f"{kind}_matches": sum(len(m) for m in matches[kind] if m) for kind in CATALOG_KINDS},
             "catalogs": records,

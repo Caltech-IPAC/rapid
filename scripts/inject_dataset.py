@@ -3,9 +3,12 @@
 One-time, outside the pipeline (plan Part 6 rows 13 and 14, Ben 2026-10-22:
 injection outside the pipeline as a dataset): the pipeline never sees this
 script, only a source root whose files carry sources a truth table names.
-For a selection of a SOC L2 source root (``--filter``, ``--scas``,
-``--pointings``, the loop's grammar), every file whose exposure starts
-after ``--bound-mjd`` (read from its ``_wcs.asdf`` sidecar) gets constant
+For a selection of an L2 source root (``--filter``, ``--scas``,
+``--pointings``, the loop's grammar; the SOC's public ``l2/`` or a flat
+private prefix such as flight program 1049's, read with the caller's
+credentials either way), every file whose exposure starts after
+``--bound-mjd`` (``meta.exposure.start_time``, read from the file's own
+ASDF header by ranged requests, not the whole file) gets constant
 sources by dev's ``inject_variable_stars_into_l2`` as it stands
 (``scripts/rapid_l2_injections.py``, its CLI's ``fix_wcs=False``); every
 file before the bound is copied byte for byte. Each goes to
@@ -248,15 +251,30 @@ def process_pointing(stems: list[str], actions: dict[str, str], ctx: dict) -> tu
     return lines, rows
 
 
-def sidecar_mjd(client, source: str, stem: str) -> float:
-    """The exposure's start MJD from the file's ``_wcs.asdf`` sidecar (49 KB, not the 200 MB file)."""
+#: The YAML tree's end-of-document marker; the binary blocks follow it.
+TREE_END = b"\n...\n"
+
+
+def header_mjd(client, source: str, stem: str, chunk: int = 1 << 20) -> float:
+    """The exposure's start MJD from the file's own ASDF tree, read by ranged requests until the
+    tree ends (the SOC's 54 KB, flight 1049's 1.99 MB, not the 200 MB file; flight files have no
+    ``_wcs.asdf`` sidecar). The tree is read raw (its arrays' blocks are not there); the start time
+    is the ``time`` tag's ISO string, UTC."""
     import asdf
     from astropy.time import Time
 
     bucket, prefix = split(source)
-    data = client.get_object(Bucket=bucket, Key=prefix + stem + "_wcs.asdf")["Body"].read()
-    with asdf.open(io.BytesIO(data), lazy_load=False, memmap=False) as af:
-        return float(Time(af.tree["roman"]["meta"]["exposure"]["start_time"]).mjd)
+    data = b""
+    while (end := data.find(TREE_END)) < 0:
+        part = client.get_object(Bucket=bucket, Key=prefix + stem + "_cal.asdf",
+                                 Range=f"bytes={len(data)}-{len(data) + chunk - 1}")["Body"].read()
+        if not part:
+            raise ValueError(f"{stem}: no end of the ASDF tree in {len(data)} bytes")
+        data += part
+        chunk *= 2
+    with asdf.open(io.BytesIO(data[: end + len(TREE_END)]), lazy_load=True, memmap=False,
+                   _force_raw_types=True) as af:
+        return float(Time(str(af.tree["roman"]["meta"]["exposure"]["start_time"])).mjd)
 
 
 def plan(stems: list[str], mjds: dict[str, float], bound: float) -> tuple[dict, dict]:
@@ -272,17 +290,16 @@ def plan(stems: list[str], mjds: dict[str, float], bound: float) -> tuple[dict, 
 def _worker(args: tuple) -> tuple[list[str], list[dict]]:
     stems, actions, ctx = args
     import boto3
-    from botocore import UNSIGNED
-    from botocore.config import Config
 
-    ctx = {**ctx, "source_client": boto3.client("s3", config=Config(signature_version=UNSIGNED)),
-           "dest_client": boto3.client("s3"), "open_image": open_image, "inject": inject_file}
+    client = boto3.client("s3")
+    ctx = {**ctx, "source_client": client, "dest_client": client, "open_image": open_image,
+           "inject": inject_file}
     return process_pointing(stems, actions, ctx)
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--source-root", required=True, help="the public L2 prefix, s3://bucket/prefix/ (read unsigned)")
+    p.add_argument("--source-root", required=True, help="the L2 prefix, s3://bucket/prefix/")
     p.add_argument("--filter", required=True)
     p.add_argument("--scas", required=True, help="comma-separated")
     p.add_argument("--pointings", required=True, help="VVV_EEEE,... or all")
@@ -303,17 +320,14 @@ def main(argv: list[str] | None = None) -> int:
     import boto3
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from botocore import UNSIGNED
-    from botocore.config import Config
 
     t_start = time.perf_counter()
-    unsigned = boto3.client("s3", config=Config(signature_version=UNSIGNED))
     signed = boto3.client("s3")
     selection = Selection.parse(a.filter, a.scas, a.pointings)
-    stems = sorted(s for s in list_stems(unsigned, source, selection) if selection.admits_stem(s))
+    stems = sorted(s for s in list_stems(signed, source, selection) if selection.admits_stem(s))
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(16) as pool:
-        mjds = dict(zip(stems, pool.map(lambda s: sidecar_mjd(unsigned, source, s), stems)))
+        mjds = dict(zip(stems, pool.map(lambda s: header_mjd(signed, source, s), stems)))
     actions, groups = plan(stems, mjds, a.bound_mjd)
     bucket, prefix = split(dest + "l2/")
     existing = {item["Key"].rsplit("/", 1)[-1]

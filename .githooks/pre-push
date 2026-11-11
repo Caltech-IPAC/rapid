@@ -3,10 +3,9 @@
 # pre-push: block internal identifiers from reaching the public remote.
 # Install with `git config core.hooksPath .githooks` (see README.md).
 #
-# Ported from the smdc branch's .githooks/pre-push for the rebuilt
-# pipeline repository (this repo is now the sole `rapid` repository; the
-# smdc/dev two-branch arrangement ends with the rebuild per the
-# specification). The scan patterns and allowlist live in
+# Ported from the retired smdc branch's .githooks/pre-push (that branch
+# was deleted on 2026-11-08; this is the one `rapid` repository). The
+# scan patterns and allowlist live in
 # scripts/check-public-safety.sh, which this hook calls for each pushed
 # ref's tree so the hook and CI scan the same thing one way.
 #

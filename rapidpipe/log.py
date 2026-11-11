@@ -1,6 +1,6 @@
 """Logging for rapidpipe: UTC formatter, run/attempt/stage/unit on every line.
 
-Ported from ``origin/smdc:pipeline/runtime/logging_setup.py`` -- the UTC
+Ported from the retired smdc branch's ``pipeline/runtime/logging_setup.py`` -- the UTC
 formatter and identifiers on every line are kept; the old
 attempt schema this module imported (``job_id`` naming a Batch job) is
 dropped.

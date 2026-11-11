@@ -28,7 +28,7 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   (or ``--job <id>`` in their place, a new attempt of an existing job),
   records the job and submits one Batch job running ``job run --job <id>``
   in the image (``rapidpipe.launch.submit``) asking for the run's
-  ``[batch.memory_mib]`` memory for the stage, recording the Batch job id
+  ``[batch.memory_mib]`` memory and ``[batch.vcpus]`` vCPUs for the stage, recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
 - ``job wait --job N [N ...] [--timeout S] [--interval S]`` blocks until
   every named job is ``published`` or ``failed``, reconciling their runs
@@ -60,6 +60,9 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
   counts; a producer error exits non-zero with the set unstamped;
+- ``outage-probe --window --until [--scenario]`` meets the database
+  maintenance bracket with one probe scenario (``rapidpipe.cli.outage_probe``,
+  temporary: two windows, then deleted).
 
 A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
@@ -94,6 +97,7 @@ import psycopg2
 from rapidpipe import __version__
 from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
+from rapidpipe.cli import outage_probe
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
 from rapidpipe.products import storage
@@ -249,6 +253,21 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="Run one pass and exit: 0, or 1 when a job of the run failed or was "
                                   "refused its binding; 64 when the first pass admits nothing.")
 
+    probe_parser = subparsers.add_parser(
+        "outage-probe", help="Meet the database maintenance bracket with one probe scenario.",
+        description="Run one scenario (0 fresh-login, 1 idle-connection, 2 in-flight) through the "
+                    "database client until --until, one JSON line per step, and write its timeline "
+                    "under RAPIDPIPE_OUTPUTS_ROOT/outage-probe/<window>/ (rapidpipe.cli.outage_probe).")
+    probe_parser.add_argument("--window", required=True, help="The window's date, YYYY-MM-DD: the product's identity.")
+    probe_parser.add_argument("--until", required=True, help="When to stop, ISO 8601 UTC, e.g. 2026-10-29T16:15:00Z.")
+    probe_parser.add_argument("--scenario", type=int, choices=(0, 1, 2),
+                              help="The scenario (default AWS_BATCH_JOB_ARRAY_INDEX).")
+    probe_parser.add_argument("--interval", type=float, default=5.0, help="Seconds between steps (default 5).")
+    probe_parser.add_argument("--hold", type=float, default=3.0,
+                              help="Seconds each in-flight transaction holds, at most 30 (default 3).")
+    probe_parser.add_argument("--stall", type=float, default=2.0,
+                              help="Seconds beyond a step's own work that count as a disturbance (default 2).")
+
     return parser
 
 
@@ -318,6 +337,7 @@ def _run_job(args: argparse.Namespace) -> int:
                 spot = launch.spot(settings)
                 batch_job = launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
                                           memory_mib=launch.memory_mib(settings, stage),
+                                          vcpus=launch.vcpus(settings, stage),
                                           environment_extra=launch.job_environment(settings),
                                           queue=args.job_queue,
                                           one_attempt=bool(spot) and args.job_queue == spot["queue"])
@@ -402,6 +422,7 @@ def _loop(args: argparse.Namespace) -> int:
                                            item["inputs"], item["expects"])
             launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
                           memory_mib=launch.memory_mib(settings, item["stage"]),
+                          vcpus=launch.vcpus(settings, item["stage"]),
                           environment_extra=launch.job_environment(settings),
                           queue=item.get("queue") or args.job_queue, one_attempt="queue" in item)
         return job_id
@@ -409,7 +430,8 @@ def _loop(args: argparse.Namespace) -> int:
     def rerun(job_id: int, stage: str) -> None:          # always the prompt queue
         with connect_loop() as conn:
             launch.submit(job_id, stage, job_definition=args.job_definition, conn=conn,
-                          memory_mib=launch.memory_mib(settings, stage), name_suffix=loop.RERUN_SUFFIX,
+                          memory_mib=launch.memory_mib(settings, stage), vcpus=launch.vcpus(settings, stage),
+                          name_suffix=loop.RERUN_SUFFIX,
                           environment_extra=launch.job_environment(settings), queue=args.job_queue)
 
     def publish() -> dict:
@@ -543,6 +565,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command in ("run", "job", "official", "publish", "loop"):
             return _foundation_command(args)
+        if args.command == "outage-probe":
+            return outage_probe.command(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary
         code = exit_code(exc)
         if isinstance(exc, CommandExit):

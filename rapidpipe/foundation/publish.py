@@ -54,8 +54,12 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import itertools
 import json
+import logging
 import math
+import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +89,21 @@ FIELD_CHILDREN = frozenset({"objects", "memberships", "xobjects", "xmemberships"
 #: Every product table whose rows live in child tables.
 CHILDREN = DATE_SCA_CHILDREN | FIELD_CHILDREN
 
+#: The longest and the first wait, seconds, before a publisher that found a field's lock held
+#: tries again (full jitter, doubling): it waits with no pool connection, so the cap bounds
+#: only how late it sees the lock free.
+LOCK_RETRY_CAP_S = 10.0
+LOCK_RETRY_INITIAL_S = 0.5
+
+
+def lock_wait(tries: int) -> float:
+    """Seconds to wait before try ``tries + 1`` of a field's lock: full jitter under a doubling
+    capped at :data:`LOCK_RETRY_CAP_S`. The doubling stops at the cap, so a publisher that has
+    tried a thousand times still waits (run 229: ``0.5 * 2 ** 1024`` overflowed a float and
+    failed 945 finished differences after about 85 minutes of tries)."""
+    doublings = min(tries, math.ceil(math.log2(LOCK_RETRY_CAP_S / LOCK_RETRY_INITIAL_S)))
+    return random.uniform(0, min(LOCK_RETRY_CAP_S, LOCK_RETRY_INITIAL_S * 2 ** doublings))
+
 
 class PublishError(Exception):
     """An attempt whose manifest or declared outputs could not be verified; nothing was published."""
@@ -96,14 +115,23 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     In order: if the job is already published, stop (a retry never
     touches a file); verify every declared output and make the child
     tables its rows need, and commit that; lock the job row and stop if
-    it was published meanwhile; load each output into its table, or its
-    children by ``COPY``, with ``job`` set; record the attempt, manifest
-    and state; then,
-    inside a savepoint, bind the job's ``expects`` keys if its run is live
-    for its survey and dataset, recording a refusal on the job instead
-    when the binding is refused. ``ANALYZE`` every table it wrote to after
-    commit: the loaded tables (of a parent of children, the children it
-    loaded, never the parent), and ``official`` when it bound.
+    it was published meanwhile; take the locks of the fields its catalogs
+    name, all or none, and when any is held roll back and try again after
+    a jittered wait (never waiting on a lock while holding a connection);
+    reconcile its catalogs; load each output into its table, or its
+    children by ``COPY``, with ``job`` set; record the attempt, manifest,
+    state and ``ended`` (the commit's moment, which the caller moves to
+    its own end); then, inside a savepoint, bind the job's ``expects``
+    keys if its run is live for its survey and dataset, recording a
+    refusal on the job instead when the binding is refused.
+
+    It runs no ``ANALYZE``: autovacuum keeps the tables' statistics. Each
+    ``ANALYZE`` takes its table's self-conflicting lock until its
+    transaction ends, so a post-commit ``ANALYZE`` serialised every
+    publisher behind the first table they shared (run 215: 794 sessions
+    queued, 376 published differences held on their hosts to the attempt
+    timeout); the stages' reads of a child plan the same with or without
+    its statistics (publish-analyze's plan check).
 
     Returns ``{"job", "attempt", "published", "group", "refusal", "live"}``:
     ``published`` is whether this call published, ``group`` the automatic
@@ -129,15 +157,26 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     except BaseException:
         conn.rollback()
         raise
+    locked = sorted({f for key, _, _ in RECONCILED if key in (manifest or {})
+                     for f in object_catalog.fields(manifest[key])})
     try:
+        for tries in itertools.count():
+            with conn.cursor() as cur:
+                cur.execute("SELECT state, run, published_attempt, refusal FROM jobs"
+                            " WHERE id = %s FOR UPDATE", (job_id,))
+                state, run, published_attempt, refusal = cur.fetchone()
+                if state == "published":
+                    conn.commit()
+                    return {"job": job_id, "attempt": published_attempt, "published": False,
+                            "group": None, "refusal": refusal, "live": None}
+                if object_catalog.try_lock(cur, run, locked):
+                    break
+            conn.rollback()
+            time.sleep(lock_wait(tries))
+        if tries:
+            logging.getLogger(__name__).info("job %d: the locks of its %d fields taken at try %d",
+                                             job_id, len(locked), tries + 1)
         with conn.cursor() as cur:
-            cur.execute("SELECT state, run, published_attempt, refusal FROM jobs"
-                        " WHERE id = %s FOR UPDATE", (job_id,))
-            state, run, published_attempt, refusal = cur.fetchone()
-            if state == "published":
-                conn.commit()
-                return {"job": job_id, "attempt": published_attempt, "published": False,
-                        "group": None, "refusal": refusal, "live": None}
             reads = manifest.get("reads", [])
             if "catalog" in manifest or "xcatalog" in manifest:
                 _reconcile(cur, job_id, run, manifest, reads, rows)
@@ -158,8 +197,10 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 execute_values(cur, "INSERT INTO job_inputs (job, kind, product, key, source_job)"
                                " VALUES %s", [(job_id, "input", r["product"], Json(r["key"]),
                                                r["source_job"]) for r in reads])
+            # ended with the state, so a host lost before the caller's own write (a Spot reclaim)
+            # still leaves the published row an end; the caller's later write moves it to its own.
             cur.execute("UPDATE jobs SET state = 'published', published_attempt = %s,"
-                        " manifest = %s WHERE id = %s",
+                        " manifest = %s, ended = clock_timestamp() WHERE id = %s",
                         (attempt, Json({"prefix": prefix, **manifest}), job_id))
             loaded = {table: len(r) for table, r in rows.items()}
             group, refusal, live = _bind(cur, job_id, run, loaded,
@@ -168,17 +209,6 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     except BaseException:
         conn.rollback()
         raise
-    with conn.cursor() as cur:
-        for table in sorted(set(tables) | ({"official"} if group is not None else set())):
-            if table in CHILDREN:
-                # The children loaded, not the parent: a parent's ANALYZE samples every
-                # child, which grows with their number, and the pipeline reads a set's rows
-                # from its child (rapidpipe.foundation.children), whose own statistics plan it.
-                for child in sorted(children.get(table, {}).values()):
-                    cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(child)))
-            else:
-                cur.execute(sql.SQL("ANALYZE {}").format(sql.Identifier(table)))
-    conn.commit()
     return {"job": job_id, "attempt": attempt, "published": True, "group": group,
             "refusal": refusal, "live": live}
 
@@ -314,15 +344,13 @@ RECONCILED = (("catalog", "objects", "reconcile"), ("xcatalog", "xobjects", "xre
 
 def _reconcile(cur, job_id: int, run: int, manifest: dict, reads: list[dict],
                rows: dict[str, list[dict]]) -> None:
-    """Attach the job's founded objects and xobjects to those founded since its read, under the fields' locks.
+    """Attach the job's founded objects and xobjects to those founded since its read.
 
-    The locks of every field either catalog names are taken at once, in one
-    ascending order; each catalog's outcome is recorded on the manifest
-    (``reconcile``, ``xreconcile``).
+    Called holding the locks of every field either catalog names
+    (:func:`publish` takes them all at once); each catalog's outcome is
+    recorded on the manifest (``reconcile``, ``xreconcile``).
     """
     present = [(key, table, out) for key, table, out in RECONCILED if key in manifest]
-    object_catalog.lock(cur, run, sorted({f for key, _, _ in present
-                                          for f in object_catalog.fields(manifest[key])}))
     for key, table, out in present:
         objects_table, memberships_table, ident, sid = object_catalog.CATALOGS[table]
         read_jobs = [r["source_job"] for r in reads if r["product"] == table]

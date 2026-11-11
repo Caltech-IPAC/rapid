@@ -87,8 +87,8 @@ CRVAL = (269.4521, -28.7710)
 EXPTIME = 140.0
 ZPTMAG = 17.0
 STARS = ((20.0, 22.0, 4000.0), (40.0, 18.0, 2500.0), (30.0, 44.0, 6000.0), (50.0, 50.0, 3000.0))
-TRANSIENT = (12.0, 40.0, 3500.0)   # in the science image only
-VANISHED = (46.0, 30.0, 3500.0)    # write_epoch(vanished=True): in the reference only, a negative
+TRANSIENT = (12.0, 40.0, 7000.0)   # in the science image only; PSF-fit S/N well above a 5.0 S/N cut
+VANISHED = (46.0, 30.0, 7000.0)    # write_epoch(vanished=True): in the reference only, a negative
 
 
 def _gaussian(n: int, x0: float, y0: float, sigma: float = 1.2) -> np.ndarray:
@@ -271,8 +271,6 @@ class FakeToolRunner:
                 names.append("bkgest")
             elif len(args) > 1 and args[1].endswith("py_zogy.py"):
                 names.append("zogy")
-            elif args[1:3] == ["-m", "rapidpipe.science.difference.realbogus"]:
-                names.append("rubrat")
             else:
                 names.append(args[0])
         return names + ["sfft"] * len(self.shell_calls)
@@ -289,17 +287,9 @@ class FakeToolRunner:
             self._bkgest(args, cwd)
         elif len(args) > 1 and args[1].endswith("py_zogy.py"):
             self._zogy(args, cwd)
-        elif args[1:3] == ["-m", "rapidpipe.science.difference.realbogus"]:
-            self._realbogus(args, cwd)
         else:
             raise AssertionError(f"unexpected tool call {args!r}")
         return 0
-
-    def _realbogus(self, args, cwd: Path) -> None:
-        """The sidecar's own entry, in process, with :class:`FakeRbClassifier` for the model."""
-        from rapidpipe.science.difference import realbogus
-
-        realbogus.main(args[3:], load=lambda *files: FakeRbClassifier())
 
     def run_shell(self, command: str, *, cwd: Path, check: bool = True) -> int:
         self.shell_calls.append(command)
@@ -454,17 +444,26 @@ def _write_psfcat_parquet(path: Path, peaks) -> None:
 
 class FakeRbClassifier:
     """`dev`'s ``RealBogusClassifier.score_arrays`` contract without TensorFlow: every source
-    scored ``1 - 1 / (1 + |flux_fit|)``, labelled at :attr:`threshold`; the calls recorded."""
+    scored ``1 - 1 / (1 + |flux_fit|)``, labelled at :attr:`threshold`; the calls recorded,
+    each one session run in ``model.counts`` as ``OnnxSession`` counts them."""
 
     threshold = 0.5
 
     def __init__(self):
+        from types import SimpleNamespace
+
         self.calls = []
+        self.model = SimpleNamespace(counts={"runs": 0, "rows": 0, "seconds": 0.0})
+        self.settings = {"vcpus": 1, "vcpus_from_ecs": 0.0, "intra_op_threads": 1,
+                         "inter_op_threads": 1, "graph_optimization_level": 99, "sequential": 1.0,
+                         "batch_size": 256}
 
     def score_arrays(self, science, reference, difference, detections, *, filter_name):
         import pandas as pd
 
         self.calls.append({"filter": filter_name, "rows": len(detections)})
+        self.model.counts["runs"] += 1
+        self.model.counts["rows"] += len(detections)
         score = 1.0 - 1.0 / (1.0 + np.abs(detections["flux_fit"].to_numpy()))
         return pd.DataFrame({"rb_score": score, "rb_valid": np.ones(len(score), bool),
                              "rb_label": (score >= self.threshold).astype(int),
@@ -479,9 +478,15 @@ def fake_rb_model(rubrat):
                  {key: Path(rubrat[key]) for key in MODEL_FILES})
 
 
+def fake_rb_classifier(model, rubrat):
+    """No model loaded: a :class:`FakeRbClassifier` (``Toolkit.rb_classifier``)."""
+    return FakeRbClassifier()
+
+
 def fake_toolkit():
     """Every external tool faked, for a test to put in place of ``difference.toolkit``."""
     from rapidpipe.stages.difference import Toolkit
 
     return Toolkit(runner=FakeToolRunner(), sip_to_pv=fake_sip_to_pv, psf_catalog=FakePsfCatalog(),
-                   reference_psf=FakeReferencePsf(), rb_model=fake_rb_model)
+                   reference_psf=FakeReferencePsf(), rb_model=fake_rb_model,
+                   rb_classifier=fake_rb_classifier)

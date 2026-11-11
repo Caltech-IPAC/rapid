@@ -816,6 +816,91 @@ BEGIN
 END
 $$;
 
+-- field_rows of the run `run`'s jobs only: the run's filter inside each
+-- child's query, so a field's rows of other runs are never returned through
+-- the function (each RETURN QUERY holds its rows until the caller reads them,
+-- in temp files past work_mem; throughput-record, run 228).
+CREATE FUNCTION field_run_rows(parent anyelement, fields integer[], run bigint)
+RETURNS SETOF anyelement
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    name text := (SELECT t.typname FROM pg_type t WHERE t.oid = pg_typeof(parent));
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT field_child_name(name, f) FROM unnest(fields) f
+                 WHERE f IS NOT NULL ORDER BY 1 LOOP
+        CONTINUE WHEN to_regclass('public.' || quote_ident(child)) IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I'
+                                    ' WHERE job IN (SELECT id FROM public.jobs WHERE run = $1)', child)
+            USING run;
+    END LOOP;
+END
+$$;
+
+-- The packet stage's three field reads, each query's filter inside each
+-- child's query, of every run (packet-field-reads, run 229): the objects of
+-- the (job, aid) pairs; their memberships of the job's own set `own` or an
+-- open sources binding; forced rows on the images `pids` of an open packets
+-- binding. Under xobjects and xmemberships the pairs' column is xaid.
+CREATE FUNCTION packet_origin_rows(parent anyelement, fields integer[], jobs bigint[],
+                                   aids bigint[])
+RETURNS SETOF anyelement
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    name text := (SELECT t.typname FROM pg_type t WHERE t.oid = pg_typeof(parent));
+    aid text := CASE WHEN name = 'xobjects' THEN 'xaid' ELSE 'aid' END;
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT field_child_name(name, f) FROM unnest(fields) f
+                 WHERE f IS NOT NULL ORDER BY 1 LOOP
+        CONTINUE WHEN to_regclass('public.' || quote_ident(child)) IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I'
+                                    ' WHERE (job, %I) IN (SELECT * FROM unnest($1, $2))', child, aid)
+            USING jobs, aids;
+    END LOOP;
+END
+$$;
+
+CREATE FUNCTION packet_membership_rows(parent anyelement, fields integer[], jobs bigint[],
+                                       aids bigint[], own bigint)
+RETURNS SETOF anyelement
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    name text := (SELECT t.typname FROM pg_type t WHERE t.oid = pg_typeof(parent));
+    aid text := CASE WHEN name = 'xmemberships' THEN 'xaid' ELSE 'aid' END;
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT field_child_name(name, f) FROM unnest(fields) f
+                 WHERE f IS NOT NULL ORDER BY 1 LOOP
+        CONTINUE WHEN to_regclass('public.' || quote_ident(child)) IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I m'
+                                    ' WHERE (m.object_job, m.%I) IN (SELECT * FROM unnest($1, $2))'
+                                    ' AND (m.job = $3 OR EXISTS (SELECT 1 FROM public.official o'
+                                    ' WHERE o.closed_at IS NULL AND o.product = ''sources'''
+                                    ' AND o.job = m.job))', child, aid)
+            USING jobs, aids, own;
+    END LOOP;
+END
+$$;
+
+CREATE FUNCTION packet_reuse_rows(fields integer[], pids integer[])
+RETURNS SETOF forced
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    child text;
+BEGIN
+    FOR child IN SELECT DISTINCT field_child_name('forced', f) FROM unnest(fields) f
+                 WHERE f IS NOT NULL ORDER BY 1 LOOP
+        CONTINUE WHEN to_regclass('public.' || quote_ident(child)) IS NULL;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I f WHERE f.pid = ANY($1)'
+                                    ' AND EXISTS (SELECT 1 FROM public.official o'
+                                    ' WHERE o.closed_at IS NULL AND o.product = ''packets'''
+                                    ' AND o.job = f.job)', child)
+            USING pids;
+    END LOOP;
+END
+$$;
+
 -- The fields the jobs `jobs` filed rows of `parent` under (job_fields).
 CREATE FUNCTION job_fields_of(parent text, jobs bigint[])
 RETURNS integer[]
@@ -826,6 +911,7 @@ $$;
 
 -- <parent>_in(fields): every row in those fields' children.
 -- <parent>_of(jobs): the rows those jobs wrote, from the children they wrote.
+-- <parent>_in(fields, run): the run's rows in those fields' children.
 CREATE FUNCTION objects_in(fields integer[]) RETURNS SETOF objects
 LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::objects, fields, NULL) $$;
 CREATE FUNCTION objects_of(jobs bigint[]) RETURNS SETOF objects
@@ -851,6 +937,10 @@ LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::xobjects, fields, NULL)
 CREATE FUNCTION xobjects_of(jobs bigint[]) RETURNS SETOF xobjects
 LANGUAGE sql STABLE AS $$
     SELECT * FROM field_rows(NULL::xobjects, job_fields_of('xobjects', jobs), jobs) $$;
+CREATE FUNCTION objects_in(fields integer[], run bigint) RETURNS SETOF objects
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_run_rows(NULL::objects, fields, run) $$;
+CREATE FUNCTION xobjects_in(fields integer[], run bigint) RETURNS SETOF xobjects
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_run_rows(NULL::xobjects, fields, run) $$;
 CREATE FUNCTION xmemberships_in(fields integer[]) RETURNS SETOF xmemberships
 LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::xmemberships, fields, NULL) $$;
 CREATE FUNCTION xmemberships_of(jobs bigint[]) RETURNS SETOF xmemberships

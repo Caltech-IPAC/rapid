@@ -8,7 +8,7 @@
 # scripts/science-drift.sh; see its "Watched dev paths" report section
 # and AGENTS.md.
 
-modules/rubrat @ 9ed0e0fc  # the real/bogus classifier, vendored verbatim in part (rb-port)
+modules/rubrat @ c5be7814  # the real/bogus classifier, vendored verbatim except legacy/ (rb-port; training, tests and Aayush's NaN fix carried 2026-11-06; training/export_onnx.py added and training/train_rb.py calls it, rapid-onnx 2026-11-07)
 alerts/schema @ 883e3876  # new alert schema versions land here; 00.07 ported (port-schema-07)
 alerts/ned_catalog.py @ c740f3e3  # NED catalog access, not ported
 alerts/ned_reader.py @ c740f3e3  # NED from S3, not ported
