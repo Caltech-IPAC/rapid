@@ -49,7 +49,10 @@ limmag_clip_sigma = 3.0
 limmag_maxiters = 10
 # DQ bits whose pixels the conversion sets NaN in SCI, ERR and VAR_*
 # (commissioning #238's DQMASKBITS, pipeline/dqMaskSubs.py). 0 is dev's
-# behaviour: nothing masked, DQ written and never read.
+# behaviour: nothing masked, DQ written and never read. A nonzero value is
+# written in decimal with a comment giving it as a sum of the named
+# roman_datamodels pixel flags: DO_NOT_USE 1, SATURATED 2, DEAD 1024,
+# HOT 2048, NONLINEAR 65536, NO_LIN_CORR 1048576, UNRELIABLE_FLAT 33554432.
 dq_mask_bits = 0
 # New, not dev's: pixels [dx, dy] added to CRPIX1 and CRPIX2 at intake, a
 # dataset's measured WCS translation (measured minus predicted star
