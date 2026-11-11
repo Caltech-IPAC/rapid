@@ -47,6 +47,23 @@ loading transaction. The fields a job's rows went to are recorded in
 
 The prefix is a URL, ``file://`` or ``s3://``; each file is read through
 :func:`rapidpipe.foundation.prefix.get`.
+
+The publisher returns its own lock and hold timings as ``metrics``, which
+:func:`rapidpipe.foundation.local.run_job` adds to the job's ``manifest``
+``metrics`` in its write after the commit, so ``job_metrics`` carries them
+(publish-lock-metrics): ``publish_lock_fields``, the fields it locked;
+``publish_lock_tries``, the lock loop's tries, 1 when the first took
+them; ``publish_lock_wait_s``, the loop's start to the locks taken, its
+waits between tries included and the verification before it not;
+``publish_hold_s``, the locks taken to the commit's return, when they are
+released; and that hold split by the steps run under the locks, each
+``publish_hold_<step>_s``: ``between`` (reading the objects founded since
+the read), ``attach`` (the reconcile's match), ``load_<table>`` (each
+output's ``INSERT`` or ``COPY``), ``record`` (``job_fields``,
+``job_inputs`` and the job row), ``bind`` (the automatic binding) and
+``commit``, which sum to ``publish_hold_s`` but for the few statements
+between them. Seconds are wall seconds of ``time.perf_counter``. A job
+found published by the loop records none.
 """
 
 from __future__ import annotations
@@ -60,8 +77,9 @@ import logging
 import math
 import random
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import pyarrow.parquet as pq
 from psycopg2 import sql
@@ -137,7 +155,8 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
     ``published`` is whether this call published, ``group`` the automatic
     binding's change group or ``None``, ``live`` whether the job's run was
     live when it bound (``None`` when the job expects nothing, or was
-    already published).
+    already published); a call that published adds ``metrics``, its lock
+    and hold timings (the module's docstring), seconds to 3 decimals.
     """
     root = prefix.rstrip("/") + "/"
     manifest = rows = None
@@ -159,7 +178,9 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
         raise
     locked = sorted({f for key, _, _ in RECONCILED if key in (manifest or {})
                      for f in object_catalog.fields(manifest[key])})
+    hold: dict[str, float] = {}
     try:
+        started = time.perf_counter()
         for tries in itertools.count():
             with conn.cursor() as cur:
                 cur.execute("SELECT state, run, published_attempt, refusal FROM jobs"
@@ -173,21 +194,24 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                     break
             conn.rollback()
             time.sleep(lock_wait(tries))
+        taken = time.perf_counter()
         if tries:
             logging.getLogger(__name__).info("job %d: the locks of its %d fields taken at try %d",
                                              job_id, len(locked), tries + 1)
         with conn.cursor() as cur:
             reads = manifest.get("reads", [])
             if "catalog" in manifest or "xcatalog" in manifest:
-                _reconcile(cur, job_id, run, manifest, reads, rows)
+                _reconcile(cur, job_id, run, manifest, reads, rows, hold)
             tables = []
             for output in manifest["outputs"]:
                 table = output["table"]
-                if table in CHILDREN:
-                    _copy(cur, table, children.setdefault(table, {}), rows[table], job_id)
-                else:
-                    _insert(cur, table, rows[table], job_id)
+                with _held(hold, f"load_{table}"):
+                    if table in CHILDREN:
+                        _copy(cur, table, children.setdefault(table, {}), rows[table], job_id)
+                    else:
+                        _insert(cur, table, rows[table], job_id)
                 tables.append(table)
+            recording = time.perf_counter()
             filed = sorted({(table, int(r["field"])) for table in FIELD_CHILDREN & set(tables)
                             for r in rows[table]})
             if filed:
@@ -203,14 +227,32 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                         " manifest = %s, ended = clock_timestamp() WHERE id = %s",
                         (attempt, Json({"prefix": prefix, **manifest}), job_id))
             loaded = {table: len(r) for table, r in rows.items()}
-            group, refusal, live = _bind(cur, job_id, run, loaded,
-                                         set(manifest.get("empty_ok", [])))
-        conn.commit()
+            hold["record"] = time.perf_counter() - recording
+            with _held(hold, "bind"):
+                group, refusal, live = _bind(cur, job_id, run, loaded,
+                                             set(manifest.get("empty_ok", [])))
+        with _held(hold, "commit"):
+            conn.commit()
     except BaseException:
         conn.rollback()
         raise
+    released = time.perf_counter()
+    metrics = {"publish_lock_fields": len(locked), "publish_lock_tries": tries + 1,
+               "publish_lock_wait_s": taken - started, "publish_hold_s": released - taken,
+               **{f"publish_hold_{name}_s": seconds for name, seconds in hold.items()}}
     return {"job": job_id, "attempt": attempt, "published": True, "group": group,
-            "refusal": refusal, "live": live}
+            "refusal": refusal, "live": live,
+            "metrics": {k: round(v, 3) if k.endswith("_s") else v for k, v in metrics.items()}}
+
+
+@contextmanager
+def _held(hold: dict[str, float], name: str) -> Iterator[None]:
+    """Add the block's wall seconds to ``hold[name]``."""
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        hold[name] = hold.get(name, 0.0) + time.perf_counter() - start
 
 
 def _verified_manifest(root: str) -> dict:
@@ -343,21 +385,24 @@ RECONCILED = (("catalog", "objects", "reconcile"), ("xcatalog", "xobjects", "xre
 
 
 def _reconcile(cur, job_id: int, run: int, manifest: dict, reads: list[dict],
-               rows: dict[str, list[dict]]) -> None:
+               rows: dict[str, list[dict]], hold: dict[str, float]) -> None:
     """Attach the job's founded objects and xobjects to those founded since its read.
 
     Called holding the locks of every field either catalog names
     (:func:`publish` takes them all at once); each catalog's outcome is
-    recorded on the manifest (``reconcile``, ``xreconcile``).
+    recorded on the manifest (``reconcile``, ``xreconcile``), and the
+    seconds of its read and its match added to ``hold`` (``between``, ``attach``).
     """
     present = [(key, table, out) for key, table, out in RECONCILED if key in manifest]
     for key, table, out in present:
         objects_table, memberships_table, ident, sid = object_catalog.CATALOGS[table]
         read_jobs = [r["source_job"] for r in reads if r["product"] == table]
-        others = object_catalog.between(cur, job_id, run, manifest[key], read_jobs, table)
-        rows[objects_table], rows[memberships_table], manifest[out] = object_catalog.attach(
-            job_id, rows.get(objects_table, []), rows.get(memberships_table, []), others,
-            float(manifest[key]["radius"]), ident, sid)
+        with _held(hold, "between"):
+            others = object_catalog.between(cur, job_id, run, manifest[key], read_jobs, table)
+        with _held(hold, "attach"):
+            rows[objects_table], rows[memberships_table], manifest[out] = object_catalog.attach(
+                job_id, rows.get(objects_table, []), rows.get(memberships_table, []), others,
+                float(manifest[key]["radius"]), ident, sid)
 
 
 def _bind(cur, job_id: int, run: int, loaded: dict[str, int],
