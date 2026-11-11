@@ -36,6 +36,23 @@ least ``[selection] min_frames``; frames past ``max_frames`` are not
 coadded and are named in the manifest. Every frame's HDU 1 ``FILTER``,
 normalised to the RAPID spelling, must be the scope's filter.
 
+Under ``[selection] selection_type = "coverage"`` (commissioning
+d586136b, ebd95254, debbc6e4, 702d0cad; ``rapidpipe.products.coverage``)
+the loop has chosen the frames by their coverage of the reference, and
+``min_frames`` is not used: the stage estimates the named frames' coverage
+from their ``l2files`` corners (step ``coverage_estimate``), coadds those
+that meet the reference (a frame that misses it is skipped), and measures
+the fraction of the coverage map's pixels at ``min_coverage_depth`` or
+deeper (step ``verify``). An estimate below ``min_coverage_fraction`` less
+``coverage_estimate_tolerance``, or a measured fraction below
+``min_coverage_fraction``, declines the reference: the stage ends
+normally, writes no table and says why in the manifest's ``declined``, and
+the publisher marks the job ``declined`` (nothing loaded, nothing bound).
+A reference that passes carries ``COVFRAC``, ``COVDEPTH`` and ``COVTARG``
+in its header and ``covfrac`` and ``covdepth`` on its row; the manifest's
+``reference.coverage`` names the selected and skipped ``rid``\\ s, the
+estimate and the measured fraction, declined or not.
+
 Outputs under ``job.path``: ``ref/`` holds the mosaic, its coverage and
 uncertainty maps (awaicgen's names, beside one another, as the import
 copies them) and the SExtractor catalog. Declared tables: ``refimages``
@@ -86,6 +103,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from astropy.io import fits
 
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
@@ -94,6 +112,7 @@ from rapidpipe.foundation.steps import step
 from rapidpipe.science.difference.sextractor import parse_ascii_text_sextractor_catalog
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.reference import awaicgen, catalog, header, infobits, measure, prep
+from rapidpipe.products import coverage
 from rapidpipe.science.spatial import field_center
 
 logger = logging.getLogger(__name__)
@@ -104,6 +123,7 @@ REFIMAGES_SCHEMA = pa.schema([
     ("rfid", pa.int32()), ("dataset", pa.string()), ("field", pa.int32()), ("fid", pa.int16()),
     ("filename", pa.string()), ("checksum", pa.string()), ("status", pa.int16()),
     ("infobits", pa.int32()), ("nframes", pa.int16()), ("cov5percent", pa.float32()),
+    ("covfrac", pa.float32()), ("covdepth", pa.float32()),
 ])
 REFIMIMAGES_SCHEMA = pa.schema([("rfid", pa.int32()), ("rid", pa.int32())])
 REFIMCATALOGS_SCHEMA = pa.schema([
@@ -169,6 +189,12 @@ class _Checked:
     sca_readout_noise: float
     seed: int | None
     infobits: dict[str, Any]
+    selection_type: str
+    min_coverage_depth: float
+    min_coverage_fraction: float
+    max_coverage_depth: float
+    max_coverage_fraction: float
+    coverage_estimate_tolerance: float
 
 
 def check_settings(settings: dict[str, Any]) -> _Checked:
@@ -186,6 +212,19 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
     if max_frames < min_frames:
         raise ValueError(f"[reference.selection] max_frames ({max_frames}) is less than "
                          f"min_frames ({min_frames})")
+    selection_type = settings["selection"]["selection_type"]
+    if selection_type not in coverage.SELECTION_TYPES:
+        raise ValueError(f"[reference.selection] selection_type must be one of {coverage.SELECTION_TYPES}, "
+                         f"got {selection_type!r}")
+    depths = {k: _number(settings, "selection", k) for k in ("min_coverage_depth", "max_coverage_depth")}
+    fractions = {k: _number(settings, "selection", k) for k in ("min_coverage_fraction", "max_coverage_fraction")}
+    tolerance = _number(settings, "selection", "coverage_estimate_tolerance")
+    if any(v < 1 for v in depths.values()) or depths["max_coverage_depth"] < depths["min_coverage_depth"]:
+        raise ValueError(f"[reference.selection] coverage depths must be at least 1 with max_coverage_depth "
+                         f"no less than min_coverage_depth, got {depths}")
+    if any(not 0.0 < v <= 1.0 for v in fractions.values()) or tolerance < 0.0:
+        raise ValueError(f"[reference.selection] coverage fractions must be in (0, 1] and "
+                         f"coverage_estimate_tolerance not negative, got {fractions}, {tolerance}")
     ra_center = _optional_degrees(settings, "ra_center")
     dec_center = _optional_degrees(settings, "dec_center")
     if (ra_center is None) != (dec_center is None):
@@ -225,7 +264,8 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
         sca_gain=_number(settings, "instrument", "sca_gain"),
         sca_readout_noise=_number(settings, "instrument", "sca_readout_noise"),
         seed=seed if seed >= 0 else None,
-        infobits=infobits.check_params(settings["infobits"]))
+        infobits=infobits.check_params(settings["infobits"]),
+        selection_type=selection_type, **depths, **fractions, coverage_estimate_tolerance=tolerance)
 
 
 # ----------------------------------------------------------------------
@@ -281,9 +321,11 @@ def _read(job: JobContext) -> tuple[str, list[tuple[int, str]], int]:
 def read_frames(rows: list[tuple[int, str]], unit_filter: str,
                 checked: _Checked) -> tuple[list[Frame], list[int]]:
     """The frames to coadd in ``mjdobs`` order, and the ``rid``\\ s past ``max_frames``."""
-    if len(rows) < checked.min_frames:
+    least = checked.min_frames if checked.selection_type == "nframes" else 1
+    if len(rows) < least:
         raise ValueError(f"{len(rows)} l2files inputs; [reference.selection] min_frames is "
-                         f"{checked.min_frames}")
+                         f"{checked.min_frames}" if checked.selection_type == "nframes"
+                         else "no l2files inputs")
     frames: list[Frame] = []
     for rid, filename in rows:
         path = get(filename)
@@ -304,6 +346,66 @@ def read_frames(rows: list[tuple[int, str]], unit_filter: str,
     if len({f.name for f in frames}) != len(frames):
         raise ValueError("two l2files inputs share a file name")
     return frames[:checked.max_frames], [f.rid for f in frames[checked.max_frames:]]
+
+
+def _corners(job: JobContext, rids: list[int]) -> dict[int, tuple[list[float], list[float]]]:
+    """Each named L2 row's four corners, ``rid`` to ``([ra1..ra4], [dec1..dec4])``."""
+    with job.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT rid, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4 FROM l2files WHERE rid = ANY(%s)",
+                    (list(rids),))
+        found = {int(r[0]): ([float(r[i]) for i in (1, 3, 5, 7)], [float(r[i]) for i in (2, 4, 6, 8)])
+                 for r in cur.fetchall()}
+        conn.commit()
+    return found
+
+
+def estimate_coverage(job: JobContext, frames: list[Frame], checked: _Checked,
+                      ra_center: float, dec_center: float) -> tuple[list[Frame], dict[str, Any]]:
+    """The named frames' estimated coverage of the reference, and those of them that meet it.
+
+    Parameters
+    ----------
+    job : JobContext
+        The job, for its ``l2files`` rows' corners.
+    frames : list of Frame
+        The frames to coadd.
+    checked : _Checked
+        The validated settings.
+    ra_center, dec_center : float
+        The reference's centre [deg].
+
+    Returns
+    -------
+    covering : list of Frame
+        The frames whose footprint meets the reference, in their order.
+    record : dict
+        ``selected`` and ``skipped`` ``rid``\\ s, ``estimate`` (the fraction at
+        ``min_coverage_depth``), ``decision`` (build, verify or reject), ``min_coverage_depth``,
+        ``min_coverage_fraction`` and ``tolerance``.
+    """
+    corners = _corners(job, [f.rid for f in frames])
+    missing = [f.rid for f in frames if f.rid not in corners]
+    if missing:
+        raise _rejected(f"job {job.job}: no l2files corners for rids {missing}")
+    w = coverage.make_refimage_wcs(ra_center, dec_center, checked.naxis1, checked.naxis2, checked.cdelt1,
+                                   abs(checked.cdelt1), checked.rotation)
+    covering, depth = coverage.footprint_depth(w, checked.naxis1, checked.naxis2, [corners[f.rid] for f in frames])
+    estimate = coverage.coverage_fraction(depth, checked.min_coverage_depth)
+    kept = [frames[i] for i in covering]
+    return kept, {"selected": [f.rid for f in kept],
+                  "skipped": [f.rid for f in frames if f not in kept],
+                  "estimate": estimate,
+                  "decision": coverage.coverage_decision(estimate, checked.min_coverage_fraction,
+                                                         checked.coverage_estimate_tolerance),
+                  "min_coverage_depth": checked.min_coverage_depth,
+                  "min_coverage_fraction": checked.min_coverage_fraction,
+                  "tolerance": checked.coverage_estimate_tolerance}
+
+
+def _decline(job: JobContext, reason: str, record: dict[str, Any], **fields: Any) -> None:
+    """End the job with nothing to publish: the manifest's ``declined`` is the reason, its outputs none."""
+    logger.info("reference: declined, %s", reason)
+    job.write_manifest([], declined=reason, reference={"coverage": record, **fields})
 
 
 # ----------------------------------------------------------------------
@@ -343,6 +445,17 @@ def run(job: JobContext) -> None:
         ra_center, dec_center = field_center(rtid)
     else:
         ra_center, dec_center = checked.ra_center, checked.dec_center
+    covered = None
+    if checked.selection_type == "coverage":
+        with step("coverage_estimate"):
+            coadded, covered = estimate_coverage(job, coadded, checked, ra_center, dec_center)
+        logger.info("reference: estimated coverage %.4f at depth %s from %d frames (%d skipped), %s",
+                    covered["estimate"], checked.min_coverage_depth, len(coadded), len(covered["skipped"]),
+                    covered["decision"])
+        if covered["decision"] == "reject":
+            _decline(job, f"estimated coverage {covered['estimate']:.4f} < {checked.min_coverage_fraction}",
+                     covered, not_coadded=not_coadded)
+            return
     awaicgen_dict = awaicgen.awaicgen_dict_for_mosaic(
         settings["awaicgen"], naxis1=checked.naxis1, naxis2=checked.naxis2,
         cdelt1=checked.cdelt1, rotation=checked.rotation,
@@ -388,6 +501,17 @@ def run(job: JobContext) -> None:
     def o(name: str) -> Path:
         return out_dir / name
 
+    if covered is not None:
+        with step("verify"):
+            with fits.open(o(names["coverage"])) as hdul:
+                covered["measured"] = coverage.coverage_fraction(hdul[0].data, checked.min_coverage_depth)
+        logger.info("reference: measured coverage %.4f at depth %s (minimum %s)", covered["measured"],
+                    checked.min_coverage_depth, checked.min_coverage_fraction)
+        if covered["measured"] < checked.min_coverage_fraction:
+            _decline(job, f"measured coverage {covered['measured']:.4f} < {checked.min_coverage_fraction}",
+                     covered, not_coadded=not_coadded)
+            return
+
     with step("measure"):
         measurements = measure.measure_mosaic(
             o(names["image"]), o(names["coverage"]), o(names["uncertainty"]),
@@ -430,7 +554,9 @@ def run(job: JobContext) -> None:
         nframes=len(prepared), refimage_input_filenames=tuple(f.name for f in coadded),
         jdstart=jdstart, jdend=jdend, zprefimg=zprefimg, total_refimage_exptime=total_exptime,
         run=job.run, job=job.job, attempt=job.attempt,
-        infobits=grade.infobits, status=grade.status, infobit_cards=tuple(grade.cards))
+        infobits=grade.infobits, status=grade.status, infobit_cards=tuple(grade.cards),
+        **({"coverage_fraction": covered["measured"], "coverage_depth": checked.min_coverage_depth,
+            "coverage_target": checked.min_coverage_fraction} if covered is not None else {}))
     header.add_keywords_to_reference_image_header(o(names["image"]), stamp)
     header.add_keywords_to_reference_image_header(o(names["uncertainty"]), stamp)
 
@@ -443,7 +569,10 @@ def run(job: JobContext) -> None:
             "fid": [int(job.scope["fid"])], "filename": [url(names["image"])],
             "checksum": [_md5_of_file(o(names["image"]))], "status": [grade.status],
             "infobits": [grade.infobits], "nframes": [len(prepared)],
-            "cov5percent": [measurements.cov5percent]}, schema=REFIMAGES_SCHEMA),
+            "cov5percent": [measurements.cov5percent],
+            "covfrac": [covered["measured"] if covered is not None else None],
+            "covdepth": [checked.min_coverage_depth if covered is not None else None]},
+            schema=REFIMAGES_SCHEMA),
         "refimimages": pa.table({"rfid": [rfid] * len(coadded), "rid": [f.rid for f in coadded]},
                                 schema=REFIMIMAGES_SCHEMA),
         "refimcatalogs": pa.table({
@@ -463,5 +592,5 @@ def run(job: JobContext) -> None:
                    "fwhmmaxpix": fwhm.fwhmmaxpix, "nsexcatsources": fwhm.nsexcatsources,
                    "fwhmpctlpix": fwhm.fwhmpctlpix, "infobits": grade.infobits,
                    "status": grade.status, "quality": grade.metrics,
-                   "not_coadded": not_coadded},
+                   "not_coadded": not_coadded, **({"coverage": covered} if covered is not None else {})},
         metrics=metrics)

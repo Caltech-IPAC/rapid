@@ -14,7 +14,8 @@
 #
 #   Check run <id>: CLEAN|FAIL validate <p>/<n> <s> reader <clean>/<sets> <s> consumer <seen>/<expected> <s>
 #
-# and the exit status is non-zero when any check fails. The database and
+# and the exit status is non-zero when any check fails (a declined job, a
+# reference short of its coverage, fails none: validate_run.py's counts). The database and
 # the topic are named as for every rapidpipe command; PY names the Python
 # (default python3).
 

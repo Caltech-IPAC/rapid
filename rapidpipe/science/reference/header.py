@@ -15,6 +15,8 @@ re-derived): no PV or SIP is added.
 Departures (reference page): ``FID`` is not stamped (a database id; the
 ``refimages`` row carries ``fid``); the foundation's identifiers are added
 -- ``RPRUN``, ``RPJOB``, ``RPATTMPT`` and ``RPSTAGE`` (``reference``).
+A reference selected by coverage also carries commissioning's ``COVFRAC``,
+``COVDEPTH`` and ``COVTARG`` (d586136b) after the ``BITnn`` cards.
 """
 
 from __future__ import annotations
@@ -50,6 +52,9 @@ class StampValues:
     infobits: int
     status: int
     infobit_cards: tuple[tuple[str, int, str], ...]
+    coverage_fraction: float | None = None
+    coverage_depth: float | None = None
+    coverage_target: float | None = None
 
 
 def infile_keyword(i: int) -> str:
@@ -78,6 +83,10 @@ def stamp_cards(values: StampValues) -> list[tuple[str, Any, str | None]]:
         ("STATUS", int(values.status), "Overall quality: 1 = usable, 0 = bad"),
     ]
     cards += [(keyword, bit, comment) for keyword, bit, comment in values.infobit_cards]
+    if values.coverage_fraction is not None:      # commissioning d586136b, a reference selected by coverage
+        cards += [("COVFRAC", values.coverage_fraction, "Fraction of pixels with coverage >= COVDEPTH"),
+                  ("COVDEPTH", values.coverage_depth, "Min. coverage depth for COVFRAC [frames]"),
+                  ("COVTARG", values.coverage_target, "Required COVFRAC for input selection")]
     for i, fn in enumerate(values.refimage_input_filenames, start=1):
         cards.append((infile_keyword(i), fn, None))
     cards += [

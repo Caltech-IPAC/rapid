@@ -48,7 +48,7 @@ from rapidpipe.foundation import attempts as submissions
 from rapidpipe.foundation import steps
 from rapidpipe.foundation.official import NotFound
 from rapidpipe.foundation.prefix import attempts, local_path, put
-from rapidpipe.foundation.publish import publish
+from rapidpipe.foundation.publish import FINAL, publish
 
 __all__ = ["JobContext", "failure_reason", "local_path", "named_exit_code", "run_job"]
 
@@ -159,8 +159,9 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     (:class:`CgroupCpu`: the container's CPU seconds and the wall seconds of
     the same interval, from the stage's start to the manifest's upload) and
     ``host_vcpus`` (the CPUs this process may run on: Batch sets no cpuset,
-    so the host's, never the job's reservation). A job already published returns at once with
-    ``published`` false and no file touched. The job row records
+    so the host's, never the job's reservation). A job already published, or declined (its stage
+    ended with nothing to publish, :mod:`rapidpipe.foundation.publish`), returns at once with
+    ``published`` false and no file touched; a declined one's result carries ``declined``. The job row records
     ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
     which the job definition sets; none for a checkout) and the instance
     type (:func:`instance_type`) before the stage, and its Batch attempt entry
@@ -187,10 +188,11 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             job = cur.fetchone()
             if job is None:
                 raise NotFound(f"job {job_id} does not exist")
-            if job["state"] == "published":
+            if job["state"] in FINAL:
                 conn.commit()
                 return {"job": job_id, "attempt": job["published_attempt"], "published": False,
-                        "group": None, "refusal": job["refusal"], "live": None}
+                        "group": None, "refusal": job["refusal"], "live": None,
+                        **({"declined": job["refusal"]} if job["state"] == "declined" else {})}
             cur.execute("SELECT kind, product, key, source_job, binding FROM job_inputs"
                         " WHERE job = %s ORDER BY kind, product, source_job", (job_id,))
             inputs = [dict(r) for r in cur.fetchall()]
@@ -242,7 +244,8 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
         with connect() as conn:
             result = publish(conn, job_id, attempt, context.prefix)
             _record(conn, job_id, "ended = now(), exit_code = 0")
-            _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "published"})
+            _record_attempt(conn, job_id, {"ended": submissions.now(),
+                                           "outcome": "declined" if result.get("declined") else "published"})
     except BaseException as exc:
         code = exit_code(exc)
         reason = failure_reason(exc)
@@ -416,9 +419,9 @@ def _record_attempt(conn, job_id: int, fields: dict) -> None:
 
 
 def _record(conn, job_id: int, assignments: str, params: tuple = ()) -> None:
-    """Update the job row's execution columns; a published job keeps its state."""
+    """Update the job row's execution columns; a published or declined job keeps its state."""
     conn.rollback()
-    state_guard = " AND state <> 'published'" if "state" in assignments else ""
+    state_guard = " AND state NOT IN ('published', 'declined')" if "state" in assignments else ""
     with conn.cursor() as cur:
         cur.execute(f"UPDATE jobs SET {assignments} WHERE id = %s{state_guard}", (*params, job_id))
     conn.commit()

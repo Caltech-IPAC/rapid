@@ -42,3 +42,12 @@ dq_mask_bits = 0x2110C01
 # (-0.08 to +0.16, -0.56 to -0.35) px, as WCS offset; by hand the
 # propagation puts the WCS at (-0.09 to -0.04, -0.06 to -0.04) px.
 gaia_proper_motion = true
+
+[reference.selection]
+# Commissioning's coverage selection (d586136b, ebd95254, debbc6e4), with the
+# base's coverage keys (half the pixels covered once to build, stop at four
+# deep everywhere) and a cap of 50 frames (2ebffce3). On commissioning's
+# jid6318 the field rule's 50 frames left 2.7% of pixels four deep; this
+# rule's 42 left 58.4% (Azalee, 2026-11-10).
+selection_type = "coverage"
+max_frames = 50

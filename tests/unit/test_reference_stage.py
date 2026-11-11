@@ -9,7 +9,15 @@ not coadded and are named in the manifest; too few frames, a frame in
 another filter, an input outside the scope's filter, a refused
 setting and a tool that writes nothing each fail the job before a manifest
 is written, and a frame of another SCA is coadded; the row and the header carry the reference's grade; the run settings body's ``[reference]`` table is valid as it
-ships.
+ships. Under ``selection_type = "coverage"``: a reference whose estimate
+clears the minimum is coadded with ``covfrac``/``covdepth`` on its row,
+``COVFRAC``/``COVDEPTH``/``COVTARG`` in its header and the selected and
+skipped rids, estimate and measured fraction in its manifest, a named frame
+that misses the reference skipped; an estimate below the minimum less the
+tolerance declines before awaicgen, and a measured fraction below the
+minimum declines after it, each with no table and the reason in the
+manifest's ``declined``; ``"nframes"`` leaves the columns null and the
+header without them.
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 from astropy.io import fits
+from astropy.wcs import WCS
 
 import rapidpipe.stages.reference as reference
 from rapidpipe.exitcodes import CommandExit
@@ -57,8 +66,9 @@ def settings(**tables) -> dict:
     return {"reference": body}
 
 
-def fake_connect(rows: dict[int, tuple[int, str]], queries: list):
-    """A connection answering the filter, each ``l2files`` row by source job, and ``nextval``."""
+def fake_connect(rows: dict[int, tuple[int, str]], queries: list, corners: dict | None = None):
+    """A connection answering the filter, each ``l2files`` row by source job, ``nextval`` and
+    the named rows' corners by ``rid`` (``corners``)."""
     class Cursor:
         def __enter__(self):
             return self
@@ -70,6 +80,9 @@ def fake_connect(rows: dict[int, tuple[int, str]], queries: list):
             queries.append(statement)
             if "FROM filters" in statement:
                 self.row = ("W146",) if params == (FID,) else None
+            elif "rid = ANY" in statement:
+                self.found = [(rid, *(v for pair in zip(*corners[rid]) for v in pair))
+                              for rid in params[0] if rid in (corners or {})]
             elif "FROM l2files" in statement:
                 self.row = rows.get(params[0])
             else:
@@ -78,6 +91,9 @@ def fake_connect(rows: dict[int, tuple[int, str]], queries: list):
 
         def fetchone(self):
             return self.row
+
+        def fetchall(self):
+            return self.found
 
     class Connection:
         def cursor(self):
@@ -100,8 +116,16 @@ def fakes(monkeypatch, tmp_path):
     monkeypatch.setenv("RAPIDPIPE_WORK", str(tmp_path / "work"))
 
 
+def frame_corners(path: Path) -> tuple[list[float], list[float]]:
+    """A frame's four corners from its own WCS, in order around it, as its ``l2files`` row carries them."""
+    header = fits.getheader(path, 1)
+    n1, n2 = header["NAXIS1"], header["NAXIS2"]
+    sky = WCS(header).pixel_to_world([-0.5, n1 - 0.5, n1 - 0.5, -0.5], [-0.5, -0.5, n2 - 0.5, n2 - 0.5])
+    return list(sky.ra.deg), list(sky.dec.deg)
+
+
 def run_reference(tmp_path: Path, frames: list[Path], *, order=(2, 0, 1), body=None,
-                  key_override=None) -> Path:
+                  key_override=None, corners=None) -> Path:
     """Run a job naming ``frames`` (as source jobs 10, 11, ... in ``order``); return its prefix."""
     prefix = tmp_path / "prefix"
     prefix.mkdir(exist_ok=True)
@@ -114,7 +138,8 @@ def run_reference(tmp_path: Path, frames: list[Path], *, order=(2, 0, 1), body=N
         rows[source_job] = (7000 + index, frames[index].as_uri())
     job = JobContext(job=5, run=3, stage="reference", scope={"field": RTID, "fid": FID, "sca": SCA},
                      survey="S", dataset="D", settings=body or settings(), inputs=inputs,
-                     attempt=1, prefix=prefix.as_uri() + "/", connect=fake_connect(rows, []))
+                     attempt=1, prefix=prefix.as_uri() + "/",
+                     connect=fake_connect(rows, [], corners or {7000 + i: frame_corners(f) for i, f in enumerate(frames)}))
     reference.run(job)
     return prefix
 
@@ -217,3 +242,69 @@ def test_the_thin_settings_body_reference_table_is_valid():
     checked = reference.check_settings(THIN["reference"])
     assert (checked.min_frames, checked.naxis1) == (2, 9100)
     assert checked.infobits["fatalinfobits"] == [2, 5, 7, 8, 16]
+
+
+def by_coverage(**selection) -> dict:
+    return settings(selection={"selection_type": "coverage", **selection})
+
+
+def test_a_reference_selected_by_coverage_records_its_coverage_on_the_row_header_and_manifest(tmp_path, frames):
+    # The 96-pixel frames cover about 60% of the 128-pixel mosaic once.
+    prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.3))
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    covered = manifest["reference"]["coverage"]
+    assert "declined" not in manifest and covered["decision"] == "build"
+    assert covered["selected"] == [7000, 7001, 7002] and covered["skipped"] == []
+    assert 0.35 <= covered["estimate"] < 1.0 and 0.3 <= covered["measured"] < 1.0
+    (ref,) = read(prefix, "refimages")
+    assert ref["covfrac"] == pytest.approx(covered["measured"]) and ref["covdepth"] == 1.0
+    header = fits.getheader(Path(ref["filename"].removeprefix("file://")))
+    assert (header["COVFRAC"], header["COVDEPTH"], header["COVTARG"]) == (
+        pytest.approx(covered["measured"]), 1, 0.3)
+    assert "metrics" in manifest
+
+
+def test_a_named_frame_that_misses_the_reference_is_skipped(tmp_path, frames):
+    corners = {7000 + i: frame_corners(f) for i, f in enumerate(frames)}
+    corners[7001] = ([c + 1.0 for c in corners[7001][0]], corners[7001][1])
+    prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.3), corners=corners)
+    covered = json.loads((prefix / "manifest.json").read_text())["reference"]["coverage"]
+    assert (covered["selected"], covered["skipped"]) == ([7000, 7002], [7001])
+    assert sorted(r["rid"] for r in read(prefix, "refimimages")) == [7000, 7002]
+
+
+def test_an_estimate_below_the_minimum_declines_before_awaicgen(tmp_path, frames, monkeypatch):
+    kit = fakereftools.fake_toolkit()
+    monkeypatch.setattr(reference, "toolkit", lambda: kit)
+    prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.95))
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["outputs"] == [] and manifest["declined"].startswith("estimated coverage ")
+    assert manifest["reference"]["coverage"]["decision"] == "reject"
+    assert kit.runner.calls == [] and not list(prefix.glob("*.parquet"))
+
+
+def test_a_measured_coverage_below_the_minimum_declines_after_awaicgen(tmp_path, frames):
+    prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.95,
+                                                              coverage_estimate_tolerance=0.5))
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    covered = manifest["reference"]["coverage"]
+    assert covered["decision"] == "verify" and covered["measured"] < 0.95
+    assert manifest["outputs"] == [] and manifest["declined"] == f"measured coverage {covered['measured']:.4f} < 0.95"
+    assert not list(prefix.glob("*.parquet"))
+    assert (prefix / "ref" / "awaicgen_output_mosaic_cov_map.fits").is_file()     # the files stay
+
+
+def test_nframes_leaves_the_coverage_columns_null_and_the_header_without_them(tmp_path, frames):
+    prefix = run_reference(tmp_path, frames)
+    (ref,) = read(prefix, "refimages")
+    assert (ref["covfrac"], ref["covdepth"]) == (None, None)
+    assert "COVFRAC" not in fits.getheader(Path(ref["filename"].removeprefix("file://")))
+    assert "coverage" not in json.loads((prefix / "manifest.json").read_text())["reference"]
+
+
+@pytest.mark.parametrize("selection", [{"selection_type": "first"}, {"min_coverage_fraction": 0.0},
+                                       {"max_coverage_depth": 0.5}, {"coverage_estimate_tolerance": -0.1}])
+def test_refused_coverage_settings_fail_before_a_manifest(tmp_path, frames, selection):
+    with pytest.raises(ValueError):
+        run_reference(tmp_path, frames, body=settings(selection=selection))
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
