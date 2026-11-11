@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -116,7 +117,7 @@ def test_the_hlwas_overlay_resolves_to_the_hand_built_body():
     block, once the overlay's, is the base's since sfft-block-base."""
     root, bound = "s3://bucket/r00342/l2/", 61591.4056
     hand_built = tomllib.loads(SHIPPED.read_text())
-    hand_built["intake"].update(source_root=root, unsigned=True, dq_mask_bits=0x2110C01,
+    hand_built["intake"].update(source_root=root, unsigned=True, dq_mask_bits=34671617,
                                 crpix_shift=[0.12, -0.99])
     hand_built["reference"]["selection"]["before_mjd"] = bound
     body, record = resolve(SHIPPED, HLWAS, [f'intake.source_root="{root}"',
@@ -148,3 +149,28 @@ def test_the_retired_diff_flavor_cannot_select_zogy(tmp_path):
     overlay = _toml(tmp_path, "ds.toml", '[difference]\ndiff_flavor = "zogy"\n')
     with pytest.raises(LayerError, match="diff_flavor"):
         resolve(SHIPPED, overlay)
+
+#: Each overlay's resolved [intake] dq_mask_bits, as it was before the values were written in decimal (0x2110C01 = 34671617).
+DQ_MASK_BITS = {"flight-1049.toml": 34671617, "gbtds-r00340-fakesrc.toml": 0, "gbtds-r00340.toml": 34671617,
+                "hlwas-r00342.toml": 34671617, "openuniverse-tds.toml": 0, "rimtimsim-260622.toml": 0}
+
+
+def test_every_dataset_resolves_to_its_dq_mask_bits():
+    paths = sorted((SETTINGS / "datasets").glob("*.toml"))
+    assert {path.name: resolve(SHIPPED, path)[0]["intake"]["dq_mask_bits"] for path in paths} == DQ_MASK_BITS
+
+
+@pytest.mark.parametrize("path", [SHIPPED, *sorted((SETTINGS / "datasets").glob("*.toml"))], ids=lambda p: p.name)
+def test_every_nonzero_dq_mask_is_decimal_under_a_comment_that_sums_its_named_flags(path):
+    from roman_datamodels.dqflags import pixel
+
+    lines = path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        match = re.fullmatch(r"dq_mask_bits = (\S+)", line)
+        if not match or match.group(1) == "0":
+            continue
+        assert match.group(1).isdigit(), f"{path.name}: {line} is not decimal"
+        terms = re.findall(r"([A-Z_]+) (\d+)", lines[i - 1])
+        assert lines[i - 1] == "# " + " + ".join(f"{name} {value}" for name, value in terms), lines[i - 1]
+        assert all(int(value) == int(pixel[name]) for name, value in terms), lines[i - 1]
+        assert sum(int(value) for _, value in terms) == int(match.group(1))
