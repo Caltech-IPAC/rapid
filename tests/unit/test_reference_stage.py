@@ -8,7 +8,8 @@ prefix and the header stamped with the job; frames past ``max_frames`` are
 not coadded and are named in the manifest; too few frames, a frame in
 another filter, an input outside the scope's filter, a refused
 setting and a tool that writes nothing each fail the job before a manifest
-is written, and a frame of another SCA is coadded; the row and the header carry the reference's grade; the run settings body's ``[reference]`` table is valid as it
+is written, and a frame of another SCA is coadded; the mosaic catalog's ``MAG_ZEROPOINT`` is the
+coadd's ``MAGZP``, the run's body unchanged; the row and the header carry the reference's grade; the run settings body's ``[reference]`` table is valid as it
 ships.
 """
 
@@ -211,6 +212,19 @@ def test_awaicgen_writing_nothing_fails_the_job(tmp_path, frames, monkeypatch):
     with pytest.raises(RuntimeError, match="awaicgen"):
         run_reference(tmp_path, frames)
     assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_the_mosaic_catalog_takes_the_coadds_zero_point_and_the_body_keeps_its_own(
+        tmp_path, frames, monkeypatch):
+    runner = fakereftools.FakeReferenceToolRunner()
+    monkeypatch.setattr(reference, "toolkit", lambda: reference.Toolkit(runner=runner))
+    body = settings()
+    prefix = run_reference(tmp_path, frames, body=body)
+    (ref,) = read(prefix, "refimages")
+    magzp = fits.getheader(Path(ref["filename"].removeprefix("file://")))["MAGZP"]
+    (sex,) = [a for a in runner.calls if a[0].endswith("sex")]
+    assert float(sex[sex.index("-MAG_ZEROPOINT") + 1]) == magzp == pytest.approx(26.8630336165)
+    assert body["reference"]["sextractor_refimage"]["sextractor_mag_zeropoint"] == "0.0"
 
 
 def test_the_thin_settings_body_reference_table_is_valid():
