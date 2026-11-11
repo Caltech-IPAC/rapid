@@ -186,8 +186,8 @@ difference went to PSF-fit catalogs, PR 437); a missing SFFT positive
 PSF-fit catalog publishes an empty source set with its outcome bit set, where
 `dev`'s loader skips the job. The science-image and difference-image
 SExtractor catalogs take ``MAG_ZEROPOINT`` from the reformatted science
-image's ``ZPTMAG`` at run time (:func:`with_catalog_zero_point`,
-commissioning 810a26e9), where `dev`'s tables leave it 0; the gain-match
+image's ``ZPTMAG`` at run time (:func:`with_catalog_zero_point`), where
+the settings tables leave it 0; the gain-match
 runs keep the table's 0, because gain matching adds the zero point itself.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
@@ -579,7 +579,7 @@ class _Catalogs:
 
 
 def with_catalog_zero_point(settings: dict[str, Any], science_image: Path) -> dict[str, Any]:
-    """The job's table with ``[sextractor_sciimage]`` and ``[sextractor_diffimage]`` magnitudes on the science header's ``[gainmatch] zero_point_sci_keyword`` (commissioning 810a26e9).
+    """The job's table with ``[sextractor_sciimage]`` and ``[sextractor_diffimage]`` magnitudes on the science header's ``[gainmatch] zero_point_sci_keyword``.
 
     ``[sextractor_gainmatch]`` is left alone, because gain matching adds the zero point itself.
 

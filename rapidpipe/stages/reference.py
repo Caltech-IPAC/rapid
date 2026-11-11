@@ -67,8 +67,8 @@ Departures from `dev` (reference page):
   or SExtractor leaves no output, and when the catalog has no source
   with a usable FWHM (`dev`'s ``nanmin`` raises there).
 - The mosaic catalog's ``MAG_ZEROPOINT`` is ``zprefimg``, the ``MAGZP``
-  the coadd was scaled to, set at run time (:func:`catalog_settings`,
-  commissioning 810a26e9), where `dev`'s table leaves it 0.
+  the coadd was scaled to, set at run time (:func:`catalog_settings`),
+  where the settings table leaves it 0.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
@@ -333,7 +333,7 @@ def _require_output(path: Path, tool: str, exit_code: int) -> None:
 
 
 def catalog_settings(settings: dict[str, Any], zprefimg: float) -> dict[str, Any]:
-    """A copy of ``[sextractor_refimage]`` with ``sextractor_mag_zeropoint`` set to the coadd's zero point (commissioning 810a26e9).
+    """A copy of ``[sextractor_refimage]`` with ``sextractor_mag_zeropoint`` set to the coadd's zero point.
 
     Parameters
     ----------
