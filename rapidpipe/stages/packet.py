@@ -180,9 +180,10 @@ from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
     VERSION, AlertContainer, assemble_alert, load_schema, sync_marker_for)
 from rapidpipe.science.alerts.crossmatch import (
-    GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, NED_CONE_SLACK_ARCSEC, build_gaiacat,
-    build_lvscat, build_nedcat, epoch_offset_years, load_refcat, match_gaiacat, match_lvscat,
-    match_nedcat, match_refcat)
+    GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, NED_CONE_SLACK_ARCSEC, SS_CANDIDATE_SEP_ARCSEC,
+    build_gaiacat, build_lvscat, build_nedcat, epoch_offset_years, load_refcat, match_gaiacat,
+    match_lvscat, match_nedcat, match_refcat, match_ss_predictions)
+from rapidpipe.science.alerts.kona import ephemeris_from_header, l2_primary_header, predict
 from rapidpipe.science.catalogs.readers import CATALOG_KINDS, catalog_reader, cone_of_corners
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES, extract_stamp, load_fits_image
 from rapidpipe.science.alerts.records import Cutouts, ForcedPhot, ObjectRecord, Source
@@ -383,7 +384,7 @@ def xsource_fields(row: dict) -> dict:
 WINDOW_SQL = (
     "SELECT d.job, d.pid, d.rid, d.dataset, d.expid, d.sca, d.fid, d.filename,"
     " d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4, f.filter,"
-    " l.mjdobs, l.job AS l2_job"
+    " l.mjdobs, l.job AS l2_job, l.filename AS l2file"
     " FROM diffimages d JOIN filters f ON f.fid = d.fid JOIN l2files l ON l.rid = d.rid"
     " WHERE d.dataset = %(dataset)s"
     " AND 2 * asin(sqrt(power(sin(radians(d.dec0 - %(dec0)s) / 2), 2) + cos(radians(d.dec0))"
@@ -420,6 +421,7 @@ class WindowImage:
     diff_uncert: Path | None
     sci: Path
     sci_psf: Path | None                          # None: no psfs row for the image; science not measured
+    l2: str | None = None                         # the L2 file's URL: the trigger's header holds the ephemeris
 
 
 @dataclasses.dataclass
@@ -669,7 +671,7 @@ def _read(job: JobContext) -> Read:
                                              "ra3", "dec3", "ra4", "dec4")),
                 diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[plain]),
                 diff_uncert=_beside(d["filename"], uncert) if uncert else None,
-                sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf))
+                sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf, l2=d["l2file"]))
 
         reuse: dict[int, dict] = {}
         reused_sets = {}
@@ -927,8 +929,41 @@ def detections_of(trigger: tuple[int, Source], members: list[tuple[int, Source]]
     return [trigger, *(m for job, m in members if (job, m.sid) != me and m.mjdobs <= trigger.mjdobs)]
 
 
+def _ss_matches(reader: Any, ra0: float, dec0: float, mjd: float,
+                trigger: "tuple[WindowImage, list[Source]] | None", settings: dict) -> tuple[list, dict]:
+    """The solar-system matches of every trigger (`dev`'s KONA in the packet job) and the read's record.
+
+    The ``ss`` day at or before the trigger's observation is loaded, its
+    states moved to the exposure mid-time from the L2 primary header's
+    ephemeris, the chip's cone checked, and each trigger associated
+    (:func:`associate_ss`, which marks ``isSSCandidate``). The record
+    names the day, its epoch and object count, the cone and the number
+    predicted in it.
+    """
+    if trigger is None:
+        raise ValueError("the ss match needs the trigger image and its sources")
+    image, sources = trigger
+    if not image.l2:
+        raise ValueError("the trigger's L2 file is not named; no ephemeris")
+    day = reader.day_for(mjd)
+    states, hg, info = reader.load(day)
+    eph = ephemeris_from_header(l2_primary_header(image.l2))
+    predictions = predict(states, hg, eph, ra0, dec0, float(settings["ss_cone_radius_deg"]))
+    radius, n_max = float(settings["ss_radius_arcsec"]), int(settings["ss_max_matches"])
+    matches = []
+    for source in sources:
+        found = match_ss_predictions(source.ra, source.dec, predictions, radius_arcsec=radius, n_max=n_max)
+        source.is_ss_candidate = bool(found and found[0].sep <= SS_CANDIDATE_SEP_ARCSEC)
+        matches.append(found)
+    record = {"release": day, "epoch_jd": info.get("epoch_jd"), "n_objects": info.get("n_objects"),
+              "mid_time": eph.mid_time, "n_in_cone": len(predictions),
+              "cone": {"ra": ra0, "dec": dec0, "radius_arcsec": float(settings["ss_cone_radius_deg"]) * 3600.0}}
+    return matches, record
+
+
 def _catalog_matches(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
-                     ra: list[float], dec: list[float], settings: dict) -> tuple[list, dict]:
+                     ra: list[float], dec: list[float], settings: dict,
+                     trigger: "tuple[WindowImage, list[Source]] | None" = None) -> tuple[list, dict]:
     """One catalog's matches for every trigger, from the chip's cone of its copy, and the read's record.
 
     The cone is the footprint's centre and half-diagonal
@@ -942,6 +977,8 @@ def _catalog_matches(catalog: CatalogInput, corners: tuple[float, ...], mjd: flo
     """
     name, reader = catalog.name, catalog.reader
     ra0, dec0, radius = cone_of_corners(corners)
+    if name == "ss":
+        return _ss_matches(reader, ra0, dec0, mjd, trigger, settings)
     record: dict[str, Any] = {"release": getattr(reader, "release", None)}
     dt = 0.0
     if name == "gaia":
@@ -977,7 +1014,8 @@ def _catalog_matches(catalog: CatalogInput, corners: tuple[float, ...], mjd: flo
 
 
 def _best_effort(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
-                 ra: list[float], dec: list[float], settings: dict) -> tuple[list, dict]:
+                 ra: list[float], dec: list[float], settings: dict,
+                 trigger: "tuple[WindowImage, list[Source]] | None" = None) -> tuple[list, dict]:
     """A catalog's matches, or ``None`` per trigger with the failure recorded, never a raise.
 
     `dev`'s provider semantics (rapid_docs ``decision-catalog-matches``):
@@ -989,7 +1027,7 @@ def _best_effort(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
     if catalog.reader is None:
         return [None] * len(ra), {"error": catalog.error}
     try:
-        return _catalog_matches(catalog, corners, mjd, ra, dec, settings)
+        return _catalog_matches(catalog, corners, mjd, ra, dec, settings, trigger)
     except Exception as exc:  # noqa: BLE001 - the set ships without this match
         logger.warning("%s matching not run for this set (%s: %s)", catalog.name,
                        type(exc).__name__, exc)
@@ -1066,8 +1104,9 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         if read.triggers:
             for kind, catalog in read.catalogs.items():
                 matches[kind], records[kind] = _best_effort(
-                    catalog, read.trigger_image.corners, trigger_mjd, ra, dec, settings)
-        gaia, ned, lvs = (matches[kind] for kind in CATALOG_KINDS)
+                    catalog, read.trigger_image.corners, trigger_mjd, ra, dec, settings,
+                    trigger=(read.trigger_image, read.triggers))
+        gaia, ned, lvs, ss = (matches[kind] for kind in ("gaia", "ned", "lvs", "ss"))
         refcat = load_refcat(str(read.refcat_path)) if read.refcat_path else None
         refs = (match_refcat(ra, dec, refcat, radius_arcsec=float(settings["refcat_radius_arcsec"]),
                              n_max=int(settings["refcat_max_matches"]))
@@ -1103,8 +1142,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         cutout_s = 0.0
         with avro.open("wb") as stream:
             container = AlertContainer(stream, schema, sync_marker=sync_marker_for(sync_seed))
-            for source, gaia_matches, ned_matches, lvs_matches, ref_matches in zip(
-                    read.triggers, gaia, ned, lvs, refs):
+            for source, gaia_matches, ned_matches, lvs_matches, ss_matches, ref_matches in zip(
+                    read.triggers, gaia, ned, lvs, ss, refs):
                 aid = read.aid_of[source.sid]
                 ra0, dec0, sums = read.objects[aid]
                 members = read.members.get(aid, [])
@@ -1123,7 +1162,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 lo = trigger_mjd - float(settings["forced_window_days"])
                 forced = [_forced_phot(r) for r in forced_by_aid.get(aid, [])
                           if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
-                alert = assemble_alert(source, obj, prv, ss_matches=None, ref_matches=ref_matches,
+                alert = assemble_alert(source, obj, prv, ss_matches=ss_matches, ref_matches=ref_matches,
                                        ned_matches=ned_matches, lvs_matches=lvs_matches,
                                        gaia_matches=gaia_matches,
                                        cutouts=cutouts, forced=forced, time_proc=time_proc,
@@ -1132,8 +1171,10 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 container.write(alert)
                 container.flush()  # one record per block: the index's locator is exact
                 order.append((source, aid))
-                for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches)):
-                    external.extend({"catid": str(m.source_id) if kind == "gaia" else m.prefname,
+                for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches),
+                                    ("ss", ss_matches)):
+                    external.extend({"catid": (str(m.source_id) if kind == "gaia" else m.designation
+                                               if kind == "ss" else m.prefname),
                                      "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
                                      "source_job": read.source_job, "sid": source.sid,
                                      "catalog_job": read.catalogs[kind].job} for m in found or ())

@@ -32,7 +32,10 @@ import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from astropy.time import Time
+
 from rapidpipe.science.alerts import forced as fp
+from rapidpipe.science.alerts import kona
 from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.crossmatch import REFCAT_COLUMNS
 from rapidpipe.science.alerts.records import Source
@@ -42,7 +45,9 @@ from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
     CatalogInput, Read, WindowImage, _plain, _separation, alert_catalog, cap_triggers, covering,
     measure_forced, neighbour, reliability, window_reach, write_set, xsource_fields)
-from tests.support.catalogs import ra_offset, write_gaia_store, write_hp6_store, write_lvs_store
+from tests.support import fakekete
+from tests.support.catalogs import (
+    ra_offset, write_gaia_store, write_hp6_store, write_lvs_store, write_ss_store)
 
 N = 100                       # image side, pixels
 RA0, DEC0 = 267.96, -28.72    # image centre
@@ -52,9 +57,29 @@ SETTINGS = {"stamp_half_width": 64, "prv_window_days": 365.25, "forced_window_da
             "gaia_radius_arcsec": 1.0, "gaia_max_matches": 3,
             "ned_radius_arcsec": 10.0, "ned_max_matches": 3, "ned_host_selection": False,
             "lvs_radius_arcsec": 30.0, "lvs_max_matches": 3,
+            "ss_match": True, "ss_cone_radius_deg": 0.15, "ss_radius_arcsec": 7.04, "ss_max_matches": 3,
             "refcat_radius_arcsec": 5.0, "refcat_max_matches": 3}
 SOURCE_JOB = {1: 11, 2: 12, 3: 13}    # epoch -> its source set's job
 MJD = {1: 61685.0, 2: 61686.0, 3: 61687.0}
+SS_DAY = "20271007"                   # the ss day before epoch 2's date (20271008)
+
+
+@pytest.fixture(autouse=True)
+def fake_kete(monkeypatch):
+    """The solar-system match runs on tests/support/fakekete.py, never the real kete."""
+    monkeypatch.setattr(kona, "_kete", lambda: fakekete)
+
+
+def write_l2(path, mjd: float) -> None:
+    """An L2 file's primary header with the ephemeris cards the intake writes, and one image HDU."""
+    header = fits.Header()
+    for key, value in (("meta exposure mid_time", f"{Time(mjd, format='mjd').isot}"),
+                       ("meta ephemeris time", mjd), ("meta ephemeris ephemeris_reference_frame", "?"),
+                       ("meta ephemeris spatial_x", 1.0e8), ("meta ephemeris spatial_y", -1.0e8),
+                       ("meta ephemeris spatial_z", 5.0e7), ("meta ephemeris velocity_x", 10.0),
+                       ("meta ephemeris velocity_y", 20.0), ("meta ephemeris velocity_z", -5.0)):
+        header[key] = value
+    fits.HDUList([fits.PrimaryHDU(header=header), fits.ImageHDU(np.zeros((2, 2), np.float32))]).writeto(path)
 
 
 def wcs() -> WCS:
@@ -128,12 +153,15 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
         return tmp_path / f"e{e}" / neighbour(name, diff)
 
     sci_psf = beside(1, "diffpsf.fits")
+    (tmp_path / "l2").mkdir()                      # the L2 files, as the intake publishes them
+    for e in (1, 2):
+        write_l2(tmp_path / "l2" / f"e{e}.fits", MJD[e])
     images = [WindowImage(pid=100 + e, rid=200 + e, expid=e, sca=8, fid=8, band="W146",
                           mjdobs=MJD[e], corners=corners(), diff=tmp_path / f"e{e}" / diff,
                           diff_psf=beside(e, "diffpsf.fits"),
                           diff_uncert=beside(e, "zogy_diffimage_uncert_masked.fits"),
                           sci=beside(e, "bkg_subbed_science_image.fits"),
-                          sci_psf=sci_psf) for e in (1, 2)]
+                          sci_psf=sci_psf, l2=(tmp_path / "l2" / f"e{e}.fits").as_uri()) for e in (1, 2)]
     a1, a2, a3 = (source(e, 1, 50, 50, aid=7) for e in (1, 2, 3))
     b2 = source(2, 2, 20, 80, aid=9)
     sums_a, sums_b = Sums(a1.ra, a1.dec), Sums(b2.ra, b2.dec)
@@ -167,8 +195,14 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
         {"ra": ra_a - ra_offset(dec_a, 40.0), "dec": dec_a, "prefname": "TOO-FAR", "ptype": "G"}])
     write_lvs_store(tmp_path / "ned", [{"ra": ra_a - ra_offset(dec_a, 28.0), "dec": dec_a,
                                         "objname": "LVS-A", "DistMpc": 62.0}])
+    # ss: a known object 0.3" from A (a candidate), one 20" off (outside the match radius, in the
+    # cone), one 0.5 degrees away (outside the cone); the day before epoch 2's
+    write_ss_store(tmp_path / "ss", SS_DAY, [("2024 AB", ra_a - ra_offset(dec_a, 0.3), dec_a, 18.0),
+                                            ("433", ra_a + ra_offset(dec_a, 20.0), dec_a, 11.0),
+                                            ("far", ra_a + 0.5, dec_a, 11.0)])
     catalogs = {name: CatalogInput(name, 3 + i, catalog_reader(name, (tmp_path / root).as_uri() + "/"))
-                for i, (name, root) in enumerate((("gaia", "gaia"), ("ned", "ned"), ("lvs", "ned")))}
+                for i, (name, root) in enumerate((("gaia", "gaia"), ("ned", "ned"), ("lvs", "ned"),
+                                                  ("ss", "ss")))}
     if broken_catalog:
         catalogs[broken_catalog] = CatalogInput(broken_catalog, catalogs[broken_catalog].job, None,
                                                 "RuntimeError: the copy could not be opened")
@@ -209,9 +243,19 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert [m["prefName"] for m in a["lvsMatches"]] == ["LVS-A"] and records[2]["lvsMatches"] == []
     assert a["lvsMatches"][0]["distMpc"] == pytest.approx(62.0)
     assert a["refStarMatches"] is None
+    # the solar-system match: the day before the trigger's date, the predictions in the chip's cone
+    assert [(m["designation"], m["predVMag"]) for m in a["ssMatches"]] == [("2024 AB", pytest.approx(23.0))]
+    assert a["ssMatches"][0]["sep"] == pytest.approx(0.3, abs=0.01) and a["diaSource"]["isSSCandidate"] is True
+    # B, 4.7" from A, sees the same object within the 7" radius but is no candidate (0.5")
+    b = records[2]
+    assert [m["designation"] for m in b["ssMatches"]] == ["2024 AB"] and b["ssMatches"][0]["sep"] > 4.0
+    assert b["diaSource"]["isSSCandidate"] is False
+    ss = summary["catalogs"]["ss"]
+    assert (ss["release"], ss["n_objects"], ss["n_in_cone"]) == (SS_DAY, 3, 2)
+    assert ss["mid_time"].startswith("2027-10-08T00:00:00")
     external = pq.read_table(out / "external.parquet").to_pylist()
     assert [(e["sid"], e["catid"], e["catalog_job"]) for e in external] == [
-        (1, "42", 3), (1, "HOST-A", 4), (1, "LVS-A", 5)]
+        (1, "42", 3), (1, "HOST-A", 4), (1, "LVS-A", 5), (1, "2024 AB", 6), (2, "2024 AB", 6)]
     assert (summary["gaia_matches"], summary["ned_matches"], summary["lvs_matches"]) == (1, 1, 1)
     assert summary["catalogs_failed"] == []
     # each copy's read is recorded: the chip's cone, the rows it held, and for Gaia the row groups
@@ -239,7 +283,7 @@ def test_a_catalog_that_cannot_be_opened_ships_its_field_null_and_is_recorded(tm
     assert summary["catalogs_failed"] == ["ned"] and summary["ned_matches"] == 0
     assert summary["catalogs"]["ned"] == {"error": "RuntimeError: the copy could not be opened"}
     external = pq.read_table(out / "external.parquet").to_pylist()
-    assert [e["catid"] for e in external] == ["42", "LVS-A"]
+    assert [e["catid"] for e in external] == ["42", "LVS-A", "2024 AB", "2024 AB"]
 
 
 def test_index_rows_locate_their_records(tmp_path):

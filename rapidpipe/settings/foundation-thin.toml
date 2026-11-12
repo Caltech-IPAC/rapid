@@ -155,6 +155,15 @@ max_alerts = 2000
 gaia_match = true
 ned_match = true
 lvs_match = true
+# The solar-system match (dev's KONA, rapidpipe.science.alerts.kona): the
+# "ss" catalog is the daily propagated MPC orbits under one registered root,
+# the day at or before the trigger read; the trigger chip's cone of
+# ss_cone_radius_deg (dev's 0.15) about its footprint centre, matches within
+# ss_radius_arcsec (dev's stamp inscribed circle), at most ss_max_matches.
+ss_match = true
+ss_cone_radius_deg = 0.15
+ss_radius_arcsec = 7.04
+ss_max_matches = 3
 # Gaia DR3 matches (dev providers.py): radius in arcseconds, at most this many.
 gaia_radius_arcsec = 1.0
 gaia_max_matches = 3
