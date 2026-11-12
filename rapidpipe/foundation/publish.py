@@ -184,6 +184,9 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
         raise
     locked = sorted({f for key, _, _ in RECONCILED if key in (manifest or {})
                      for f in object_catalog.fields(manifest[key])})
+    # Both catalogs of a job are its dataset's; the locks are the dataset's, not the run's.
+    dataset = next((manifest[key]["dataset"] for key, _, _ in RECONCILED if key in (manifest or {})),
+                   None)
     hold: dict[str, float] = {}
     unlocked: dict[str, float] = {}
     try:
@@ -197,14 +200,14 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                     conn.commit()
                     return {"job": job_id, "attempt": published_attempt, "published": False,
                             "group": None, "refusal": refusal, "live": None}
-                if not object_catalog.held(cur, run, locked):
+                if not object_catalog.held(cur, dataset, locked):
                     for output in manifest["outputs"]:
                         table = output["table"]
                         if table in DATE_SCA_CHILDREN:
                             with _held(unlocked, f"load_{table}"):
                                 _copy(cur, table, children.setdefault(table, {}), rows[table],
                                       job_id)
-                    if object_catalog.try_lock(cur, run, locked):
+                    if object_catalog.try_lock(cur, dataset, locked):
                         break
             conn.rollback()
             time.sleep(lock_wait(tries))
@@ -215,7 +218,7 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
         with conn.cursor() as cur:
             reads = manifest.get("reads", [])
             if "catalog" in manifest or "xcatalog" in manifest:
-                _reconcile(cur, job_id, run, manifest, reads, rows, hold)
+                _reconcile(cur, job_id, manifest, reads, rows, hold)
             tables = []
             for output in manifest["outputs"]:
                 table = output["table"]
@@ -402,7 +405,7 @@ def _insert(cur, table: str, rows: list[dict], job_id: int) -> None:
 RECONCILED = (("catalog", "objects", "reconcile"), ("xcatalog", "xobjects", "xreconcile"))
 
 
-def _reconcile(cur, job_id: int, run: int, manifest: dict, reads: list[dict],
+def _reconcile(cur, job_id: int, manifest: dict, reads: list[dict],
                rows: dict[str, list[dict]], hold: dict[str, float]) -> None:
     """Attach the job's founded objects and xobjects to those founded since its read.
 
@@ -416,7 +419,7 @@ def _reconcile(cur, job_id: int, run: int, manifest: dict, reads: list[dict],
         objects_table, memberships_table, ident, sid = object_catalog.CATALOGS[table]
         read_jobs = [r["source_job"] for r in reads if r["product"] == table]
         with _held(hold, "between"):
-            others = object_catalog.between(cur, job_id, run, manifest[key], read_jobs, table)
+            others = object_catalog.between(cur, job_id, manifest[key], read_jobs, table)
         with _held(hold, "attach"):
             rows[objects_table], rows[memberships_table], manifest[out] = object_catalog.attach(
                 job_id, rows.get(objects_table, []), rows.get(memberships_table, []), others,

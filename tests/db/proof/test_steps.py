@@ -48,7 +48,7 @@ def _two_recipes(world):
 
 def _in_flight(world, run, jitter=0.0):
     """Epochs 1 and 2 of SCA 1 differenced at once: both read the empty catalog, 1 publishes first."""
-    read = world.catalog(run)
+    read = world.catalog()
     one = world.difference(run, 1, 1, catalog=read, published=False)
     two = world.difference(run, 2, 1, catalog=read, jitter=jitter, published=False)
     return one, two, publish(world.conn, one, 1, world.prefix(one, 1)), \
@@ -129,13 +129,17 @@ def test_step_4_cutover_is_one_group(world):
     assert world.live()[1] == second
     assert _official_jobs(world, "packets_official") == set(made_second["packets"].values())
     assert _official_jobs(world, "memberships_official") == set(made_second["differences"].values())
-    assert {r[0] for r in world.rows("SELECT DISTINCT run FROM objects_official")} == {second}
+    # The second run matched the first's objects of the dataset (objects-across-runs): its
+    # official memberships are of the first run's objects, which keep their ids.
+    assert {r[0] for r in world.rows("SELECT DISTINCT run FROM objects_official")} == {first}
+    assert world.rows("SELECT count(*) FROM objects o JOIN jobs j ON j.id = o.job"
+                      " WHERE j.run = %s", (second,)) == [(0,)]
     for packet_job, object_job, source_job in world.rows(
             "SELECT DISTINCT job, object_job, source_job FROM packets_official"):
         inputs = {(i["product"], i["source_job"])
                   for i in job_show(world.conn, packet_job)["inputs"] if i["kind"] == "input"}
         assert inputs == {("sources", source_job)}
-        assert object_job in made_second["differences"].values()
+        assert object_job in made_first["differences"].values()
 
 
 def test_step_6_undo_restores_the_first_recipe(world):
