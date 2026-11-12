@@ -98,9 +98,9 @@ def between(cur, job: int, run: int, catalog: dict, read_jobs: list[int],
     """
     ident = CATALOGS[table][2]
     cur.execute(f"SELECT o.job, o.{ident}, o.ra0, o.dec0, o.field FROM {table}_in(%s::integer[], %s) o"
-                " WHERE o.dataset = %s AND o.survey = %s"
+                " WHERE o.dataset = %s"
                 f" AND o.job <> %s AND NOT o.job = ANY(%s) ORDER BY o.job, o.{ident}",
-                (fields(catalog), run, catalog["dataset"], catalog["survey"], job,
+                (fields(catalog), run, catalog["dataset"], job,
                  list(read_jobs)))
     return cur.fetchall()
 

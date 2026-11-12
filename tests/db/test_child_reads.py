@@ -119,7 +119,7 @@ ORDER BY s.sid""",
 SELECT o.job AS object_job, o.aid, o.ra0, o.dec0, o.nsources, m.source_job, m.sid
 FROM objects_official o
 JOIN memberships_official m ON m.object_job = o.job AND m.aid = o.aid
-WHERE o.dataset = %(dataset)s AND o.survey = %(survey)s AND o.field = %(field)s
+WHERE o.dataset = %(dataset)s AND o.field = %(field)s
 ORDER BY o.aid, m.source_job, m.sid""",
     "packet_history_by_observation": """
 SELECT p.job, p.sid, p.aid, p.object_job, p.source_job, p.trigger_mjd, p.schema_version,
@@ -149,7 +149,7 @@ Q3C_ON_PARENTS = {
 SELECT o.aid, o.ra0, o.dec0, o.nsources, o.job AS object_job
 FROM objects_official o
 WHERE q3c_radial_query(o.ra0, o.dec0, %(ra)s, %(dec)s, %(radius)s)
-  AND o.dataset = %(dataset)s AND o.survey = %(survey)s
+  AND o.dataset = %(dataset)s
 ORDER BY o.aid""",
 }
 

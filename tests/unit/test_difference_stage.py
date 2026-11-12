@@ -255,7 +255,7 @@ def test_a_job_associates_its_sources_with_the_catalog_it_read_and_records_the_r
     touched = set(field_of.values())
     assert row["field"] in touched
     near = touched.union(*(difference.field_neighbours(f) for f in touched))
-    assert recorded["catalog"] == {"dataset": "D", "survey": "S", "fields": sorted(near),
+    assert recorded["catalog"] == {"dataset": "D", "fields": sorted(near),
                                    "radius": THIN["associate"]["match_radius"]}
     assert {(m["object_job"], m["source_job"]) for m in members} == {(9, 9)}
     assert recorded["metrics"]["n_objects_founded"] == len(founded)
@@ -287,7 +287,7 @@ def test_a_job_cross_matches_its_xsources_into_xobjects_and_records_the_read(tmp
         assert o["flux0"] == pytest.approx(founder["fluxap"])
     touched = {o["field"] for o in founded}
     near = touched.union(*(difference.field_neighbours(f) for f in touched))
-    assert recorded["xcatalog"] == {"dataset": "D", "survey": "S", "fields": sorted(near),
+    assert recorded["xcatalog"] == {"dataset": "D", "fields": sorted(near),
                                     "radius": THIN["associate"]["match_radius"]}
     assert [r for r in recorded["reads"] if r["product"] == "xobjects"] == []
     assert recorded["metrics"]["n_xobjects_founded"] == len(founded)

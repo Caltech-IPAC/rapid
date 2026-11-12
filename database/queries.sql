@@ -54,7 +54,7 @@ WHERE l.dataset = %(dataset)s AND l.expid = %(expid)s AND l.sca = %(sca)s AND l.
 SELECT o.job AS object_job, o.aid, o.ra0, o.dec0, o.nsources, m.source_job, m.sid
 FROM objects_official_in(ARRAY[%(field)s]::integer[]) o
 JOIN memberships_in(ARRAY[%(field)s]::integer[]) m ON m.object_job = o.job AND m.aid = o.aid
-WHERE o.dataset = %(dataset)s AND o.survey = %(survey)s AND o.field = %(field)s
+WHERE o.dataset = %(dataset)s AND o.field = %(field)s
   AND EXISTS (SELECT 1 FROM official b WHERE b.closed_at IS NULL AND b.product = 'sources'
               AND b.job = m.job)
 ORDER BY o.aid, m.source_job, m.sid;
@@ -258,7 +258,7 @@ ORDER BY l.dateobs, l.sca;
 SELECT o.aid, o.ra0, o.dec0, o.nsources, o.job AS object_job
 FROM objects_official_in(%(fields)s::integer[]) o
 WHERE q3c_radial_query(o.ra0, o.dec0, %(ra)s, %(dec)s, %(radius)s)
-  AND o.dataset = %(dataset)s AND o.survey = %(survey)s
+  AND o.dataset = %(dataset)s
 ORDER BY o.aid;
 
 -- name: chip_sources
