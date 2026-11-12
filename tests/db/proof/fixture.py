@@ -11,8 +11,8 @@ bindings Part 1 statement 4 names.
 * :meth:`World.difference` stands for the difference stage: one
   difference image and its source set of :data:`NSOURCES` sources at fixed
   positions (offset by ``jitter`` arcseconds per epoch), one job per
-  (epoch, SCA), associated as the stage does it: the run's objects of the
-  field read as they stand (or as ``catalog`` says, for two jobs in flight
+  (epoch, SCA), associated as the stage does it: the dataset's objects of
+  the field, of every run, read as they stand (or as ``catalog`` says, for two jobs in flight
   at once), matched by :func:`rapidpipe.science.crossmatch.memory.associate_epoch`,
   the read and the catalog key in the manifest, so the publisher reconciles.
 * :meth:`World.packets` writes a packet set for one image key: one index
@@ -37,7 +37,7 @@ SURVEY, DATASET, FIELD, FID = "S", "D", 1, 1
 SCAS = (1, 2)
 EPOCHS = (1, 2)
 NSOURCES = 24
-FIELD_KEY = {"dataset": DATASET, "survey": SURVEY, "field": FIELD}
+FIELD_KEY = {"dataset": DATASET, "field": FIELD}
 #: The match radius, degrees: 0.36 arcseconds, far below the sources' 7-arcsecond spacing.
 RADIUS = 1e-4
 
@@ -116,18 +116,19 @@ class World:
 
     # -- the stages, standing in -------------------------------------------
 
-    def catalog(self, run: int) -> list[tuple]:
-        """The field's objects of ``run`` as a difference job reads them: (job, aid, ra0, dec0)."""
-        return self.rows("SELECT o.job, o.aid, o.ra0, o.dec0 FROM objects o JOIN jobs j ON j.id = o.job"
-                         " WHERE j.run = %s AND o.field = %s ORDER BY o.job, o.aid", (run, FIELD))
+    def catalog(self) -> list[tuple]:
+        """The field's objects of the dataset, of every run, as a difference job reads them:
+        (job, aid, ra0, dec0)."""
+        return self.rows("SELECT o.job, o.aid, o.ra0, o.dec0 FROM objects_in(%s, %s) o"
+                         " ORDER BY o.job, o.aid", ([FIELD], DATASET))
 
     def difference(self, run: int, epoch: int, sca: int, flux_scale: float = 1.0,
                    jitter: float = 0.0, catalog: list[tuple] | None = None, expects=CURRENT,
                    published: bool = True) -> int:
         """One difference image, its source set and its association; the job is the source set.
 
-        ``catalog`` is what the job read (:meth:`catalog`'s rows), the run's
-        current objects when not given.
+        ``catalog`` is what the job read (:meth:`catalog`'s rows), the dataset's
+        current objects of every run when not given.
         """
         key = image_key(epoch, sca)
         self._pids += 1
@@ -147,7 +148,7 @@ class World:
                 "fluxfit": flux_scale * (100.0 + i + 10.0 * epoch), "fluxerr": 1.0,
                 "flags": 0, "qfit": 0.0, "cfit": 0.0, "npixfit": 9, "sharpness": 0.5,
                 "roundness1": 0.0, "roundness2": 0.0, "peak": 10.0})
-        read = self.catalog(run) if catalog is None else catalog
+        read = self.catalog() if catalog is None else catalog
         expects = [{"product": product, "key": key, "binding": expects}
                    for product in ("diffimages", "sources")]
         expects = [{**e, "binding": self.binding(e["product"], e["key"])}
@@ -156,7 +157,7 @@ class World:
         epoch_rows = associate_epoch({aid: (owner, ra0, dec0) for owner, aid, ra0, dec0 in read},
                                      sources, job=job, radius=RADIUS)
         outputs = {"diffimages": [diffimage], "sources": sources,
-                   "objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": FIELD}
+                   "objects": [{**o, "dataset": DATASET, "field": FIELD}
                                for o in epoch_rows.founded],
                    "memberships": [{**m, "field": FIELD} for m in epoch_rows.memberships]}
         root = self.root / f"job-{job}" / "attempt-1"
@@ -164,7 +165,7 @@ class World:
         manifest = json.loads((root / "manifest.json").read_text())
         manifest["reads"] = [{"product": "objects", "key": FIELD_KEY, "source_job": owner}
                              for owner in sorted({r[0] for r in read})]
-        manifest["catalog"] = {"dataset": DATASET, "survey": SURVEY, "fields": [FIELD],
+        manifest["catalog"] = {"dataset": DATASET, "fields": [FIELD],
                                "radius": RADIUS}
         (root / "manifest.json").write_text(json.dumps(manifest))
         if published:

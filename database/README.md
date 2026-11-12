@@ -45,9 +45,11 @@ the pipeline imports.
   through `create_field_child(parent, field)`, owned and granted like
   `create_catalog_child`, loads it by `COPY` and records the fields each
   job's rows went to in `job_fields`. In SQL, `<parent>_in(fields)` returns
-  the rows in those fields' children, `objects_in(fields, run)` and
-  `xobjects_in(fields, run)` the run's rows of them (the run's filter inside
-  each child's query, so the readers hold no other run's rows), the packet
+  the rows in those fields' children, `objects_in(fields, dataset)` and
+  `xobjects_in(fields, dataset)` the dataset's rows of them, of every run
+  (the dataset's filter inside each child's query, so the readers hold no
+  other dataset's rows; a difference job matches every run's objects of its
+  dataset), the packet
   stage's `packet_origin_rows`, `packet_membership_rows` and
   `packet_reuse_rows` the rows its three reads keep, of every run (each read's
   filter inside each child's query), `<parent>_of(jobs)` the rows those
@@ -85,7 +87,9 @@ the pipeline imports.
   fresh `schema.sql`; it fails there. The 2026-11-04 files apply in this
   order, which is not their names' order: `2026-11-04-a-retire-runs-1-68.sql`,
   `2026-11-04-sources-children.sql`, `2026-11-04-xsources.sql`,
-  `2026-11-04-field-children.sql`, `2026-11-04-xobjects.sql`.
+  `2026-11-04-field-children.sql`, `2026-11-04-xobjects.sql`. Of the
+  2026-11-12 files, `2026-11-12-objects-without-survey.sql` applies before
+  `2026-11-12-objects-across-runs.sql`.
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven
   statements: packet history three ways, lineage up and down) and the

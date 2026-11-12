@@ -9,17 +9,19 @@ both see no object at a new source and both found one, in one field or
 either side of a boundary. The publisher, inside its one transaction for
 the job, takes the locks of every field the job's manifest names
 (:func:`try_lock`: each field that gained an object or a membership and each
-one's neighbours, transaction-scoped advisory locks on the run and field,
+one's neighbours, transaction-scoped advisory locks on the dataset and field,
 all taken or none, so two jobs founding either side of a boundary share a
-lock and serialise; a job that finds one held (:func:`held`, or :func:`try_lock`
-refused) rolls back and tries again, never waiting on it while it holds a
-pool connection), reads the objects of the run in those fields founded
-by jobs outside the job's recorded read (:func:`between`, those published
-since the read), and :func:`attach` gives each founded object within the
+lock and serialise, of one run or two; a job that finds one held (:func:`held`,
+or :func:`try_lock` refused) rolls back and tries again, never waiting on it
+while it holds a pool connection), reads the dataset's objects in those
+fields, of every run, founded by jobs outside the job's recorded read
+(:func:`between`, those published since the read), and :func:`attach` gives each founded object within the
 match radius of one of them to that object instead: its memberships are
 attached to the existing object, each one whose source is within the
 radius of it, and the founded object is not inserted. Object ids never
-change after publication.
+change after publication. A job matches every run's objects of its dataset,
+not its own run's alone (objects-across-runs): surveys overlap, and an
+object's members may come from runs of more than one survey.
 
 A membership's sums are its source's offsets from the object's founding
 position (:mod:`rapidpipe.science.statistics.sums`), so an attached
@@ -51,10 +53,11 @@ CATALOGS = {"objects": ("objects", "memberships", "aid", "sid"),
             "xobjects": ("xobjects", "xmemberships", "xaid", "xsid")}
 
 
-def try_lock(cur, run: int, fields: list[int]) -> bool:
-    """Take the (run, field) lock of each of ``fields``, ascending, until the transaction ends, or none.
+def try_lock(cur, dataset: str, fields: list[int]) -> bool:
+    """Take the (dataset, field) lock of each of ``fields``, ascending, until the transaction ends, or none.
 
-    One statement of ``pg_try_advisory_xact_lock``, which never waits: true
+    The lock's first key is ``hashtext(dataset)``; a hash shared by two
+    datasets only serialises their publishers. One statement of ``pg_try_advisory_xact_lock``, which never waits: true
     when every lock is taken, false when another transaction holds any, and
     the caller then rolls back, releasing those it did take with its pool
     connection. A publisher that waited on the locks instead held a pooler
@@ -64,13 +67,13 @@ def try_lock(cur, run: int, fields: list[int]) -> bool:
     ordered = sorted({int(f) for f in fields})
     if not ordered:
         return True
-    cur.execute("SELECT " + " AND ".join(["pg_try_advisory_xact_lock(%s, %s)"] * len(ordered)),
-                [v for f in ordered for v in (int(run), f)])
+    cur.execute("SELECT " + " AND ".join(["pg_try_advisory_xact_lock(hashtext(%s), %s)"] * len(ordered)),
+                [v for f in ordered for v in (dataset, f)])
     return bool(cur.fetchone()[0])
 
 
-def held(cur, run: int, fields: list[int]) -> bool:
-    """Whether another transaction holds the (run, field) lock of any of ``fields``, taking none.
+def held(cur, dataset: str, fields: list[int]) -> bool:
+    """Whether another transaction holds the (dataset, field) lock of any of ``fields``, taking none.
 
     Read from ``pg_locks`` (a two-key advisory lock is ``classid``, ``objid``, ``objsubid`` 2), so
     the publisher loads its unlocked tables in a try only once its fields read free, and a try
@@ -82,26 +85,43 @@ def held(cur, run: int, fields: list[int]) -> bool:
         return False
     cur.execute("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted"
                 " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
-                " AND objsubid = 2 AND classid::bigint = %s AND objid::bigint = ANY(%s))",
-                (int(run), ordered))
+                " AND objsubid = 2 AND classid = hashtext(%s)::oid AND objid::bigint = ANY(%s))",
+                (dataset, ordered))
     return bool(cur.fetchone()[0])
 
 
-def between(cur, job: int, run: int, catalog: dict, read_jobs: list[int],
+def between(cur, job: int, catalog: dict, read_jobs: list[int],
             table: str = "objects") -> list[tuple]:
-    """``(job, id, ra0, dec0, field)`` of the run's objects in the catalog's fields founded outside the read.
+    """``(job, id, ra0, dec0, field)`` of the dataset's objects in the catalog's fields founded outside the read.
 
     A job publishes all its objects in one transaction, so a founding job
     the read saw had published every object it has; one founded since is
-    one whose job the read did not see. Read from those fields' children of
-    ``table`` (``objects_in`` or ``xobjects_in`` of the run), never the parent.
+    one whose job the read did not see, of any run. Read from those fields'
+    children of ``table`` (``objects_in`` or ``xobjects_in`` of the
+    dataset), never the parent.
+
+    Parameters
+    ----------
+    cur : cursor
+        A cursor in the publishing transaction, holding the fields' locks.
+    job : int
+        The publishing job.
+    catalog : dict
+        The manifest's ``catalog`` or ``xcatalog``: ``dataset``, ``fields``, ``radius``.
+    read_jobs : list of int
+        The founding jobs the job's read saw.
+    table : str
+        ``"objects"`` or ``"xobjects"``.
+
+    Returns
+    -------
+    list of tuple
+        ``(job, id, ra0, dec0, field)``, ordered by job and id.
     """
     ident = CATALOGS[table][2]
     cur.execute(f"SELECT o.job, o.{ident}, o.ra0, o.dec0, o.field FROM {table}_in(%s::integer[], %s) o"
-                " WHERE o.dataset = %s AND o.survey = %s"
-                f" AND o.job <> %s AND NOT o.job = ANY(%s) ORDER BY o.job, o.{ident}",
-                (fields(catalog), run, catalog["dataset"], catalog["survey"], job,
-                 list(read_jobs)))
+                f" WHERE o.job <> %s AND NOT o.job = ANY(%s) ORDER BY o.job, o.{ident}",
+                (fields(catalog), catalog["dataset"], job, list(read_jobs)))
     return cur.fetchall()
 
 

@@ -469,7 +469,9 @@ ALTER TABLE xsources ADD CONSTRAINT xsources_holds_no_rows CHECK (false) NO INHE
 -- 2026-10-24): an object is founded by the difference job whose unmatched
 -- source it was; its id is the position hash of that source. The publisher
 -- reconciles a job's founded objects against those founded since its read
--- (rapidpipe.foundation.catalog), so no two jobs found one object.
+-- (rapidpipe.foundation.catalog), so no two jobs found one object. An object
+-- names no survey: surveys overlap, and its members may come from more than
+-- one (objects-without-survey); its run records the survey it was run for.
 --
 -- objects, memberships, packets and forced keep their rows in child tables
 -- that inherit them, one per field, <parent>_<field>, as dev's astroobjects
@@ -480,15 +482,14 @@ CREATE TABLE objects (
     job bigint NOT NULL REFERENCES jobs (id),        -- the difference job that founded it
     aid bigint NOT NULL,
     dataset text NOT NULL,
-    survey text NOT NULL,
     field integer NOT NULL,
     ra0 double precision NOT NULL,                   -- founding position, the origin of its members' offsets
     dec0 double precision NOT NULL,
-    UNIQUE (dataset, survey, field, aid, job)
+    UNIQUE (dataset, field, aid, job)
 );
 
 CREATE INDEX objects_job_idx ON objects (job, aid);
-CREATE INDEX objects_field_idx ON objects (dataset, survey, field);
+CREATE INDEX objects_field_idx ON objects (dataset, field);
 
 ALTER TABLE objects ADD CONSTRAINT objects_holds_no_rows CHECK (false) NO INHERIT;
 
@@ -525,16 +526,15 @@ CREATE TABLE xobjects (
     job bigint NOT NULL REFERENCES jobs (id),        -- the difference job that founded it
     xaid bigint NOT NULL,
     dataset text NOT NULL,
-    survey text NOT NULL,
     field integer NOT NULL,
     ra0 double precision NOT NULL,                   -- founding position, the origin of its members' offsets
     dec0 double precision NOT NULL,
     flux0 real NOT NULL,                             -- the founding xsource's fluxap
-    UNIQUE (dataset, survey, field, xaid, job)
+    UNIQUE (dataset, field, xaid, job)
 );
 
 CREATE INDEX xobjects_job_idx ON xobjects (job, xaid);
-CREATE INDEX xobjects_field_idx ON xobjects (dataset, survey, field);
+CREATE INDEX xobjects_field_idx ON xobjects (dataset, field);
 
 ALTER TABLE xobjects ADD CONSTRAINT xobjects_holds_no_rows CHECK (false) NO INHERIT;
 
@@ -816,11 +816,13 @@ BEGIN
 END
 $$;
 
--- field_rows of the run `run`'s jobs only: the run's filter inside each
--- child's query, so a field's rows of other runs are never returned through
--- the function (each RETURN QUERY holds its rows until the caller reads them,
--- in temp files past work_mem; throughput-record, run 228).
-CREATE FUNCTION field_run_rows(parent anyelement, fields integer[], run bigint)
+-- field_rows of the dataset `dataset` only, of every run: the dataset's
+-- filter inside each child's query, so a field's rows of other datasets are
+-- never returned through the function (each RETURN QUERY holds its rows until
+-- the caller reads them, in temp files past work_mem; throughput-record, run
+-- 228). A difference job matches every run's objects of its dataset
+-- (objects-across-runs).
+CREATE FUNCTION field_dataset_rows(parent anyelement, fields integer[], dataset text)
 RETURNS SETOF anyelement
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -830,9 +832,8 @@ BEGIN
     FOR child IN SELECT DISTINCT field_child_name(name, f) FROM unnest(fields) f
                  WHERE f IS NOT NULL ORDER BY 1 LOOP
         CONTINUE WHEN to_regclass('public.' || quote_ident(child)) IS NULL;
-        RETURN QUERY EXECUTE format('SELECT * FROM public.%I'
-                                    ' WHERE job IN (SELECT id FROM public.jobs WHERE run = $1)', child)
-            USING run;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I WHERE dataset = $1', child)
+            USING dataset;
     END LOOP;
 END
 $$;
@@ -911,7 +912,7 @@ $$;
 
 -- <parent>_in(fields): every row in those fields' children.
 -- <parent>_of(jobs): the rows those jobs wrote, from the children they wrote.
--- <parent>_in(fields, run): the run's rows in those fields' children.
+-- <parent>_in(fields, dataset): the dataset's rows, of every run, in those fields' children.
 CREATE FUNCTION objects_in(fields integer[]) RETURNS SETOF objects
 LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::objects, fields, NULL) $$;
 CREATE FUNCTION objects_of(jobs bigint[]) RETURNS SETOF objects
@@ -937,10 +938,10 @@ LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::xobjects, fields, NULL)
 CREATE FUNCTION xobjects_of(jobs bigint[]) RETURNS SETOF xobjects
 LANGUAGE sql STABLE AS $$
     SELECT * FROM field_rows(NULL::xobjects, job_fields_of('xobjects', jobs), jobs) $$;
-CREATE FUNCTION objects_in(fields integer[], run bigint) RETURNS SETOF objects
-LANGUAGE sql STABLE AS $$ SELECT * FROM field_run_rows(NULL::objects, fields, run) $$;
-CREATE FUNCTION xobjects_in(fields integer[], run bigint) RETURNS SETOF xobjects
-LANGUAGE sql STABLE AS $$ SELECT * FROM field_run_rows(NULL::xobjects, fields, run) $$;
+CREATE FUNCTION objects_in(fields integer[], dataset text) RETURNS SETOF objects
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_dataset_rows(NULL::objects, fields, dataset) $$;
+CREATE FUNCTION xobjects_in(fields integer[], dataset text) RETURNS SETOF xobjects
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_dataset_rows(NULL::xobjects, fields, dataset) $$;
 CREATE FUNCTION xmemberships_in(fields integer[]) RETURNS SETOF xmemberships
 LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::xmemberships, fields, NULL) $$;
 CREATE FUNCTION xmemberships_of(jobs bigint[]) RETURNS SETOF xmemberships

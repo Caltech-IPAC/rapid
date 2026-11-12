@@ -18,7 +18,7 @@ import pyarrow.parquet as pq
 from rapidpipe.foundation import change, create_job, create_run
 
 SURVEY, DATASET = "S", "D"
-FIELD_KEY = {"dataset": DATASET, "survey": SURVEY, "field": 1}
+FIELD_KEY = {"dataset": DATASET, "field": 1}
 
 
 def write_attempt(root: Path, tables: dict[str, list[dict]]) -> str:
@@ -35,7 +35,7 @@ def write_attempt(root: Path, tables: dict[str, list[dict]]) -> str:
 
 
 def objects_rows(n: int = 3) -> list[dict]:
-    return [{"aid": aid, "dataset": DATASET, "survey": SURVEY, "field": 1,
+    return [{"aid": aid, "dataset": DATASET, "field": 1,
              "ra0": 10.0 + aid, "dec0": -5.0} for aid in range(1, n + 1)]
 
 
