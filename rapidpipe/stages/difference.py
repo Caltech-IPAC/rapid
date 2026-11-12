@@ -272,10 +272,10 @@ REFERENCE_CATALOG_COLUMNS = ["ALPHAWIN_J2000", "DELTAWIN_J2000", "FLUX_AUTO", "F
 #: The fields' objects of the job's run as they stand: every published difference job's founded ones,
 #: read from those fields' children of ``objects`` (``objects_in`` of the run), never the parent.
 OBJECTS_SQL = ("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects_in(%s::integer[], %s) o"
-               " WHERE o.dataset = %s AND o.survey = %s")
+               " WHERE o.dataset = %s")
 
 OBJECTS_SCHEMA = pa.schema([
-    ("aid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),
+    ("aid", pa.int64()), ("dataset", pa.string()), ("field", pa.int32()),
     ("ra0", pa.float64()), ("dec0", pa.float64()),
 ])
 MEMBERSHIPS_SCHEMA = pa.schema([
@@ -286,10 +286,10 @@ MEMBERSHIPS_SCHEMA = pa.schema([
 
 #: The fields' xobjects of the job's run as they stand, from those fields' children of ``xobjects``.
 XOBJECTS_SQL = ("SELECT o.job, o.xaid, o.field, o.ra0, o.dec0 FROM xobjects_in(%s::integer[], %s) o"
-                " WHERE o.dataset = %s AND o.survey = %s")
+                " WHERE o.dataset = %s")
 
 XOBJECTS_SCHEMA = pa.schema([
-    ("xaid", pa.int64()), ("dataset", pa.string()), ("survey", pa.string()), ("field", pa.int32()),
+    ("xaid", pa.int64()), ("dataset", pa.string()), ("field", pa.int32()),
     ("ra0", pa.float64()), ("dec0", pa.float64()), ("flux0", pa.float32()),
 ])
 XMEMBERSHIPS_SCHEMA = pa.schema([
@@ -1139,7 +1139,7 @@ def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[lis
                 and r["fluxerr"] > 0 and r["fluxfit"] / r["fluxerr"] >= float(settings["min_snr"])]
     near = _with_neighbours({r["field"] for r in accepted})
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute(OBJECTS_SQL, (sorted(near), job.run, job.dataset, job.survey))
+        cur.execute(OBJECTS_SQL, (sorted(near), job.run, job.dataset))
         found = cur.fetchall()
         conn.commit()
     objects = {aid: (owner, ra0, dec0) for owner, aid, _, ra0, dec0 in found}
@@ -1149,16 +1149,16 @@ def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[lis
     # Each membership is filed under its object's field (schema.sql: the field children).
     memberships = [{**m, "field": field_of[m["object_job"], m["aid"]]} for m in epoch.memberships]
     pq.write_table(pa.Table.from_pylist(
-        [{**r, "dataset": job.dataset, "survey": job.survey} for r in epoch.founded],
+        [{**r, "dataset": job.dataset} for r in epoch.founded],
         schema=OBJECTS_SCHEMA), job.path / "objects.parquet")
     pq.write_table(pa.Table.from_pylist(memberships, schema=MEMBERSHIPS_SCHEMA),
                    job.path / "memberships.parquet")
     touched = {m["field"] for m in memberships}
     reads = [{"product": "objects",
-              "key": {"dataset": job.dataset, "survey": job.survey, "field": field},
+              "key": {"dataset": job.dataset, "field": field},
               "source_job": owner}
              for field, owner in sorted({(field, owner) for owner, _, field, _, _ in found})]
-    catalog = {"dataset": job.dataset, "survey": job.survey,
+    catalog = {"dataset": job.dataset,
                "fields": sorted(_with_neighbours(touched)), "radius": radius}
     counts = {**epoch.counts, "fields_read": len(near),
               "sources_out_of_field": sum(r["field"] != image_field for r in accepted)}
@@ -1188,7 +1188,7 @@ def xassociate(job: JobContext, xsources: pa.Table) -> tuple[list, dict, dict]:
         int(settings["xsource_flags"]))
     near = _with_neighbours({r["field"] for r in rows})
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute(XOBJECTS_SQL, (sorted(near), job.run, job.dataset, job.survey))
+        cur.execute(XOBJECTS_SQL, (sorted(near), job.run, job.dataset))
         found = cur.fetchall()
         conn.commit()
     xobjects = {xaid: (owner, ra0, dec0) for owner, xaid, _, ra0, dec0 in found}
@@ -1197,15 +1197,15 @@ def xassociate(job: JobContext, xsources: pa.Table) -> tuple[list, dict, dict]:
     field_of.update({(job.job, r["xaid"]): r["field"] for r in epoch.founded})
     memberships = [{**m, "field": field_of[m["object_job"], m["xaid"]]} for m in epoch.memberships]
     pq.write_table(pa.Table.from_pylist(
-        [{**r, "dataset": job.dataset, "survey": job.survey} for r in epoch.founded],
+        [{**r, "dataset": job.dataset} for r in epoch.founded],
         schema=XOBJECTS_SCHEMA), job.path / "xobjects.parquet")
     pq.write_table(pa.Table.from_pylist(memberships, schema=XMEMBERSHIPS_SCHEMA),
                    job.path / "xmemberships.parquet")
     reads = [{"product": "xobjects",
-              "key": {"dataset": job.dataset, "survey": job.survey, "field": field},
+              "key": {"dataset": job.dataset, "field": field},
               "source_job": owner}
              for field, owner in sorted({(field, owner) for owner, _, field, _, _ in found})]
-    xcatalog = {"dataset": job.dataset, "survey": job.survey,
+    xcatalog = {"dataset": job.dataset,
                 "fields": sorted(_with_neighbours({m["field"] for m in memberships})),
                 "radius": radius}
     return reads, xcatalog, {**epoch.counts, "fields_read": len(near)}

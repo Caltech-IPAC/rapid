@@ -36,7 +36,7 @@ import psycopg2
 import pytest
 
 from rapidpipe.foundation import job_show, publish
-from tests.db.foundation_helpers import DATASET, SURVEY, new_job, new_run, write_attempt
+from tests.db.foundation_helpers import DATASET, new_job, new_run, write_attempt
 
 POOL = 3
 PUBLISHERS = 6
@@ -110,10 +110,10 @@ logfile = {tmp_path / 'pgbouncer.log'}
 
 def _attempt(tmp_path, job, objects, fields):
     root = tmp_path / f"job-{job}"
-    write_attempt(root, {"objects": [{**o, "dataset": DATASET, "survey": SURVEY} for o in objects]})
+    write_attempt(root, {"objects": [{**o, "dataset": DATASET} for o in objects]})
     manifest = root / "manifest.json"
     body = json.loads(manifest.read_text())
-    body["catalog"] = {"dataset": DATASET, "survey": SURVEY, "fields": fields, "radius": RADIUS}
+    body["catalog"] = {"dataset": DATASET, "fields": fields, "radius": RADIUS}
     manifest.write_text(json.dumps(body))
     return root.as_uri()
 

@@ -15,7 +15,7 @@ what Part 1 statement 4 otherwise names at launch (amendment of
 2026-10-24): ``reads``, a list of ``{"product", "key", "source_job"}``,
 recorded as the job's ``input`` rows in ``job_inputs`` when it publishes
 (the difference job's object catalogs, the packet job's members and
-forced-photometry window); and ``catalog``, ``{"dataset", "survey",
+forced-photometry window); and ``catalog``, ``{"dataset",
 "fields", "radius"}`` on a difference job, whose founded ``objects`` and
 ``memberships`` (and, under ``xcatalog``, its ``xobjects`` and
 ``xmemberships``, recorded as ``xreconcile``) are reconciled under the locks of those fields (each
