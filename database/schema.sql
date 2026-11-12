@@ -469,7 +469,9 @@ ALTER TABLE xsources ADD CONSTRAINT xsources_holds_no_rows CHECK (false) NO INHE
 -- 2026-10-24): an object is founded by the difference job whose unmatched
 -- source it was; its id is the position hash of that source. The publisher
 -- reconciles a job's founded objects against those founded since its read
--- (rapidpipe.foundation.catalog), so no two jobs found one object.
+-- (rapidpipe.foundation.catalog), so no two jobs found one object. An object
+-- names no survey: surveys overlap, and its members may come from more than
+-- one (objects-without-survey); its run records the survey it was run for.
 --
 -- objects, memberships, packets and forced keep their rows in child tables
 -- that inherit them, one per field, <parent>_<field>, as dev's astroobjects
@@ -480,15 +482,14 @@ CREATE TABLE objects (
     job bigint NOT NULL REFERENCES jobs (id),        -- the difference job that founded it
     aid bigint NOT NULL,
     dataset text NOT NULL,
-    survey text NOT NULL,
     field integer NOT NULL,
     ra0 double precision NOT NULL,                   -- founding position, the origin of its members' offsets
     dec0 double precision NOT NULL,
-    UNIQUE (dataset, survey, field, aid, job)
+    UNIQUE (dataset, field, aid, job)
 );
 
 CREATE INDEX objects_job_idx ON objects (job, aid);
-CREATE INDEX objects_field_idx ON objects (dataset, survey, field);
+CREATE INDEX objects_field_idx ON objects (dataset, field);
 
 ALTER TABLE objects ADD CONSTRAINT objects_holds_no_rows CHECK (false) NO INHERIT;
 
@@ -525,16 +526,15 @@ CREATE TABLE xobjects (
     job bigint NOT NULL REFERENCES jobs (id),        -- the difference job that founded it
     xaid bigint NOT NULL,
     dataset text NOT NULL,
-    survey text NOT NULL,
     field integer NOT NULL,
     ra0 double precision NOT NULL,                   -- founding position, the origin of its members' offsets
     dec0 double precision NOT NULL,
     flux0 real NOT NULL,                             -- the founding xsource's fluxap
-    UNIQUE (dataset, survey, field, xaid, job)
+    UNIQUE (dataset, field, xaid, job)
 );
 
 CREATE INDEX xobjects_job_idx ON xobjects (job, xaid);
-CREATE INDEX xobjects_field_idx ON xobjects (dataset, survey, field);
+CREATE INDEX xobjects_field_idx ON xobjects (dataset, field);
 
 ALTER TABLE xobjects ADD CONSTRAINT xobjects_holds_no_rows CHECK (false) NO INHERIT;
 

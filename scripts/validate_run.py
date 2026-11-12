@@ -108,8 +108,8 @@ KEYS = {
     "packets": ("dataset", "expid", "sca", "fid"),
     "refimages": ("dataset", "field", "fid"),
     "psfs": ("dataset", "fid", "sca", "kind"),
-    "objects": ("dataset", "survey", "field"),
-    "xobjects": ("dataset", "survey", "field"),
+    "objects": ("dataset", "field"),
+    "xobjects": ("dataset", "field"),
     "catalogs": ("dataset", "name", "version"),
 }
 TABLES = ("exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "diffimages", "psfs",

@@ -83,7 +83,7 @@ def _job(cur, run):
     return cur.fetchone()[0]
 
 
-def _open(cur, job, key='{"dataset": "D", "survey": "S", "field": 1}', product="objects"):
+def _open(cur, job, key='{"dataset": "D", "field": 1}', product="objects"):
     cur.execute(
         "INSERT INTO official (product, key, job, opened_group, opened_by, opened_why)"
         " VALUES (%s, %s, %s, 1, 't', 'test') RETURNING id", (product, key, job))
@@ -150,8 +150,8 @@ def test_the_catalog_views_follow_the_source_sets_bindings(conn):
         d2, d3 = _job(cur, run), _job(cur, run)
         cur.execute("SELECT create_field_child('objects', 1), create_field_child('memberships', 1)")
         for aid, ra0 in ((1, 10.0), (2, 11.0)):
-            cur.execute("INSERT INTO objects_1 (job, aid, dataset, survey, field, ra0, dec0)"
-                        " VALUES (%s, %s, 'D', 'S', 1, %s, -5.0)", (d1, aid, ra0))
+            cur.execute("INSERT INTO objects_1 (job, aid, dataset, field, ra0, dec0)"
+                        " VALUES (%s, %s, 'D', 1, %s, -5.0)", (d1, aid, ra0))
         members = [(d1, 1, 0.0, 0.0, 10.0), (d2, 1, 2e-6, -1e-6, 12.0), (d3, 1, 4e-6, 0.0, 99.0),
                    (d3, 2, 0.0, 0.0, 5.0)]
         cur.executemany("INSERT INTO memberships_1 (job, object_job, aid, field, source_job, sid, dra,"
@@ -177,6 +177,35 @@ def test_the_catalog_views_follow_the_source_sets_bindings(conn):
     assert (aid, n, objects_run, stored) == (1, 2, run, 2)
     assert (sumra, sumdec, sumflux, sumflux2) == pytest.approx((2e-6, -1e-6, 22.0, 244.0))
     assert sumra2 == pytest.approx(4e-12)
+
+
+def test_an_object_names_no_survey(conn):
+    """objects, xobjects, their field children and official views carry no
+    ``survey`` (objects-without-survey: surveys overlap, and an object's members
+    may come from more than one); the run records it. One object id in one
+    field from runs of two surveys is two rows, told apart by founding job, and
+    a job founding it twice is refused."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT create_field_child('objects', 1), create_field_child('xobjects', 1)")
+        for relation in ("objects", "objects_1", "objects_official",
+                         "xobjects", "xobjects_1", "xobjects_official"):
+            assert "survey" not in _columns(cur, relation), relation
+        founders = []
+        for survey in ("GBTDS", "HLWAS"):
+            cur.execute("INSERT INTO runs (who, why, revision, settings, survey, dataset)"
+                        " VALUES ('t', 'test', 'abc', '{}', %s, 'D') RETURNING id", (survey,))
+            founders.append(_job(cur, cur.fetchone()[0]))
+        for job in founders:
+            cur.execute("INSERT INTO objects_1 (job, aid, dataset, field, ra0, dec0)"
+                        " VALUES (%s, 7, 'D', 1, 359.9999, -5.0)", (job,))
+            cur.execute("INSERT INTO xobjects_1 (job, xaid, dataset, field, ra0, dec0, flux0)"
+                        " VALUES (%s, 7, 'D', 1, 0.0001, -5.0, 1.5)", (job,))
+        cur.execute("SELECT o.job, r.survey FROM objects_in(ARRAY[1]) o"
+                    " JOIN jobs j ON j.id = o.job JOIN runs r ON r.id = j.run ORDER BY o.job")
+        assert cur.fetchall() == [(founders[0], "GBTDS"), (founders[1], "HLWAS")]
+        with pytest.raises(errors.UniqueViolation):
+            cur.execute("INSERT INTO objects_1 (job, aid, dataset, field, ra0, dec0)"
+                        " VALUES (%s, 7, 'D', 1, 359.9999, -5.0)", (founders[0],))
 
 
 @pytest.mark.skipif(os.environ.get("CI") != "true",

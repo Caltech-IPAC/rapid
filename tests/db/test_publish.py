@@ -170,13 +170,13 @@ def _difference_attempt(tmp_path, job, founded, memberships, reads, radius=1e-4,
     names its one field as one written before the rule did.
     """
     root = tmp_path / f"job-{job}" / "attempt-1"
-    write_attempt(root, {"objects": [{"field": 1, **o, "dataset": DATASET, "survey": SURVEY}
+    write_attempt(root, {"objects": [{"field": 1, **o, "dataset": DATASET}
                                      for o in founded],
                          "memberships": memberships})
     manifest = json.loads((root / "manifest.json").read_text())
     manifest["reads"] = reads
     manifest["catalog"] = ({**FIELD_KEY, "radius": radius} if fields is None else
-                           {"dataset": DATASET, "survey": SURVEY, "fields": fields, "radius": radius})
+                           {"dataset": DATASET, "fields": fields, "radius": radius})
     (root / "manifest.json").write_text(json.dumps(manifest))
     return root.as_uri()
 
@@ -272,15 +272,15 @@ def _x_attempt(tmp_path, job, founded, memberships, xfounded, xmemberships, xrea
     catalogs' keys in the manifest."""
     root = tmp_path / f"job-{job}" / "attempt-1"
     write_attempt(root, {
-        "objects": [{"field": 1, **o, "dataset": DATASET, "survey": SURVEY} for o in founded],
+        "objects": [{"field": 1, **o, "dataset": DATASET} for o in founded],
         "memberships": memberships,
-        "xobjects": [{"field": 1, "flux0": 5.0, **o, "dataset": DATASET, "survey": SURVEY}
+        "xobjects": [{"field": 1, "flux0": 5.0, **o, "dataset": DATASET}
                      for o in xfounded],
         "xmemberships": xmemberships})
     manifest = json.loads((root / "manifest.json").read_text())
     manifest["reads"] = xreads
     for key in ("catalog", "xcatalog"):
-        manifest[key] = {"dataset": DATASET, "survey": SURVEY, "fields": fields, "radius": 1e-4}
+        manifest[key] = {"dataset": DATASET, "fields": fields, "radius": 1e-4}
     (root / "manifest.json").write_text(json.dumps(manifest))
     return root.as_uri()
 

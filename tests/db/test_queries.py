@@ -25,7 +25,7 @@ import pytest
 
 from rapidpipe.science.crossmatch.catalog import new_object_id
 from tests.db.proof.fixture import (
-    CURRENT, DATASET, FID, FIELD, SCAS, SURVEY, World, image_key, position,
+    CURRENT, DATASET, FID, FIELD, SCAS, World, image_key, position,
 )
 
 QUERIES = Path(__file__).resolve().parents[2] / "database" / "queries.sql"
@@ -106,7 +106,7 @@ def _background(w: World, run: int) -> None:
         {"product": "refimages", "key": {"dataset": DATASET, "field": field, "fid": FID},
          "binding": None} for field in fields])
     founder = w.job(run, "difference", {"field": FIELD + 1}, {"objects": [
-        {"aid": i, "dataset": DATASET, "survey": SURVEY, "field": FIELD + 1,
+        {"aid": i, "dataset": DATASET, "field": FIELD + 1,
          "ra0": 100.0 + 0.1 * i, "dec0": 40.0} for i in range(BACKGROUND)]})
     # Official through a bound source set's memberships, as the view defines them.
     w.job(run, "difference", {"field": FIELD + 1}, {"memberships": [
@@ -157,7 +157,7 @@ def world(connect, tmp_path):
 
     ra, dec = position(SCAS[0], 0)
     params = {
-        "dataset": DATASET, "survey": SURVEY, "field": FIELD, "fid": FID, "expid": 1,
+        "dataset": DATASET, "field": FIELD, "fid": FID, "expid": 1,
         "sca": SCAS[0], "object_job": made["differences"][(1, SCAS[0])], "aid": new_object_id(ra, dec),
         "source_job": made["differences"][(1, SCAS[0])], "sid": 0,
         "packet_job": made["packets"][(2, SCAS[0])],

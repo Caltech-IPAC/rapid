@@ -37,7 +37,7 @@ SURVEY, DATASET, FIELD, FID = "S", "D", 1, 1
 SCAS = (1, 2)
 EPOCHS = (1, 2)
 NSOURCES = 24
-FIELD_KEY = {"dataset": DATASET, "survey": SURVEY, "field": FIELD}
+FIELD_KEY = {"dataset": DATASET, "field": FIELD}
 #: The match radius, degrees: 0.36 arcseconds, far below the sources' 7-arcsecond spacing.
 RADIUS = 1e-4
 
@@ -156,7 +156,7 @@ class World:
         epoch_rows = associate_epoch({aid: (owner, ra0, dec0) for owner, aid, ra0, dec0 in read},
                                      sources, job=job, radius=RADIUS)
         outputs = {"diffimages": [diffimage], "sources": sources,
-                   "objects": [{**o, "dataset": DATASET, "survey": SURVEY, "field": FIELD}
+                   "objects": [{**o, "dataset": DATASET, "field": FIELD}
                                for o in epoch_rows.founded],
                    "memberships": [{**m, "field": FIELD} for m in epoch_rows.memberships]}
         root = self.root / f"job-{job}" / "attempt-1"
@@ -164,7 +164,7 @@ class World:
         manifest = json.loads((root / "manifest.json").read_text())
         manifest["reads"] = [{"product": "objects", "key": FIELD_KEY, "source_job": owner}
                              for owner in sorted({r[0] for r in read})]
-        manifest["catalog"] = {"dataset": DATASET, "survey": SURVEY, "fields": [FIELD],
+        manifest["catalog"] = {"dataset": DATASET, "fields": [FIELD],
                                "radius": RADIUS}
         (root / "manifest.json").write_text(json.dumps(manifest))
         if published:

@@ -49,7 +49,7 @@ RUN_SETTINGS = {"packet": {**SETTINGS, "ned_match": False, "lvs_match": False,  
                            "rb_threshold": 0.5134, "rb_version": ""},
                 "difference": {"rubrat": {"model_prefix": "", "model_key": "rubrat/m-1"}}}
 IMAGE_KEY = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 8}
-OBJECT_KEY = {"dataset": DATASET, "survey": SURVEY, "field": FIELD}
+OBJECT_KEY = {"dataset": DATASET, "field": FIELD}
 #: An exposures row's Roman observation identifiers, by column.
 IDENTIFIERS = {"execution_plan": 1, "pass": 4, "segment": 1, "observation": 1, "visit": 1,
                "exposure": 1, "visit_id": "0034201004001001001",
@@ -142,7 +142,7 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
                                     "filename": (tmp_path / "e1" / "refcat.txt").as_uri()}]
     ra, dec = tables["sources"][0]["ra"], tables["sources"][0]["dec"]
     # The trigger's catalog rows, as its difference job publishes them beside its sources.
-    tables["objects"] = [{"aid": 100, "dataset": DATASET, "survey": SURVEY, "field": FIELD,
+    tables["objects"] = [{"aid": 100, "dataset": DATASET, "field": FIELD,
                           "ra0": ra, "dec0": dec}]
     tables["memberships"] = [{"object_job": imported, "aid": 100, "field": FIELD,
                               "source_job": imported, "sid": 1,
@@ -157,7 +157,7 @@ def packet_job(conn, tmp_path, flags: int = 0, refcat_row: bool = True, program_
     if xsources is not None:
         members = [x for x in xsources if x.get("member")]
         tables["xsources"] = [{k: v for k, v in x.items() if k != "member"} for x in xsources]
-        tables["xobjects"] = [{"xaid": 200 + x["xsid"], "dataset": DATASET, "survey": SURVEY,
+        tables["xobjects"] = [{"xaid": 200 + x["xsid"], "dataset": DATASET,
                                "field": FIELD, "ra0": x["ra"], "dec0": x["dec"], "flux0": x["fluxap"]}
                               for x in members]
         tables["xmemberships"] = [{"object_job": imported, "xaid": 200 + x["xsid"], "field": FIELD,
