@@ -56,6 +56,16 @@ jobs:
           fi
           docker exec "$cid" apt-get update -qq
           docker exec "$cid" apt-get install -y --no-install-recommends postgresql-18-q3c
+          # The Q3C package can require a newer server than the image runs, and installing it
+          # upgrades the server's files under the running one, which then fails to load its own
+          # plpgsql.so (18.6 against 18.7, 2026-11-12). A restart runs the installed server.
+          docker restart "$cid"
+          for _ in $(seq 60); do
+            docker exec "$cid" pg_isready -U postgres -q && break
+            sleep 1
+          done
+          docker exec "$cid" pg_isready -U postgres
+          docker exec "$cid" postgres --version
 
       - name: install postgresql client and pgbouncer
         # pgbouncer: tests/db/test_publish_pool.py runs its own, a pool of three, in front of
