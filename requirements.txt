@@ -20,9 +20,11 @@ boto3>=1.34
 # (imported at module scope; nothing else in rapidpipe does). The pipeline image's conda environment carries it.
 fastavro>=1.9
 # The solar-system match (rapidpipe.science.alerts.kona, dev's KONA) propagates the MPC
-# orbits with kete, imported on first use; the 1.x line is IPAC's (table_to_states in
-# kete.mpc; 3.x moved it). The pipeline image's conda environment must carry it.
-kete>=1.1.0,<2
+# orbits with kete, imported on first use. The pipeline image's environment must carry it.
+# TODO (Emily, 2026-11-12): back to IPAC's 1.x line (kete>=1.1.4,<2, Caltech-IPAC/kete)
+# once it installs on the image's Python 3.14; its wheels stop at 3.13 and its
+# requires-python is <3.14, so 3.3.0 (stable-ABI wheels) for now. kona.py runs on either.
+kete==3.3.0
 # The difference stage's PSF-fit catalogs (rapidpipe.science.difference.psfcat)
 # import photutils lazily, inside the fitting functions, so importing the
 # stage never requires it; whatever environment runs difference with real

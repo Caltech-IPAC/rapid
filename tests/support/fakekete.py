@@ -147,8 +147,20 @@ class horizons:  # noqa: N801 - kete's module name
         raise RuntimeError("the fake kete has no network: give ingest_day a table through the test")
 
 
-class mpc:  # noqa: N801 - kete's module name
-    @staticmethod
-    def table_to_states(table):
-        return [State(d, None, Vector((1.0, 0.0, 0.0), ra=ra, dec=dec), Vector((0.0, 0.0, 0.0)))
-                for d, ra, dec in zip(table.desig, table.ra, table.dec)]
+#: The epoch the fake gives every orbit, inside kona.KERNEL_JD_RANGE; a table may carry its
+#: own ``jd`` list to put an orbit outside it.
+EPOCH_JD = 2461200.5
+
+
+def _table_to_states(table):
+    jds = getattr(table, "jd", None) or [EPOCH_JD] * len(table.desig)
+    return [State(d, jd, Vector((1.0, 0.0, 0.0), ra=ra, dec=dec), Vector((0.0, 0.0, 0.0)))
+            for d, jd, ra, dec in zip(table.desig, jds, table.ra, table.dec)]
+
+
+class conversion:  # noqa: N801 - kete's module name, where 2.x and 3.x keep table_to_states
+    table_to_states = staticmethod(_table_to_states)
+
+
+class mpc:  # noqa: N801 - kete's module name; 1.x keeps table_to_states here
+    table_to_states = staticmethod(_table_to_states)

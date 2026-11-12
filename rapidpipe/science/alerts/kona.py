@@ -31,6 +31,17 @@ degree radius; the H and G table is read from the day's copy, never
 fetched in the packet job; nothing is written back to the ASDF (`dev`
 disabled that too). kete is imported on first use, so the alerts package
 loads without it.
+
+TODO (Emily, 2026-11-12): return to IPAC's kete 1.x line (Caltech-IPAC/kete,
+the line `dev` runs and the one carrying Joe's MPC-epoch TT fix, 1.1.4)
+once it is installable in the pipeline image: as of 2026-11-12 its wheels
+stop at CPython 3.13 and its ``requires-python`` is ``<3.14`` while the
+image is on 3.14, so ``requirements.txt`` pins kete 3.3.0 (stable-ABI
+wheels). The port runs on either line: :func:`_table_to_states` is the one
+call that moved (``mpc.table_to_states`` became ``conversion.table_to_states``
+in 2.0.0); every other call has the same signature on both. A day's
+states parquet is read by the kete that wrote it, so switching lines means
+ingesting from that day on, not re-reading old days.
 """
 
 from __future__ import annotations
@@ -59,6 +70,13 @@ DEFAULT_G_PARAM = 0.15
 #: `dev`'s cone radius about the chip, degrees: one SCA is ~0.125 degrees across.
 CONE_RADIUS_DEG = 0.15
 
+#: The Julian dates kete's core planetary kernels (de440s) cover, 1849-12-26 to 2150-01-22. An
+#: orbit whose epoch falls outside (a few hundred ancient comets in the MPC table, "-146 P1"
+#: and the like) cannot be propagated ("SPK files are missing information ... at JD ...",
+#: observed on kete 3.3.0 at JD 2390520.5) and is left out of a day's states, counted in
+#: its record.
+KERNEL_JD_RANGE = (2396758.5, 2506352.5)
+
 #: A day's files under ``ss/<yyyymmdd>/``: kete's propagated states, the H and G parameters by
 #: designation, and the record.
 STATES_NAME = "states.parquet"
@@ -80,6 +98,14 @@ def _kete():
     """kete, imported on first use."""
     import kete
     return kete
+
+
+def _table_to_states(k, orbits):
+    """kete's orbit table to states: ``conversion.table_to_states`` (2.x, 3.x) or ``mpc.table_to_states`` (1.x)."""
+    conversion = getattr(k, "conversion", None)
+    if conversion is not None and hasattr(conversion, "table_to_states"):
+        return conversion.table_to_states(orbits)
+    return k.mpc.table_to_states(orbits)
 
 
 # ---------------------------------------------------------------------------
@@ -199,15 +225,17 @@ def ingest_day(dest: str, day: str, cache_dir: str | None = None) -> dict:
     store = Store(_root(dest))
     if store.exists(f"{day}/{SS_INFO}"):
         return json.loads(store.read_text(f"{day}/{SS_INFO}"))
-    k = _kete()
-    if cache_dir:
+    if cache_dir:                    # before the import: kete fetches its core kernels at import
         os.makedirs(cache_dir, exist_ok=True)
         os.environ["KETE_CACHE_DIR"] = cache_dir
+    k = _kete()
     fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     orbits = k.horizons.fetch_known_orbit_data()
-    states = k.mpc.table_to_states(orbits)
+    states = _table_to_states(k, orbits)
+    lo, hi = KERNEL_JD_RANGE
+    placeable = [s for s in states if lo <= float(s.jd) <= hi]
     epoch = noon_jd(day)
-    moved = k.propagate_n_body(states, epoch)
+    moved = k.propagate_n_body(placeable, epoch)
     with tempfile.TemporaryDirectory(prefix="kona-") as tmp:
         local = Path(tmp) / STATES_NAME
         k.SimultaneousStates(moved).save_parquet(str(local))
@@ -217,7 +245,8 @@ def ingest_day(dest: str, day: str, cache_dir: str | None = None) -> dict:
                        "g": pa.array([float(g) for g in orbits.G], pa.float64())})
         pq.write_table(hg, Path(tmp) / HG_NAME)
         store.put_bytes(f"{day}/{HG_NAME}", (Path(tmp) / HG_NAME).read_bytes())
-    record = {"release": day, "epoch_jd": epoch, "n_objects": len(moved), "fetched_at": fetched_at,
+    record = {"release": day, "epoch_jd": epoch, "n_objects": len(moved),
+              "n_dropped_epoch": len(states) - len(placeable), "fetched_at": fetched_at,
               "tool": "rapidpipe.science.alerts.kona", "complete": True}
     store.write_text(f"{day}/{SS_INFO}", json.dumps(record, indent=1))
     return record
