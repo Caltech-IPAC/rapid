@@ -76,7 +76,7 @@ SEL = loop.Selection.parse("F146", "8", "all")
 SETTINGS = {"intake": {"source_root": "s3://bucket/l2/", "unsigned": True},
             "reference": {"selection": {"min_frames": 2}},
             "packet": {"forced_window_days": 30.0, "gaia_match": True, "ned_match": False,
-                       "lvs_match": False}, "kafka": {}}
+                       "lvs_match": False, "ss_match": False}, "kafka": {}}
 
 
 def stem(p: int, v: int, e: int, sca: int = 8) -> str:
@@ -533,14 +533,19 @@ def test_a_packet_job_names_every_switched_on_catalog_and_a_missing_one_is_a_usa
     ned = {"key": {"dataset": D, "name": "ned", "version": "36.1"}, "job": 13}
     lvs = {"key": {"dataset": D, "name": "lvs", "version": "20260424"}, "job": 14}
     gaia = {"key": {"dataset": D, "name": "gaia", "version": "DR3"}, "job": 12}
-    on = {**SETTINGS, "packet": {**SETTINGS["packet"], "ned_match": True, "lvs_match": True}}
-    # all three on and official: named in order, gaia, ned, lvs
-    subs, _ = loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs, "ned": ned}), [], SEL)
+    ss = {"key": {"dataset": D, "name": "ss", "version": "rolling"}, "job": 15}
+    on = {**SETTINGS, "packet": {**SETTINGS["packet"], "ned_match": True, "lvs_match": True, "ss_match": True}}
+    # all four on and official: named in order, gaia, ned, lvs, ss
+    subs, _ = loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs, "ned": ned, "ss": ss}),
+                        [], SEL)
     named = [i["key"]["name"] for i in stages(subs, "packet")[0]["inputs"] if i["product"] == "catalogs"]
-    assert named == ["gaia", "ned", "lvs"]
+    assert named == ["gaia", "ned", "lvs", "ss"]
+    # ss on but not official: refused like the others
+    with pytest.raises(loop.NotFound, match="named ss for the packet stage, and .*ss_match is on"):
+        loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs, "ned": ned}), [], SEL)
     # ned on but not official: refused as a usage error, naming the switch
     with pytest.raises(loop.NotFound, match="named ned for the packet stage, and .*ned_match is on"):
-        loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs}), [], SEL)
+        loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs, "ss": ss}), [], SEL)
     # ned and lvs off (the test settings' default): gaia alone, an official ned not named
     subs, _ = loop.plan(snap(**base, catalogs={"gaia": gaia, "ned": ned}), [], SEL)
     named = [i["key"]["name"] for i in stages(subs, "packet")[0]["inputs"] if i["product"] == "catalogs"]

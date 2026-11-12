@@ -1323,6 +1323,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true",
                    help="redo leaves that already have a done marker")
 
+    p = sub.add_parser("ingest-ss", help="the MPC orbits propagated to one day's noon, with their "
+                                         "H and G, under <dest>/<day>/ (rapidpipe.science.alerts.kona)")
+    p.add_argument("--dest", required=True, help="the ss root: s3://bucket/ss or a local dir")
+    p.add_argument("--day", default=None, help="yyyymmdd (default: today, UTC)")
+    p.add_argument("--cache-dir", default=None,
+                   help="kete's download cache (SPICE kernels, the orbit table; default ~/.kete)")
+
     p = sub.add_parser("ingest-lvs", help="stream the current NED-LVS FITS into "
                                           "the store and convert it to parquet")
     p.add_argument("--dest", required=True, help="s3://bucket/prefix or a local dir")
@@ -1369,6 +1376,14 @@ def main(argv: list[str] | None = None) -> int:
                              ("leaves_done", "leaves_total", "complete", "rows", "n_files")}},
                          indent=1))
         return 1 if info["counts"]["failed"] else 0
+    if args.command == "ingest-ss":
+        from datetime import datetime, timezone
+
+        from rapidpipe.science.alerts.kona import ingest_day
+        day = args.day or datetime.now(timezone.utc).strftime("%Y%m%d")
+        record = ingest_day(args.dest, day, cache_dir=args.cache_dir)
+        print(json.dumps(record))
+        return 0
     if args.command == "ingest-lvs":
         info = ingest_lvs(args.dest, url=args.url, force=args.force)
         print(json.dumps({k: info.get(k) for k in

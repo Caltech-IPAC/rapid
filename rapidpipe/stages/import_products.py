@@ -18,9 +18,15 @@ The job's scope names what to import, relative to ``source_dir``::
      "psf": {"kind": "science", "path": "<science-image PSF>"},
      "gaia": {"version": "DR3", "prefix": "<the Gaia mirror's prefix>"},
      "ned": {"version": "36.1_20260527_v2", "prefix": "<the NED copy's prefix>"},
-     "lvs": {"version": "20260424", "prefix": "<the same prefix: lvs/ is under it>"}}
+     "lvs": {"version": "20260424", "prefix": "<the same prefix: lvs/ is under it>"},
+     "ss": {"version": "rolling", "prefix": "<the ss root: every day's predictions under it>"}}
 
 Every key is optional, ``source_dir`` too when only catalogs are given.
+``ss`` registers the solar-system predictions' root once per dataset
+(``rapidpipe.science.alerts.kona``): the days ``ingest-ss`` writes under
+it are found by date at match time, so a new day needs no registration;
+the check is that at least one day with its record is there, and the
+manifest records how many and the oldest and newest.
 ``epochs`` holds at most one exposure, because a source set's job binds
 one key of ``sources`` (``schema.sql``). The ids are the source system's
 and are kept as they are in the id columns.
@@ -198,6 +204,14 @@ def _mirror(kind: str, prefix: str, partial: bool = False) -> tuple[str, dict]:
     not match).
     """
     url = prefix if prefix.startswith(("s3://", "file://")) else Path(prefix).resolve().as_uri()
+    if kind == "ss":                 # the daily predictions' root: registered once, read by day
+        from rapidpipe.science.alerts.kona import SS_RELEASE, read_days
+        days = read_days(url)
+        if not days:
+            raise ValueError(f"{prefix}: no day with a record under it; not an ss root "
+                             "(python -m rapidpipe.science.catalogs.store ingest-ss)")
+        return url.rstrip("/") + "/", {"release": SS_RELEASE, "days": len(days), "oldest": days[0],
+                                       "newest": days[-1], "complete": True}
     store = Store(mirror_root(url))
     required, record_file = {"gaia": (("partition_info.csv", GAIA_INFO), GAIA_INFO),
                              "ned": ((MANIFEST_NAME,), MANIFEST_NAME),

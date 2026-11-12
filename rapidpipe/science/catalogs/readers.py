@@ -479,11 +479,12 @@ def gaia_reader(location: str, cache_row_groups: int = 32) -> GaiaReader:
 
 
 #: The catalogs the packet stage reads, by the ``catalogs`` row's name: its
-#: reader and the columns it delivers.
-CATALOG_KINDS = ("gaia", "ned", "lvs")
+#: reader and the columns it delivers; ``ss`` (the daily solar-system
+#: predictions, ``rapidpipe.science.alerts.kona``) is read by day, not by cone.
+CATALOG_KINDS = ("gaia", "ned", "lvs", "ss")
 
 
-def catalog_reader(name: str, location: str) -> "GaiaReader | Hp6NedReader | LvsReader":
+def catalog_reader(name: str, location: str) -> "GaiaReader | Hp6NedReader | LvsReader | Any":
     """The reader for a ``catalogs`` row: by its name (the kind) over its location."""
     root = mirror_root(location)
     if name == "gaia":
@@ -492,6 +493,9 @@ def catalog_reader(name: str, location: str) -> "GaiaReader | Hp6NedReader | Lvs
         return Hp6NedReader(root)
     if name == "lvs":
         return LvsReader(root)
+    if name == "ss":
+        from rapidpipe.science.alerts.kona import SsReader
+        return SsReader(root)
     raise ValueError(f"catalog {name!r}: not one of {CATALOG_KINDS}")
 
 

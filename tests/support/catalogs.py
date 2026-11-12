@@ -11,6 +11,7 @@ stage test share one fixture shape.
 
 import json
 import math
+from pathlib import Path
 
 import healpy as hp
 import numpy as np
@@ -160,6 +161,23 @@ def write_lvs_store(root, entries, release="LVS_TEST"):
     store = nc.Store(str(root))
     store.write_table(arrow, nc.LVS_PARQUET)
     store.write_text(nc.LVS_INFO, json.dumps({"release": release, "rows": len(entries)}))
+
+
+def write_ss_store(root, day: str, objects, epoch_jd: float = 2461000.0):
+    """One day of the ``ss`` catalog as ``ingest-ss`` would write it, for the fake kete
+    (tests/support/fakekete.py): `objects` are ``(designation, ra, dec, h)`` predictions, kept
+    as JSON where kete keeps its states parquet, with the H and G table and the record."""
+    from rapidpipe.science.alerts import kona
+    root = Path(root)
+    (root / day).mkdir(parents=True, exist_ok=True)
+    (root / day / kona.STATES_NAME).write_text(json.dumps([[d, ra, dec] for d, ra, dec, _ in objects]))
+    pq.write_table(pa.table({"desig": pa.array([d for d, *_ in objects], pa.string()),
+                             "h": pa.array([h for *_, h in objects], pa.float64()),
+                             "g": pa.array([math.nan] * len(objects), pa.float64())}),
+                   root / day / kona.HG_NAME)
+    (root / day / kona.SS_INFO).write_text(json.dumps(
+        {"release": day, "epoch_jd": epoch_jd, "n_objects": len(objects), "complete": True}))
+    return root / day
 
 
 def write_gaia_store(root, entries, partition_order=3, complete=True, ref_epoch=2016.0,

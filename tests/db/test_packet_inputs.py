@@ -37,16 +37,19 @@ import pyarrow.parquet as pq
 
 from rapidpipe.foundation import change, create_job, create_run, publish, run_job
 from rapidpipe.foundation.local import local_path
+from rapidpipe.science.alerts import kona
 from rapidpipe.science.catalogs.store import gaia_from_table
 from rapidpipe.stages import packet
 from tests.db.foundation_helpers import write_attempt
 from tests.db.test_child_reads import _script
 from tests.db.test_children import xsource_rows
-from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, write_refcat
+from tests.support import fakekete
+from tests.support.catalogs import ra_offset, write_ss_store
+from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, write_l2, write_refcat
 
 SURVEY, DATASET, FIELD = "S", "D", 4658155
 #: The run's settings body: the packet table, and the real/bogus model whose version it stamps.
-RUN_SETTINGS = {"packet": {**SETTINGS, "ned_match": False, "lvs_match": False,     # gaia alone here
+RUN_SETTINGS = {"packet": {**SETTINGS, "ned_match": False, "lvs_match": False, "ss_match": False,  # gaia alone
                            "rb_threshold": 0.5134, "rb_version": ""},
                 "difference": {"rubrat": {"model_prefix": "", "model_key": "rubrat/m-1"}}}
 IMAGE_KEY = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 8}
@@ -98,7 +101,8 @@ def image_rows(directory) -> dict[str, list[dict]]:
 
 def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
                max_alerts: int | None = None, second_source: bool = False,
-               xsources: list[dict] | None = None, alert_catalog: str | None = None):
+               xsources: list[dict] | None = None, alert_catalog: str | None = None,
+               ss: bool = False):
     """A live run's packet job over one imported epoch, and the import, stray and exposure jobs.
 
     The set's xsources (rows of ``xsources`` but ``job``) are published with it: by default one
@@ -107,8 +111,13 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
     ``"member": True`` founds xobject ``200 + xsid`` holding it, and the stray set's xmembership
     joins xobject 201. ``max_alerts`` overrides the run's ``[packet] max_alerts``;
     ``alert_catalog`` sets the run's ``[packet] alert_catalog``, the retired key, for the test
-    that it is refused; None leaves it out, as the shipped settings do."""
+    that it is refused; None leaves it out, as the shipped settings do. ``ss`` switches the
+    solar-system match on: an ``ss`` catalog registered at a root holding the day of the epoch
+    with one known object 0.3" from the first xsource, and the epoch's L2 file carrying the
+    ephemeris cards (the match runs on tests/support/fakekete.py)."""
     settings = {**RUN_SETTINGS, "associate": {"xsource_flags": 0}}
+    if ss:
+        settings = {**settings, "packet": {**settings["packet"], "ss_match": True}}
     if max_alerts is not None:
         settings = {**settings, "packet": {**settings["packet"], "max_alerts": max_alerts}}
     if alert_catalog is not None:
@@ -127,11 +136,14 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
                                          "ra": pa.array([], pa.float64()),
                                          "dec": pa.array([], pa.float64())}), "gaia_test")
 
+    catalog_keys = [{"dataset": DATASET, "name": "gaia", "version": "DR3"}]
+    if ss:
+        catalog_keys.append({"dataset": DATASET, "name": "ss", "version": kona.SS_RELEASE})
     imported = create_job(conn, live, "import", {}, expects=[
         {"product": p, "key": k, "binding": None} for p, k in (
             ("l2files", IMAGE_KEY), ("diffimages", IMAGE_KEY), ("sources", IMAGE_KEY),
             ("psfs", {"dataset": DATASET, "fid": 8, "sca": 8, "kind": "science"}),
-            ("catalogs", {"dataset": DATASET, "name": "gaia", "version": "DR3"}))])
+            *[("catalogs", k) for k in catalog_keys])])
     tables = image_rows(tmp_path / "e1")
     exposures = [{**tables.pop("exposures")[0], "program_id": program_id}]
     tables["psfs"] = [{"psfid": 701, "dataset": DATASET, "fid": 8, "sca": 8, "kind": "science",
@@ -139,6 +151,13 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
                        "filename": (tmp_path / "e1" / "diffpsf.fits").as_uri()}]
     tables["catalogs"] = [{"dataset": DATASET, "name": "gaia", "version": "DR3",
                            "location": gaia.as_uri() + "/"}]
+    if ss:
+        write_l2(tmp_path / "e1" / "l2.fits", MJD[1])
+        write_ss_store(tmp_path / "ss", kona.day_of(MJD[1]),
+                       [("2024 AB", xsources[0]["ra"] - ra_offset(xsources[0]["dec"], 0.3),
+                         xsources[0]["dec"], 18.0)])
+        tables["catalogs"].append({"dataset": DATASET, "name": "ss", "version": kona.SS_RELEASE,
+                                   "location": (tmp_path / "ss").as_uri() + "/"})
     tables["refimages"] = [{"rfid": 801, "dataset": DATASET, "field": FIELD, "fid": 8,
                             "filename": (tmp_path / "e1" / "ref.fits").as_uri(), "checksum": "0" * 32}]
     if refcat_row:
@@ -171,11 +190,30 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
     inputs = [{"product": p, "key": k, "source_job": j} for p, k, j in (
         ("sources", IMAGE_KEY, imported),
         ("psfs", {"dataset": DATASET, "fid": 8, "sca": 8, "kind": "science"}, imported),
-        ("catalogs", {"dataset": DATASET, "name": "gaia", "version": "DR3"}, imported),
+        *[("catalogs", k, imported) for k in catalog_keys],
         ("refimages", {"dataset": DATASET, "field": FIELD, "fid": 8}, imported))]
     job = create_job(conn, live, "packet", {"expid": 1, "sca": 8, "fid": 8}, inputs=inputs,
                      expects=[{"product": "packets", "key": IMAGE_KEY, "binding": None}])
     return job, imported, stray, ra, dec, exposure
+
+
+def test_a_packet_job_matches_the_registered_ss_days_predictions_from_the_l2_header(connect, tmp_path,
+                                                                                    monkeypatch):
+    """The ss catalog registered once at its root: the job reads the day of the trigger, places the
+    observer from the L2 file's header, and the trigger 0.3" from the prediction is a candidate."""
+    monkeypatch.setattr(kona, "_kete", lambda: fakekete)
+    conn = connect()
+    job, founder, *_ = packet_job(conn, tmp_path, ss=True)
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+    (record,) = _records(conn, job).values()
+    assert [(m["designation"], m["predVMag"]) for m in record["ssMatches"]] == [("2024 AB", pytest.approx(23.0))]
+    assert record["ssMatches"][0]["sep"] == pytest.approx(0.3, abs=0.01)
+    assert record["diaSource"]["isSSCandidate"] is True
+    assert query(conn, "SELECT catid, catalog_job FROM external WHERE job = %s", (job,)) == [("2024 AB", founder)]
+    recorded = query(conn, "SELECT key ->> 'name' FROM job_inputs WHERE job = %s AND kind = 'input'"
+                           " AND product = 'catalogs' ORDER BY 1", (job,))
+    assert recorded == [("gaia",), ("ss",)]
 
 
 def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connect, tmp_path):
