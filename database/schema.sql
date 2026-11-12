@@ -816,11 +816,13 @@ BEGIN
 END
 $$;
 
--- field_rows of the run `run`'s jobs only: the run's filter inside each
--- child's query, so a field's rows of other runs are never returned through
--- the function (each RETURN QUERY holds its rows until the caller reads them,
--- in temp files past work_mem; throughput-record, run 228).
-CREATE FUNCTION field_run_rows(parent anyelement, fields integer[], run bigint)
+-- field_rows of the dataset `dataset` only, of every run: the dataset's
+-- filter inside each child's query, so a field's rows of other datasets are
+-- never returned through the function (each RETURN QUERY holds its rows until
+-- the caller reads them, in temp files past work_mem; throughput-record, run
+-- 228). A difference job matches every run's objects of its dataset
+-- (objects-across-runs).
+CREATE FUNCTION field_dataset_rows(parent anyelement, fields integer[], dataset text)
 RETURNS SETOF anyelement
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -830,9 +832,8 @@ BEGIN
     FOR child IN SELECT DISTINCT field_child_name(name, f) FROM unnest(fields) f
                  WHERE f IS NOT NULL ORDER BY 1 LOOP
         CONTINUE WHEN to_regclass('public.' || quote_ident(child)) IS NULL;
-        RETURN QUERY EXECUTE format('SELECT * FROM public.%I'
-                                    ' WHERE job IN (SELECT id FROM public.jobs WHERE run = $1)', child)
-            USING run;
+        RETURN QUERY EXECUTE format('SELECT * FROM public.%I WHERE dataset = $1', child)
+            USING dataset;
     END LOOP;
 END
 $$;
@@ -911,7 +912,7 @@ $$;
 
 -- <parent>_in(fields): every row in those fields' children.
 -- <parent>_of(jobs): the rows those jobs wrote, from the children they wrote.
--- <parent>_in(fields, run): the run's rows in those fields' children.
+-- <parent>_in(fields, dataset): the dataset's rows, of every run, in those fields' children.
 CREATE FUNCTION objects_in(fields integer[]) RETURNS SETOF objects
 LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::objects, fields, NULL) $$;
 CREATE FUNCTION objects_of(jobs bigint[]) RETURNS SETOF objects
@@ -937,10 +938,10 @@ LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::xobjects, fields, NULL)
 CREATE FUNCTION xobjects_of(jobs bigint[]) RETURNS SETOF xobjects
 LANGUAGE sql STABLE AS $$
     SELECT * FROM field_rows(NULL::xobjects, job_fields_of('xobjects', jobs), jobs) $$;
-CREATE FUNCTION objects_in(fields integer[], run bigint) RETURNS SETOF objects
-LANGUAGE sql STABLE AS $$ SELECT * FROM field_run_rows(NULL::objects, fields, run) $$;
-CREATE FUNCTION xobjects_in(fields integer[], run bigint) RETURNS SETOF xobjects
-LANGUAGE sql STABLE AS $$ SELECT * FROM field_run_rows(NULL::xobjects, fields, run) $$;
+CREATE FUNCTION objects_in(fields integer[], dataset text) RETURNS SETOF objects
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_dataset_rows(NULL::objects, fields, dataset) $$;
+CREATE FUNCTION xobjects_in(fields integer[], dataset text) RETURNS SETOF xobjects
+LANGUAGE sql STABLE AS $$ SELECT * FROM field_dataset_rows(NULL::xobjects, fields, dataset) $$;
 CREATE FUNCTION xmemberships_in(fields integer[]) RETURNS SETOF xmemberships
 LANGUAGE sql STABLE AS $$ SELECT * FROM field_rows(NULL::xmemberships, fields, NULL) $$;
 CREATE FUNCTION xmemberships_of(jobs bigint[]) RETURNS SETOF xmemberships
