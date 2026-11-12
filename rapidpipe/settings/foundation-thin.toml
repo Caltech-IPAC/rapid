@@ -396,7 +396,8 @@ sharplo = "0.2"
 sharphi = "1.0"
 roundlo = "-1.0"
 roundhi = "1.0"
-min_separation = "1.0"
+# 1.5, the 3x3 box on photutils 3.1, as [difference.psfcat_diffimage].
+min_separation = "1.5"
 output_psfcat_filename = "refimage_psfcat.txt"
 output_psfcat_finder_filename = "refimage_psfcat_finder.txt"
 output_psfcat_residual_filename = "refimage_psfcat_residual.fits"
@@ -730,7 +731,14 @@ sharplo = 0.2
 sharphi = 1.0
 roundlo = -1.0
 roundhi = 1.0
-min_separation = 1.0
+# The finder's local-maximum footprint is the 3x3 box by intent: dev's 1.0
+# drew it on photutils 3.0.0, whose region for a radius under 2 was larger
+# than the circle; 3.1.0 fixed that (CHANGES.rst, #2493), so 1.0 became the
+# 4-neighbour plus and 1.5 (xx**2 + yy**2 <= 2.25) is the full 3x3 box. On
+# job 109322, rows 11,930 / 16,547 (+ / -) against 3.0.0's 11,930 / 16,506;
+# the residual is 3.1's masked-pixel and off-image-centroid changes
+# (finder-3x3-neighbourhood; rapid_docs decisions.md).
+min_separation = 1.5
 output_zogy_psfcat_filename = "zogy_diffimage_masked_psfcat.txt"
 output_zogy_psfcat_finder_filename = "zogy_diffimage_masked_psfcat_finder.txt"
 output_zogy_psfcat_residual_filename = "zogy_diffimage_masked_psfcat_residual.fits"
