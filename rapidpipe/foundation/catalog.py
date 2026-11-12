@@ -11,8 +11,9 @@ the job, takes the locks of every field the job's manifest names
 (:func:`try_lock`: each field that gained an object or a membership and each
 one's neighbours, transaction-scoped advisory locks on the run and field,
 all taken or none, so two jobs founding either side of a boundary share a
-lock and serialise; a job that finds one held rolls back and tries again,
-never waiting on it while it holds a pool connection), reads the objects of the run in those fields founded
+lock and serialise; a job that finds one held (:func:`held`, or :func:`try_lock`
+refused) rolls back and tries again, never waiting on it while it holds a
+pool connection), reads the objects of the run in those fields founded
 by jobs outside the job's recorded read (:func:`between`, those published
 since the read), and :func:`attach` gives each founded object within the
 match radius of one of them to that object instead: its memberships are
@@ -65,6 +66,24 @@ def try_lock(cur, run: int, fields: list[int]) -> bool:
         return True
     cur.execute("SELECT " + " AND ".join(["pg_try_advisory_xact_lock(%s, %s)"] * len(ordered)),
                 [v for f in ordered for v in (int(run), f)])
+    return bool(cur.fetchone()[0])
+
+
+def held(cur, run: int, fields: list[int]) -> bool:
+    """Whether another transaction holds the (run, field) lock of any of ``fields``, taking none.
+
+    Read from ``pg_locks`` (a two-key advisory lock is ``classid``, ``objid``, ``objsubid`` 2), so
+    the publisher loads its unlocked tables in a try only once its fields read free, and a try
+    that finds one held has loaded nothing (publish-hold-trim). A lock taken after the read makes
+    :func:`try_lock` fail, and that try's loads roll back with it.
+    """
+    ordered = sorted({int(f) for f in fields})
+    if not ordered:
+        return False
+    cur.execute("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted"
+                " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+                " AND objsubid = 2 AND classid::bigint = %s AND objid::bigint = ANY(%s))",
+                (int(run), ordered))
     return bool(cur.fetchone()[0])
 
 

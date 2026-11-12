@@ -236,15 +236,15 @@ def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_e
         [_member(b, b, 8, 1, field=2)], [], fields=[2, 1])
     with a_conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s, 1)", (run,))
-    refused, taking = threading.Event(), object_catalog.try_lock
+    refused, looking = threading.Event(), object_catalog.held
 
-    def try_lock(cur, run, fields):
-        taken = taking(cur, run, fields)
-        if not taken:
+    def held(cur, run, fields):
+        found = looking(cur, run, fields)
+        if found:
             refused.set()
-        return taken
+        return found
 
-    monkeypatch.setattr(object_catalog, "try_lock", try_lock)
+    monkeypatch.setattr(object_catalog, "held", held)
     with ThreadPoolExecutor(1) as pool:
         pending = pool.submit(publish, b_conn, b, 1, prefix)
         assert refused.wait(10)
