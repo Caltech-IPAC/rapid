@@ -11,6 +11,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 
 import pytest
 from astropy.io import fits
@@ -122,16 +123,18 @@ def test_the_reader_lists_the_days_picks_one_by_date_and_loads_its_files(tmp_pat
 
 def test_ingest_day_writes_the_states_the_hg_table_and_the_record(tmp_path, monkeypatch):
     class Orbits:
-        desig = ["433", "2024 AB"]
-        H = [11.0, float("nan")]
-        G = [0.15, float("nan")]
-        ra = [10.0, 12.0]
-        dec = [5.0, 5.0]
+        desig = ["433", "2024 AB", "-146 P1"]
+        H = [11.0, float("nan"), float("nan")]
+        G = [0.15, float("nan"), float("nan")]
+        ra = [10.0, 12.0, 14.0]
+        dec = [5.0, 5.0, 5.0]
+        jd = [fakekete.EPOCH_JD, fakekete.EPOCH_JD, 1667909.5]   # an ancient comet: outside the kernels
     monkeypatch.setattr(fakekete.horizons, "fetch_known_orbit_data", staticmethod(lambda: Orbits()))
     with pytest.raises(ValueError, match="yyyymmdd"):
         kona.ingest_day(str(tmp_path / "ss"), "2027-10-07")
     record = kona.ingest_day(str(tmp_path / "ss"), "20271007", cache_dir=str(tmp_path / "kete"))
     assert record["n_objects"] == 2 and record["epoch_jd"] == kona.noon_jd("20271007") and record["complete"]
+    assert record["n_dropped_epoch"] == 1
     assert json.loads((tmp_path / "ss" / "20271007" / kona.SS_INFO).read_text()) == record
     assert (tmp_path / "kete").is_dir()
     reader = kona.SsReader(str(tmp_path / "ss"))
@@ -141,6 +144,32 @@ def test_ingest_day_writes_the_states_the_hg_table_and_the_record(tmp_path, monk
     Orbits.desig = ["433"]
     assert kona.ingest_day(str(tmp_path / "ss"), "20271007") == record
     assert [s.desig for s in reader.load("20271007")[0]] == ["433", "2024 AB"]
+
+
+def test_the_orbit_table_converts_on_either_kete_line():
+    """kete 2.0.0 moved mpc.table_to_states to conversion.table_to_states; the port takes whichever
+    the installed kete has (requirements.txt pins 3.3.0 until IPAC's 1.x installs on 3.14)."""
+    class Orbits:
+        desig, ra, dec = ["433"], [10.0], [5.0]
+
+    class OldKete:
+        mpc = fakekete.mpc
+    assert [s.desig for s in kona._table_to_states(fakekete, Orbits())] == ["433"]
+    assert [s.desig for s in kona._table_to_states(OldKete, Orbits())] == ["433"]
+
+
+def test_ingest_day_sets_the_cache_directory_before_importing_kete(tmp_path, monkeypatch):
+    """kete fetches its core kernels at import, into KETE_CACHE_DIR: the ingest sets it first."""
+    seen = {}
+
+    def importer():
+        seen["cache"] = os.environ.get("KETE_CACHE_DIR")
+        return fakekete
+    monkeypatch.setattr(kona, "_kete", importer)
+    monkeypatch.setattr(fakekete.horizons, "fetch_known_orbit_data",
+                        staticmethod(lambda: type("O", (), {"desig": [], "H": [], "G": [], "ra": [], "dec": []})()))
+    kona.ingest_day(str(tmp_path / "ss"), "20271007", cache_dir=str(tmp_path / "kete"))
+    assert seen["cache"] == str(tmp_path / "kete")
 
 
 def test_the_import_stage_registers_an_ss_root_by_its_days_and_refuses_an_empty_one(tmp_path):
