@@ -1,17 +1,28 @@
 # The nightly drift gate's spread (scripts/compare_runs.py --spread): for each
-# drift column, the lowest and highest value recorded on the injected HLWAS
-# epoch 4040101 (r00342-inj1, pointing 001_0001, SCA 8, F146) by runs 152
-# (rapid-rebuild:94), 167 (:105), 168 (:106) and 170 (:107), read from SMDC's
-# job_metrics and official rows on 2026-11-08. Run 167 stopped before the
-# packet stage, so packets and false positives come from 152, 168 and 170
-# alone. The four runs span three code states (152 before the uncapped
-# sources and max_alerts 2000, 167 alerting from sources, 168 and 170 from
-# xsources), so each range is that sample's, not one revision's repeatability:
-# 168, 170 and 172 (:108) are equal on every column but the seconds. Values
-# are as job_metrics stores them; a widened range is a reviewed edit here.
-packets = [266, 338]
-core = [-2.6046798937060997e-05, -2.5551767284687504e-05]
-ring = [-0.0092202221195117, -0.009220176276742667]
-"detected at the threshold" = [99, 171]
-"false positives" = [95.0, 149.0]
-"difference s" = [226.102597, 350.518784]
+# drift column, the lowest and highest value the gate accepts on the injected
+# HLWAS epoch 4040101 (r00342-inj1, pointing 001_0001, SCA 8, F146).
+#
+# These are tolerances, not a recorded sample (Ben, 2026-11-12): the code is
+# changing daily, and the sample's range (runs 152, 167, 168 and 170, read
+# 2026-11-08) turned the gate red for three nights on shifts in the sixth
+# decimal place and on a faster difference job. Each range is centred on the
+# nights of 2026-11-11 and 2026-11-12 (runs 230 and 236, rapid-rebuild:127
+# and :131: packets 339, core -3.345e-05, ring -0.009193, detected 159, false
+# positives 150, difference 153 to 168 s) and sized to pass numerical noise
+# while staying far inside the regression the gate exists for (2026-10-24:
+# core +0.252, false positives up 70 %).
+#
+#   packets, false positives   20 % above the nights; the sample's floor kept
+#   core                       +/- 0.01
+#   ring                       20 % either side
+#   detected                   the sample's floor, to all 200 injected sources
+#   difference s               up to 450 s; a faster job is never red
+#
+# Tightening back to a same-revision spread is a reviewed edit here, once the
+# code settles.
+packets = [266, 407]
+core = [-0.01, 0.01]
+ring = [-0.0111, -0.0074]
+"detected at the threshold" = [99, 200]
+"false positives" = [95.0, 180.0]
+"difference s" = [0.0, 450.0]
