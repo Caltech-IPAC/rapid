@@ -195,6 +195,14 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert [p["midpointMjd"] for p in a["prvDiaSources"]] == [MJD[1]]
     assert a["diaObject"]["nDiaSources"] == 2
     assert records[2]["prvDiaSources"] is None and records[2]["diaObject"]["nDiaSources"] == 1
+    # the F146 statistics over A's two detections up to the trigger (epoch 3's excluded), B's one;
+    # the mean position from the object's sums
+    obj = a["diaObject"]
+    assert (obj["F146PsfFluxNdata"], obj["F146PsfFluxMean"], obj["F146PsfFluxSigma"]) == (2, 500.0, 0.0)
+    assert obj["F146PsfFluxMaxSlope"] == 0.0 and obj["F146PsfFluxErrMean"] == 10.0
+    assert obj["F184PsfFluxNdata"] is None and obj["F184PsfFluxMean"] is None
+    assert obj["meanRa"] == pytest.approx(obj["ra0"], abs=1e-9) and obj["meanDec"] == pytest.approx(obj["dec0"], abs=1e-9)
+    assert records[2]["diaObject"]["F146PsfFluxNdata"] == 1 and records[2]["diaObject"]["F146PsfFluxMean"] == 500.0
     assert [m["sourceId"] for m in a["gaiaMatches"]] == [42] and records[2]["gaiaMatches"] == []
     assert [m["prefName"] for m in a["nedMatches"]] == ["HOST-A"] and records[2]["nedMatches"] == []
     assert a["nedMatches"][0]["z"] == pytest.approx(0.03) and a["nedMatches"][0]["sep"] == pytest.approx(9.0, abs=0.02)

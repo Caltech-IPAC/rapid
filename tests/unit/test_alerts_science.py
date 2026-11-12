@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 
 import fastavro
 import numpy as np
@@ -184,6 +185,39 @@ def test_assemble_alert_is_devs_packet():
         assemble.load_schema())
     assert decoded["diaSourceId"] == 1 and decoded["cutoutDifference"] == b"FITS"
 
+
+
+def _flux_block(dia_object, band):
+    return {k: v for k, v in dia_object.items() if k.startswith(band + "PsfFlux")}
+
+
+def test_the_diaobject_carries_the_per_filter_statistics_of_the_detections():
+    """The trigger and its history, grouped by filter; a filter with no detection ships null."""
+    earlier = _source(2, mjdobs=61200.0, aid=900, fluxfit=200.0, fluxerr=4.0)     # F184, as the trigger
+    other = _source(3, mjdobs=61100.0, aid=900, band="W146", fluxfit=50.0, fluxerr=5.0, isdiffpos=False)
+    alert = _alert(prv=[earlier, other])
+    obj = alert["diaObject"]
+    assert _flux_block(obj, "F184") == {
+        "F184PsfFluxMean": pytest.approx(150.0), "F184PsfFluxMeanErr": pytest.approx(math.hypot(2.0, 4.0) / 2),
+        "F184PsfFluxSigma": pytest.approx(50.0), "F184PsfFluxNdata": 2, "F184PsfFluxMin": 100.0,
+        "F184PsfFluxMax": 200.0, "F184PsfFluxMaxSlope": pytest.approx(100.0 / 73.125),
+        "F184PsfFluxErrMean": pytest.approx(3.0)}
+    assert _flux_block(obj, "F146") == {       # the negative detection, negated, in Roman's spelling
+        "F146PsfFluxMean": -50.0, "F146PsfFluxMeanErr": 5.0, "F146PsfFluxSigma": 0.0, "F146PsfFluxNdata": 1,
+        "F146PsfFluxMin": -50.0, "F146PsfFluxMax": -50.0, "F146PsfFluxMaxSlope": None, "F146PsfFluxErrMean": 5.0}
+    assert all(v is None for v in _flux_block(obj, "F062").values())
+    assert obj["meanRa"] is None and obj["meanDec"] is None       # the record carried no position sums
+
+
+def test_the_statistics_are_over_the_detections_given_not_the_windowed_history():
+    old = _source(2, mjdobs=60000.0, aid=900, fluxfit=300.0, fluxerr=4.0)
+    source = _source(1)
+    obj = ObjectRecord.from_row(_object_row(900, 1, meanra=269.4501, meandec=-28.7701), strict=True)
+    alert = assemble.assemble_alert(source, obj, [], ss_matches=None, ref_matches=None, ned_matches=None,
+                                    cutouts=Cutouts(), time_proc=61274.0, detections=[source, old])
+    assert alert["diaObject"]["F184PsfFluxNdata"] == 2 and alert["diaObject"]["F184PsfFluxMean"] == 200.0
+    assert alert["diaObject"]["firstDiaSourceMjd"] == 61273.125                 # first/last stay the window's
+    assert (alert["diaObject"]["meanRa"], alert["diaObject"]["meanDec"]) == (269.4501, -28.7701)
 
 
 def test_the_diasource_carries_the_exposures_identifiers_and_the_survey():

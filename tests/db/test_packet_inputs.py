@@ -405,6 +405,14 @@ def test_an_xsources_packet_set_is_made_from_the_xsources_their_xobjects_and_xme
     source = aperture["diaSource"]
     assert (source["psfFlux"], source["psfFluxErr"], source["apFlux"]) == (60.0, 10.0, 60.0)
     assert (source["psfFitFlags"], source["psfRChi2"]) == (0, 1.0)
+    # the diaObject's per-filter statistics over the detections read (fid 8 is W146, F146 on the
+    # wire) and its mean position from the xobject's sums
+    for record, flux, err in ((fitted, 400.0, 10.0), (aperture, 60.0, 10.0)):
+        obj = record["diaObject"]
+        assert (obj["F146PsfFluxNdata"], obj["F146PsfFluxMean"], obj["F146PsfFluxMeanErr"]) == (1, flux, err)
+        assert obj["F146PsfFluxSigma"] == 0.0 and obj["F146PsfFluxMaxSlope"] is None
+        assert obj["F184PsfFluxNdata"] is None
+        assert obj["meanRa"] == pytest.approx(obj["ra0"], abs=1e-9) and obj["meanDec"] is not None
     recorded = query(conn, "SELECT product, source_job FROM job_inputs WHERE job = %s"
                            " AND kind = 'input' ORDER BY product, source_job", (job,))
     assert ("sources", founder) in recorded and ("sources", stray) not in recorded

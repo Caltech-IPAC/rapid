@@ -80,6 +80,7 @@ from rapidpipe.science.alerts.param_registry import (
 from rapidpipe.science.alerts.records import (
     AssociationError, Cutouts, ForcedPhot, GaiaMatch, LvsMatch, NedMatch, ObjectRecord,
     RefMatch, Source, SSMatch)
+from rapidpipe.science.statistics.lightcurve import flux_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,8 @@ def assemble_alert(source: Source, obj: ObjectRecord, prv: list[Source], *,
                    gaia_matches: list[GaiaMatch] | None = None,
                    forced: list[ForcedPhot] | None = None,
                    time_proc: float | None = None,
-                   reliability: tuple[float | None, str | None] = (None, None)) -> dict[str, Any]:
+                   reliability: tuple[float | None, str | None] = (None, None),
+                   detections: list[Source] | None = None) -> dict[str, Any]:
     """`dev`'s ``assemble_alert_for_source``, with the provider's answers passed in.
 
     ``ss_matches`` must come from :func:`~rapidpipe.science.alerts.crossmatch.associate_ss`
@@ -243,6 +245,12 @@ def assemble_alert(source: Source, obj: ObjectRecord, prv: list[Source], *,
     None when that cross-match did not run, as in `dev`. ``reliability`` is
     the run's ``(rb_threshold, rb_version)``, stamped on the trigger when it
     was scored; prior detections keep both null, as in `dev`.
+
+    ``detections`` is every detection of the object up to and including
+    the trigger, the set ``nDiaSources`` counts, over which the diaObject's
+    per-filter flux statistics are computed (rebuild, not `dev`: `dev` ships
+    them null); it defaults to the trigger and ``prv``, the same set when
+    the history is within the window.
     """
     source.aid = obj.aid
     if time_proc is None:
@@ -257,6 +265,10 @@ def assemble_alert(source: Source, obj: ObjectRecord, prv: list[Source], *,
     obj.first_mjd = min(mjds)
     obj.last_mjd = max(mjds)
     obj.validity_mjd = source.mjdobs
+    if detections is None:
+        detections = [source, *prv]
+    obj.flux_stats = flux_statistics((d.band, d.mjdobs, d.fluxfit, d.fluxerr, d.isdiffpos)
+                                     for d in detections)
     dia_object = build_dia_object(obj)
 
     prv_dia_forced_sources = ([build_dia_forced_source(fp) for fp in forced]
