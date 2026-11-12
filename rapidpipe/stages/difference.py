@@ -110,8 +110,8 @@ those catalogs, both signs scored by RuBR-AT: :func:`xsources_set`,
 official with it),
 ``objects`` and ``memberships`` (the association, :func:`associate`: the
 plan's amendment of 2026-10-24 moved it here from the retired associate
-stage; the job reads the objects of its run in its sources' fields and
-their neighbours as they stand, records that read in the manifest's
+stage; the job reads its dataset's objects of every run in its sources'
+fields and their neighbours as they stand, records that read in the manifest's
 ``reads``, matches its sources in memory, each founding in its own field
 wherever on the image it falls (the field rule, runbook part 12 step 1),
 and publishes the objects it founded and its memberships, which the
@@ -269,10 +269,10 @@ REFERENCE_CATALOG_COLUMNS = ["ALPHAWIN_J2000", "DELTAWIN_J2000", "FLUX_AUTO", "F
                              "FLUXERR_APER_4"]
 
 #: `dev`'s pass 2 uses the field's inclusion cone only for a tile with this many neighbours.
-#: The fields' objects of the job's run as they stand: every published difference job's founded ones,
-#: read from those fields' children of ``objects`` (``objects_in`` of the run), never the parent.
-OBJECTS_SQL = ("SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects_in(%s::integer[], %s) o"
-               " WHERE o.dataset = %s")
+#: The fields' objects of the job's dataset as they stand: every published difference job's founded
+#: ones, of every run (objects-across-runs), read from those fields' children of ``objects``
+#: (``objects_in`` of the dataset), never the parent.
+OBJECTS_SQL = "SELECT o.job, o.aid, o.field, o.ra0, o.dec0 FROM objects_in(%s::integer[], %s) o"
 
 OBJECTS_SCHEMA = pa.schema([
     ("aid", pa.int64()), ("dataset", pa.string()), ("field", pa.int32()),
@@ -284,9 +284,9 @@ MEMBERSHIPS_SCHEMA = pa.schema([
     ("dra", pa.float64()), ("ddec", pa.float64()), ("flux", pa.float64()),
 ])
 
-#: The fields' xobjects of the job's run as they stand, from those fields' children of ``xobjects``.
-XOBJECTS_SQL = ("SELECT o.job, o.xaid, o.field, o.ra0, o.dec0 FROM xobjects_in(%s::integer[], %s) o"
-                " WHERE o.dataset = %s")
+#: The fields' xobjects of the job's dataset as they stand, of every run, from those fields' children
+#: of ``xobjects``.
+XOBJECTS_SQL = "SELECT o.job, o.xaid, o.field, o.ra0, o.dec0 FROM xobjects_in(%s::integer[], %s) o"
 
 XOBJECTS_SCHEMA = pa.schema([
     ("xaid", pa.int64()), ("dataset", pa.string()), ("field", pa.int32()),
@@ -1108,14 +1108,14 @@ def run(job: JobContext) -> None:
 
 
 def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[list, dict, dict]:
-    """Match the epoch's sources against their fields' objects of the run as they stand; write the rows.
+    """Match the epoch's sources against their fields' objects of the dataset as they stand; write the rows.
 
     The plan's amendment of 2026-10-24 with the field rule (runbook part 12
     step 1): the sources ``[associate]`` accepts (``flags`` equal to
     ``source_flags`` once the informational bits are cleared, ``fluxfit /
     fluxerr >= min_snr``), wherever on the image they fall, are grouped by
-    their own field; one short read of the run's objects in every such
-    field and its neighbours (:data:`OBJECTS_SQL`), recorded exactly as the
+    their own field; one short read of the dataset's objects, of every run,
+    in every such field and its neighbours (:data:`OBJECTS_SQL`), recorded exactly as the
     founding jobs it saw per field (the manifest's ``reads``, one
     ``objects`` input per field and job, which the publisher records in
     ``job_inputs``); then
@@ -1139,7 +1139,7 @@ def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[lis
                 and r["fluxerr"] > 0 and r["fluxfit"] / r["fluxerr"] >= float(settings["min_snr"])]
     near = _with_neighbours({r["field"] for r in accepted})
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute(OBJECTS_SQL, (sorted(near), job.run, job.dataset))
+        cur.execute(OBJECTS_SQL, (sorted(near), job.dataset))
         found = cur.fetchall()
         conn.commit()
     objects = {aid: (owner, ra0, dec0) for owner, aid, _, ra0, dec0 in found}
@@ -1166,13 +1166,13 @@ def associate(job: JobContext, sources: pa.Table, image_field: int) -> tuple[lis
 
 
 def xassociate(job: JobContext, xsources: pa.Table) -> tuple[list, dict, dict]:
-    """Cross-match the epoch's xsources against their fields' xobjects of the run; write the rows.
+    """Cross-match the epoch's xsources against their fields' xobjects of the dataset; write the rows.
 
     :func:`associate` for the xsources, as `dev`'s crossMatchXSources is
     crossMatchSources for them (:mod:`rapidpipe.science.crossmatch.xsources`):
     the xsources whose SExtractor ``flags`` equal ``[associate]
     xsource_flags``, both signs, are matched within ``match_radius`` against
-    the run's xobjects in their fields and those fields' neighbours
+    the dataset's xobjects of every run in their fields and those fields' neighbours
     (:data:`XOBJECTS_SQL`, the read recorded as one ``xobjects`` input per
     field and founding job), each founding in its own field with its
     ``fluxap`` as ``flux0``. Writes ``xobjects.parquet`` and
@@ -1188,7 +1188,7 @@ def xassociate(job: JobContext, xsources: pa.Table) -> tuple[list, dict, dict]:
         int(settings["xsource_flags"]))
     near = _with_neighbours({r["field"] for r in rows})
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute(XOBJECTS_SQL, (sorted(near), job.run, job.dataset))
+        cur.execute(XOBJECTS_SQL, (sorted(near), job.dataset))
         found = cur.fetchall()
         conn.commit()
     xobjects = {xaid: (owner, ra0, dec0) for owner, xaid, _, ra0, dec0 in found}

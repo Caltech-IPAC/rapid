@@ -88,17 +88,20 @@ class Recorder:
 
 def test_the_publisher_tries_each_fields_lock_once_in_ascending_order_in_one_statement():
     cur = Recorder(rows=[(True,)])
-    assert try_lock(cur, 3, [9, 4, 7, 4])
+    assert try_lock(cur, "D", [9, 4, 7, 4])
     ((statement, params),) = cur.calls
-    assert statement.count("pg_try_advisory_xact_lock") == 3 and "pg_advisory_xact_lock" not in statement
-    assert params == [3, 4, 3, 7, 3, 9]
+    assert statement.count("pg_try_advisory_xact_lock(hashtext(%s), %s)") == 3
+    assert "pg_advisory_xact_lock" not in statement
+    # The dataset's locks, not the run's (objects-across-runs).
+    assert params == ["D", 4, "D", 7, "D", 9]
 
 
 def test_the_reconcile_reads_every_locked_field_and_an_old_manifest_its_one_field():
     cur = Recorder()
-    between(cur, JOB, 3, {"dataset": "D", "fields": [8, 7], "radius": R}, [40, 41])
+    between(cur, JOB, {"dataset": "D", "fields": [8, 7], "radius": R}, [40, 41])
     ((statement, params),) = cur.calls
-    assert "objects_in(%s::integer[], %s)" in statement and params == ([7, 8], 3, "D", JOB, [40, 41])
+    # The dataset's objects of every run (objects-across-runs).
+    assert "objects_in(%s::integer[], %s)" in statement and params == ([7, 8], "D", JOB, [40, 41])
     assert fields({"dataset": "D", "field": 7, "radius": R}) == [7]
 
 

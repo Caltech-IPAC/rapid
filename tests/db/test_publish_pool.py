@@ -118,15 +118,15 @@ def _attempt(tmp_path, job, objects, fields):
     return root.as_uri()
 
 
-def _watch(observer, run: int, stop: threading.Event, seen: dict) -> None:
+def _watch(observer, dataset: str, stop: threading.Event, seen: dict) -> None:
     """Sample the server's backends: field-lock waiters, and how long each holder sat idle."""
     idle_since: dict[int, float] = {}
     while not stop.is_set():
         with observer.cursor() as cur:
             cur.execute("SELECT l.pid, l.granted, a.state FROM pg_locks l"
                         " JOIN pg_stat_activity a ON a.pid = l.pid"
-                        " WHERE l.locktype = 'advisory' AND l.classid = %s AND l.objsubid = 2",
-                        (run,))
+                        " WHERE l.locktype = 'advisory' AND l.classid = hashtext(%s)::oid"
+                        " AND l.objsubid = 2", (dataset,))
             rows = cur.fetchall()
         observer.commit()
         now = time.monotonic()
@@ -175,7 +175,7 @@ def test_publishers_beyond_the_pool_into_overlapping_fields_never_wait_holding_i
         prefixes[job] = _attempt(tmp_path, job, founded, fields)
 
     stop, seen = threading.Event(), {"max_waiting": 0, "max_idle_hold": 0.0, "bystander_errors": []}
-    watcher = threading.Thread(target=_watch, args=(connect(), run, stop, seen))
+    watcher = threading.Thread(target=_watch, args=(connect(), DATASET, stop, seen))
     bystander = threading.Thread(target=_bystander, args=(pooler(), stop, seen))
     watcher.start()
     bystander.start()

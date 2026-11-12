@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from rapidpipe.foundation import PublishError, apply, job_show, publish
+from rapidpipe.foundation import PublishError, apply, create_run, job_show, publish
 from rapidpipe.foundation import catalog as object_catalog
 from rapidpipe.foundation.prefix import local_path
 from tests.db.foundation_helpers import (
@@ -163,20 +163,21 @@ def test_publication_racing_a_cutover_publishes_unbound(connect, tmp_path):
     assert [r[3] for r in open_bindings(a, product="objects")] == [replacement]
 
 
-def _difference_attempt(tmp_path, job, founded, memberships, reads, radius=1e-4, fields=None):
+def _difference_attempt(tmp_path, job, founded, memberships, reads, radius=1e-4, fields=None,
+                        dataset=DATASET):
     """A difference job's catalog outputs, with its read and the catalog key in the manifest.
 
     ``fields`` names the locked fields (the field rule's manifest); without it the manifest
     names its one field as one written before the rule did.
     """
     root = tmp_path / f"job-{job}" / "attempt-1"
-    write_attempt(root, {"objects": [{"field": 1, **o, "dataset": DATASET}
+    write_attempt(root, {"objects": [{"field": 1, **o, "dataset": dataset}
                                      for o in founded],
                          "memberships": memberships})
     manifest = json.loads((root / "manifest.json").read_text())
     manifest["reads"] = reads
-    manifest["catalog"] = ({**FIELD_KEY, "radius": radius} if fields is None else
-                           {"dataset": DATASET, "fields": fields, "radius": radius})
+    manifest["catalog"] = ({"dataset": dataset, "field": 1, "radius": radius} if fields is None else
+                           {"dataset": dataset, "fields": fields, "radius": radius})
     (root / "manifest.json").write_text(json.dumps(manifest))
     return root.as_uri()
 
@@ -219,6 +220,70 @@ def test_reconcile_attaches_a_founder_to_one_founded_since_the_read_and_records_
     assert job_show(conn, c)["manifest"]["reconcile"]["reconciled"] == 0
 
 
+def test_a_founder_attaches_to_another_runs_object_of_its_dataset_and_never_another_datasets(
+        connect, tmp_path):
+    """Objects across runs: a GBTDS run's job A founds an object at a star; an HLWAS run's job B
+    of the same dataset read an empty catalog and founded one 0.18 arcseconds away, and at
+    publish attaches to A's; a job E of another dataset founded one at A's very position, which
+    B's reconcile never reads."""
+    conn = connect()
+    runs = {name: create_run(conn, "tester", "t", "abc123", {}, survey, dataset)
+            for name, survey, dataset in (("g", "GBTDS", DATASET), ("h", "HLWAS", DATASET),
+                                          ("e", "GBTDS", "E"))}
+    a, b, e = new_job(conn, runs["g"]), new_job(conn, runs["h"]), new_job(conn, runs["e"])
+    publish(conn, a, 1, _difference_attempt(tmp_path, a, [{"aid": 7, "ra0": 10.0, "dec0": -5.0}],
+                                            [_member(a, a, 7, 1)], []))
+    publish(conn, e, 1, _difference_attempt(tmp_path, e, [{"aid": 7, "ra0": 10.0, "dec0": -5.0}],
+                                            [_member(e, e, 7, 1)], [], dataset="E"))
+    d = 0.5e-4
+    result = publish(conn, b, 1, _difference_attempt(
+        tmp_path, b, [{"aid": 8, "ra0": 10.0 + d, "dec0": -5.0}], [_member(b, b, 8, 1, dra=0.1e-4)], []))
+
+    assert result["published"]
+    assert job_show(conn, b)["manifest"]["reconcile"] == {
+        "objects_between": 1, "reconciled": 1, "attached_memberships": 1}
+    with conn.cursor() as cur:
+        cur.execute("SELECT job, aid, dataset FROM objects ORDER BY job")
+        assert cur.fetchall() == [(a, 7, DATASET), (e, 7, "E")]
+        cur.execute("SELECT object_job, aid, dra FROM memberships WHERE job = %s", (b,))
+        ((owner, aid, dra),) = cur.fetchall()
+    conn.commit()
+    assert (owner, aid) == (a, 7) and dra == pytest.approx(0.1e-4 + d)
+
+
+def test_another_runs_publisher_holding_a_field_of_the_dataset_holds_a_job_back(
+        connect, tmp_path, monkeypatch):
+    """The field locks are the dataset's, with no run in the key: while another transaction holds
+    field 1's lock of the dataset, as another run's publisher would, the job finds it held and
+    tries again, and publishes once it is released; the same field's lock of another dataset is
+    not held."""
+    holder, conn = connect(), connect()
+    run = new_run(holder)
+    b = new_job(holder, run)
+    prefix = _difference_attempt(tmp_path, b, [{"aid": 8, "ra0": 10.0, "dec0": -5.0}],
+                                 [_member(b, b, 8, 1)], [], fields=[1])
+    with holder.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s), 1)", (DATASET,))
+    with conn.cursor() as cur:
+        assert object_catalog.held(cur, DATASET, [1]) and not object_catalog.held(cur, "E", [1])
+    conn.commit()
+    refused, looking = threading.Event(), object_catalog.held
+
+    def held(cur, dataset, fields):
+        found = looking(cur, dataset, fields)
+        if found:
+            refused.set()
+        return found
+
+    monkeypatch.setattr(object_catalog, "held", held)
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(publish, conn, b, 1, prefix)
+        assert refused.wait(10)
+        holder.commit()
+        result = pending.result(timeout=10)
+    assert result["published"] and result["metrics"]["publish_lock_tries"] > 1
+
+
 def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_end_as_one_object(
         connect, tmp_path, monkeypatch):
     """The field rule: job A founds in field 1 and job B in field 2, 0.18 arcseconds apart, both
@@ -235,11 +300,11 @@ def test_two_founders_either_side_of_a_boundary_serialise_on_a_shared_lock_and_e
         tmp_path, b, [{"aid": 8, "field": 2, "ra0": 10.0 + 0.5e-4, "dec0": -5.0}],
         [_member(b, b, 8, 1, field=2)], [], fields=[2, 1])
     with a_conn.cursor() as cur:
-        cur.execute("SELECT pg_advisory_xact_lock(%s, 1)", (run,))
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s), 1)", (DATASET,))
     refused, looking = threading.Event(), object_catalog.held
 
-    def held(cur, run, fields):
-        found = looking(cur, run, fields)
+    def held(cur, dataset, fields):
+        found = looking(cur, dataset, fields)
         if found:
             refused.set()
         return found

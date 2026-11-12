@@ -64,7 +64,7 @@ def xassociate_epoch(xobjects: dict[int, tuple[int, float, float]], xsources: It
     Parameters
     ----------
     xobjects : dict of int to tuple
-        ``xaid`` to ``(founding job, ra0, dec0)``: the run's xobjects in every
+        ``xaid`` to ``(founding job, ra0, dec0)``: the dataset's xobjects, of every run, in every
         field the xsources fall in and those fields' neighbours, as read.
     xsources : iterable of dict
         The accepted xsources (:func:`accepted`), the job's own.

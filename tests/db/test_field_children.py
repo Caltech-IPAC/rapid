@@ -19,7 +19,7 @@ import pytest
 import psycopg2.extensions
 from psycopg2 import errors, sql
 
-from rapidpipe.foundation import publish
+from rapidpipe.foundation import create_run, publish
 from rapidpipe.foundation.children import FIELD_PARENTS, field_child_name
 from tests.db.foundation_helpers import (
     DATASET, new_job, new_run, wait_until_blocked, write_attempt,
@@ -230,25 +230,33 @@ def test_the_readers_give_the_rows_the_parents_give(connect, tmp_path):
     assert _rows(conn, "SELECT * FROM xobjects_official_in(ARRAY[7, 9]) ORDER BY job, xaid") == xview
 
 
-def test_the_run_readers_give_the_run_s_rows_of_the_fields_only(connect, tmp_path):
+def test_the_dataset_readers_give_every_run_s_rows_of_the_dataset_and_fields_only(connect, tmp_path):
+    """objects_in and xobjects_in of (fields, dataset): every run's rows of the dataset in those
+    fields, a GBTDS run's and an HLWAS run's alike, and none of another dataset's at the same
+    fields (objects-across-runs)."""
     conn = connect()
+    runs = [create_run(conn, "tester", "t", "abc123", {}, survey, dataset)
+            for survey, dataset in (("GBTDS", DATASET), ("HLWAS", DATASET), ("GBTDS", "E"))]
     jobs = {}
-    for run in (new_run(conn), new_run(conn)):                # two runs founding in fields 7 and 9
-        jobs[run] = new_job(conn, run)
-        publish(conn, jobs[run], 1, write_attempt(tmp_path / f"job-{jobs[run]}", {
-            "objects": [_object(1, 7), _object(3, 9)],
-            "memberships": [_member(jobs[run], 1, 7, 1), _member(jobs[run], 3, 9, 3)],
-            "xobjects": [_xobject(1, 7), _xobject(4, 9)],
-            "xmemberships": [_xmember(jobs[run], 1, 7, 1), _xmember(jobs[run], 4, 9, 2)]}))
+    for run in runs:                                          # three runs founding in fields 7 and 9
+        job = jobs[run] = new_job(conn, run)
+        dataset = DATASET if run != runs[2] else "E"
+        publish(conn, job, 1, write_attempt(tmp_path / f"job-{job}", {
+            "objects": [{**_object(1, 7), "dataset": dataset}, {**_object(3, 9), "dataset": dataset}],
+            "memberships": [_member(job, 1, 7, 1), _member(job, 3, 9, 3)],
+            "xobjects": [{**_xobject(1, 7), "dataset": dataset}, {**_xobject(4, 9), "dataset": dataset}],
+            "xmemberships": [_xmember(job, 1, 7, 1), _xmember(job, 4, 9, 2)]}))
     for parent in ("objects", "xobjects"):
-        for run, job in jobs.items():
+        for dataset in (DATASET, "E"):
             assert _rows(conn, f"SELECT t::text FROM {parent}_in(ARRAY[7, 9, 8], %s) t ORDER BY 1",
-                         (run,)) == _rows(conn, f"SELECT t::text FROM {parent} t WHERE job = %s"
-                                                " ORDER BY 1", (job,)), parent
-            assert _rows(conn, f"SELECT t::text FROM {parent}_in(ARRAY[9], %s) t ORDER BY 1", (run,)) == _rows(
-                conn, f"SELECT t::text FROM {parent} t WHERE job = %s AND field = 9 ORDER BY 1",
-                (job,)), parent
-        assert _rows(conn, f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", (max(jobs) + 1,)) == [(0,)]
+                         (dataset,)) == _rows(conn, f"SELECT t::text FROM {parent} t WHERE dataset = %s"
+                                                    " ORDER BY 1", (dataset,)), parent
+            assert _rows(conn, f"SELECT t::text FROM {parent}_in(ARRAY[9], %s) t ORDER BY 1",
+                         (dataset,)) == _rows(conn, f"SELECT t::text FROM {parent} t WHERE dataset = %s"
+                                                    " AND field = 9 ORDER BY 1", (dataset,)), parent
+        assert sorted(j for (j,) in _rows(conn, f"SELECT job FROM {parent}_in(ARRAY[7], %s)",
+                                          (DATASET,))) == sorted(jobs[r] for r in runs[:2])
+        assert _rows(conn, f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", ("F",)) == [(0,)]
 
 
 #: The packet stage's three reads as rapidpipe.stages.packet shipped them before
@@ -354,7 +362,7 @@ def test_a_child_carries_the_parents_indexes(connect, tmp_path):
 def test_the_readers_scan_no_parent(connect, tmp_path):
     """The parents' scan counters stand still while every reader runs (a parent read scans it)."""
     conn, observer = connect(), connect()
-    run, diff, pkt = _publish_two_fields(conn, tmp_path)
+    _, diff, pkt = _publish_two_fields(conn, tmp_path)
 
     def scans() -> dict[str, int]:
         _rows(observer, "SELECT pg_stat_clear_snapshot()")
@@ -370,7 +378,7 @@ def test_the_readers_scan_no_parent(connect, tmp_path):
             cur.execute(f"SELECT count(*) FROM {parent}_of(%s::bigint[])", ([diff, pkt],))
             assert cur.fetchone()[0] > 0
         for parent in ("objects", "xobjects"):
-            cur.execute(f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", (run,))
+            cur.execute(f"SELECT count(*) FROM {parent}_in(ARRAY[7, 9], %s)", (DATASET,))
             assert cur.fetchone()[0] > 0
             cur.execute(f"SELECT count(*) FROM packet_origin_rows(NULL::{parent}, ARRAY[7, 9],"
                         " %s::bigint[], ARRAY[1, 4]::bigint[])", ([diff, diff],))
