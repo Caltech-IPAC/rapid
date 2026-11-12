@@ -178,12 +178,21 @@ class ObjectRecord:
     stdevra: float | None
     stdevdec: float | None
     nsources: int
+    # the mean position over the object's members, from the same sums as
+    # the sigmas (rebuild: objects' sufficient sums; None until known)
+    meanra: float | None = None
+    meandec: float | None = None
     first_mjd: float | None = None
     last_mjd: float | None = None
     validity_mjd: float = 0.0
+    # per Roman filter, the flux statistics of the detections up to the
+    # trigger (rapidpipe.science.statistics.lightcurve.flux_statistics),
+    # filled by assemble_alert(); a filter with no detection is absent
+    flux_stats: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     # fields assemble_alert() fills in later; never storage columns
-    FILLED_LATER = frozenset({"first_mjd", "last_mjd", "validity_mjd"})
+    FILLED_LATER = frozenset({"meanra", "meandec", "first_mjd", "last_mjd", "validity_mjd",
+                              "flux_stats"})
 
     @classmethod
     def from_row(cls, row: dict[str, Any],

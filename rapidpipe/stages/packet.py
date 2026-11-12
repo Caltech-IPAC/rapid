@@ -917,6 +917,16 @@ def history(trigger: tuple[int, Source], members: list[tuple[int, Source]],
     return prv, count
 
 
+def detections_of(trigger: tuple[int, Source], members: list[tuple[int, Source]]) -> list[Source]:
+    """The detections ``nDiaSources`` counts: the trigger and every other member at or before it.
+
+    The diaObject's per-filter flux statistics are computed over these, so
+    they agree with the count where ``prvDiaSources`` is cut to the window.
+    """
+    me, trigger = (trigger[0], trigger[1].sid), trigger[1]
+    return [trigger, *(m for job, m in members if (job, m.sid) != me and m.mjdobs <= trigger.mjdobs)]
+
+
 def _catalog_matches(catalog: CatalogInput, corners: tuple[float, ...], mjd: float,
                      ra: list[float], dec: list[float], settings: dict) -> tuple[list, dict]:
     """One catalog's matches for every trigger, from the chip's cone of its copy, and the read's record.
@@ -1097,12 +1107,13 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                     read.triggers, gaia, ned, lvs, refs):
                 aid = read.aid_of[source.sid]
                 ra0, dec0, sums = read.objects[aid]
-                prv, count = history((read.source_job, source), read.members.get(aid, []),
+                members = read.members.get(aid, [])
+                prv, count = history((read.source_job, source), members,
                                      float(settings["prv_window_days"]))
-                stats = sums.statistics()
+                stats = {k: None if math.isnan(v) else v for k, v in sums.statistics().items()}
                 obj = ObjectRecord(aid=aid, ra0=ra0, dec0=dec0, nsources=count,
-                                   stdevra=None if math.isnan(stats["stdevra"]) else stats["stdevra"],
-                                   stdevdec=None if math.isnan(stats["stdevdec"]) else stats["stdevdec"])
+                                   stdevra=stats["stdevra"], stdevdec=stats["stdevdec"],
+                                   meanra=stats["meanra"], meandec=stats["meandec"])
                 c0 = time.perf_counter()
                 with step("cutouts"):
                     cutouts = Cutouts(**{kind: extract_stamp(pixels, source.xfit + 1.0, source.yfit + 1.0,
@@ -1116,7 +1127,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                                        ned_matches=ned_matches, lvs_matches=lvs_matches,
                                        gaia_matches=gaia_matches,
                                        cutouts=cutouts, forced=forced, time_proc=time_proc,
-                                       reliability=reliability)
+                                       reliability=reliability,
+                                       detections=detections_of((read.source_job, source), members))
                 container.write(alert)
                 container.flush()  # one record per block: the index's locator is exact
                 order.append((source, aid))

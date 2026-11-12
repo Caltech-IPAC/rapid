@@ -464,36 +464,48 @@ DIA_FORCED_SOURCE_PARAMS = (
 # diaObject -- built from providers.ObjectRecord
 # ---------------------------------------------------------------------------
 
+def _flux_stat(band: str, field: str):
+    """A getter reading one statistic of one filter from ``ObjectRecord.flux_stats``."""
+    def get(obj):
+        stats = obj.flux_stats.get(band)
+        return None if stats is None else getattr(stats, field)
+    return get
+
+
 def _per_filter_flux_params():
     """Build the 8 filters x 8 statistics block of diaObject params.
 
     Returns
     -------
     tuple of Param
-        One param per (Roman filter, flux statistic) pair, all stubs until
-        nJy flux calibration is available.
+        One param per (Roman filter, flux statistic) pair, read from the
+        statistics the packet stage computes over the object's detections up
+        to the trigger (``lightcurve.flux_statistics``); null for a filter
+        the object has no detection in. The fluxes are the catalog's, as
+        diaSource.psfFlux: the nJy calibration is pending for both.
     """
-    src = ("per-filter statistics over associated sources; needs nJy flux "
-           "calibration (see roman_rapid_alerts FILTER_ZP_EFF)")
+    src = ("computed at assembly over the object's detections up to the trigger "
+           "(rapidpipe.science.statistics.lightcurve.flux_statistics; instrumental, "
+           "nJy calibration pending, see roman_rapid_alerts FILTER_ZP_EFF)")
     params = []
     for b in ROMAN_FILTERS:
         params += [
             Param(f"{b}PsfFluxMean",  ["null", "float"], f"Mean PSF flux in {b} [nJy]",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "mean")),
             Param(f"{b}PsfFluxMeanErr", ["null", "float"], f"Uncertainty in {b}PsfFluxMean [nJy]",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "mean_err")),
             Param(f"{b}PsfFluxSigma", ["null", "float"], f"Std dev of PSF flux in {b} [nJy]",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "sigma")),
             Param(f"{b}PsfFluxNdata", ["null", "int"],   f"Number of {b} measurements",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "n")),
             Param(f"{b}PsfFluxMin",   ["null", "float"], f"Minimum PSF flux in {b} [nJy]",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "min")),
             Param(f"{b}PsfFluxMax",   ["null", "float"], f"Maximum PSF flux in {b} [nJy]",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "max")),
             Param(f"{b}PsfFluxMaxSlope", ["null", "float"], f"Maximum slope of PSF flux between any two {b} epochs [nJy/day]",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "max_slope")),
             Param(f"{b}PsfFluxErrMean", ["null", "float"], f"Mean of PSF flux errors in {b} [nJy]",
-                        STUB, src),
+                        IMPLEMENTED, src, getter=_flux_stat(b, "err_mean")),
             # Maybe add Von Neumann ratio: https://metricgate.com/docs/von-neumann-ratio-trend-test/
         ]
     return tuple(params)
@@ -508,9 +520,11 @@ DIA_OBJECT_PARAMS = (
     Param("dec0",           "double",           "First measured declination of object centroid; ICRS [deg]",
                         IMPLEMENTED, "astroobjects_<field>.dec0", attr="dec0"),
     Param("meanRa",            ["null", "double"], "Mean right ascension of object centroid; ICRS [deg]",
-                        STUB, "in astroobjects_meta"),
+                        IMPLEMENTED, "the object's position sums over its members (the same as raSigma's)",
+                        attr="meanra"),
     Param("meanDec",           ["null", "double"], "Mean declination of object centroid; ICRS [deg]",
-                        STUB, "in astroobjects_meta"),
+                        IMPLEMENTED, "the object's position sums over its members (the same as decSigma's)",
+                        attr="meandec"),
     Param("raSigma",         ["null", "float"],  "Standard deviation of associated right ascensions [deg]",
                         IMPLEMENTED, "astroobjectsmeta_<field>.stdevra (null until statistics run)", attr="stdevra"),
     Param("decSigma",        ["null", "float"],  "Standard deviation of associated declinations [deg]",
@@ -532,7 +546,7 @@ DIA_OBJECT_PARAMS = (
     Param("lastRefMjd", ["null", "double"], "MJD of latest exposure in the reference image (UTC scale) [MJD] (stub)",
                         STUB, "reference-image metadata (not tracked)"),
 
-    # --- Per-filter flux statistics (all stubs) ------------------------------
+    # --- Per-filter flux statistics over the detections up to the trigger ----
 ) + _per_filter_flux_params()
 
 

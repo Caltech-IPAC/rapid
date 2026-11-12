@@ -17,6 +17,7 @@ from rapidpipe.science.statistics.lightcurve import (
     accumulate,
     compute_radec_statistics,
     csv_line,
+    flux_statistics,
     object_statistics,
 )
 
@@ -86,6 +87,36 @@ def test_accumulate_groups_by_aid_and_counts_each_pair_once():
     assert grouped.ras == {1: [4.0], 2: [1.0, 7.0]}
     assert grouped.decs[2] == [2.0, 8.0] and grouped.fluxes[2] == [3.0, 9.0]
     assert grouped.repeated_pairs == 1
+
+
+def test_flux_statistics_are_per_roman_filter_over_signed_fluxes():
+    stats = flux_statistics([
+        ("W146", 61000.0, 100.0, 10.0, True),
+        ("F146", 61002.0, 300.0, 20.0, True),         # the same filter in Roman's spelling
+        ("W146", 61003.0, 50.0, None, False),         # a negative detection without an error
+        ("F184", 61000.0, 7.0, 1.0, True),
+        ("F184", 61000.0, None, 1.0, True),           # no flux: not counted
+    ])
+    assert set(stats) == {"F146", "F184"}
+    f146 = stats["F146"]
+    fluxes = [100.0, 300.0, -50.0]
+    assert f146.n == 3 and f146.mean == pytest.approx(np.mean(fluxes))
+    assert f146.sigma == pytest.approx(float(np.std(fluxes)))
+    assert (f146.min, f146.max) == (-50.0, 300.0)
+    assert f146.mean_err == pytest.approx(math.sqrt(10.0 ** 2 + 20.0 ** 2) / 3)
+    assert f146.err_mean == pytest.approx(15.0)
+    # the steepest pair: 300 to -50 over one day
+    assert f146.max_slope == pytest.approx(350.0)
+    f184 = stats["F184"]
+    assert (f184.n, f184.mean, f184.sigma, f184.min, f184.max) == (1, 7.0, 0.0, 7.0, 7.0)
+    assert f184.max_slope is None and f184.mean_err == 1.0 and f184.err_mean == 1.0
+
+
+def test_flux_statistics_of_one_epoch_or_no_errors_leave_the_undefined_ones_null():
+    stats = flux_statistics([("W146", 61000.0, 10.0, None, True), ("W146", 61000.0, 30.0, None, True)])
+    assert stats["F146"].n == 2 and stats["F146"].max_slope is None       # the same epoch twice
+    assert stats["F146"].mean_err is None and stats["F146"].err_mean is None
+    assert flux_statistics([]) == {}
 
 
 def test_csv_line_is_devs_column_order_then_the_run_columns():

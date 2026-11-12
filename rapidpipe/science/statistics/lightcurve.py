@@ -26,15 +26,27 @@ One difference from `dev`, recorded on the stage's page: `dev` iterates
 ``list(best_aids)``, a set, so its line order is arbitrary; the rebuild
 writes objects in ascending ``aid`` order, which changes nothing in the
 table but makes the file reproducible.
+
+:func:`flux_statistics` (rebuild only, Emily 2026-11-12) is the alert's
+per-filter block of the same kind, computed by the packet stage from the
+detections it holds in memory rather than waiting for a database table of
+them: for each Roman filter, the count, mean, uncertainty of the mean,
+population standard deviation, minimum, maximum, maximum slope between any
+two epochs and mean error of the fluxes of an object's detections up to
+its trigger. A negative detection's flux enters with a negative sign.
 """
 
 from __future__ import annotations
 
+import itertools
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 import numpy as np
+
+from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES
 
 
 def compute_radec_statistics(ra_deg, dec_deg):
@@ -160,6 +172,73 @@ def accumulate(records: Iterable[Sequence]) -> Accumulated:
         fluxes[pair[0]].append(flux)
     return Accumulated(ras=dict(ras), decs=dict(decs), fluxes=dict(fluxes),
                        repeated_pairs=repeated)
+
+
+@dataclass(frozen=True)
+class FluxStatistics:
+    """One filter's flux statistics over an object's detections: the alert's ``<band>PsfFlux*`` block.
+
+    ``mean_err`` is the propagated uncertainty of the mean,
+    ``sqrt(sum(err²)) / n`` over the detections with an error (None when
+    none has one); ``sigma`` is the population standard deviation, as
+    `dev`'s ``stdevflux`` (0.0 for one detection); ``max_slope`` is the
+    largest ``|Δflux / Δt|`` in flux per day over any two detections at
+    different epochs (None with fewer than two epochs); ``err_mean`` is the
+    mean of the errors (None when none has one).
+    """
+
+    n: int
+    mean: float
+    mean_err: float | None
+    sigma: float
+    min: float
+    max: float
+    max_slope: float | None
+    err_mean: float | None
+
+
+def signed_flux(flux: float, isdiffpos: bool) -> float:
+    """A detection's flux with its sign: negative for a detection on the negated difference image.
+
+    The catalogs measure a negative source as a positive flux on the
+    negated image and mark it ``isdiffpos`` false; here it counts as a
+    dimming, so a fading object's mean falls rather than looking steady
+    (Emily, 2026-11-12).
+    """
+    return flux if isdiffpos else -flux
+
+
+def flux_statistics(detections: Iterable[tuple[str, float, float | None, float | None, bool]]
+                    ) -> dict[str, FluxStatistics]:
+    """Per Roman filter, the flux statistics of ``(band, mjd, flux, fluxerr, isdiffpos)`` detections.
+
+    ``band`` is either spelling (the ``filters`` table's ``W146`` or Roman's
+    ``F146``); the result's keys are Roman's. A detection without a flux is
+    not counted; one without an error counts in every statistic but the
+    two over errors. A band in neither spelling map is kept under its own
+    upper-cased name, so a caller can see it.
+    """
+    by_band: dict[str, list[tuple[float, float, float | None]]] = defaultdict(list)
+    for band, mjd, flux, fluxerr, isdiffpos in detections:
+        if flux is None:
+            continue
+        name = str(band).strip().upper()
+        by_band[RAPID_TO_ROMAN_FILTER_NAMES.get(name, name)].append(
+            (float(mjd), signed_flux(float(flux), isdiffpos),
+             None if fluxerr is None else abs(float(fluxerr))))
+    out = {}
+    for band, rows in by_band.items():
+        fluxes = np.array([f for _, f, _ in rows], dtype=float)
+        errs = [e for _, _, e in rows if e is not None]
+        slopes = [abs((f2 - f1) / (t2 - t1)) for (t1, f1, _), (t2, f2, _) in itertools.combinations(rows, 2)
+                  if t2 != t1]
+        out[band] = FluxStatistics(
+            n=len(rows), mean=float(fluxes.mean()),
+            mean_err=math.sqrt(sum(e * e for e in errs)) / len(rows) if errs else None,
+            sigma=float(fluxes.std()), min=float(fluxes.min()), max=float(fluxes.max()),
+            max_slope=max(slopes) if slopes else None,
+            err_mean=float(np.mean(errs)) if errs else None)
+    return out
 
 
 def csv_line(stats: ObjectStatistics, run_columns: Sequence[str]) -> str:
