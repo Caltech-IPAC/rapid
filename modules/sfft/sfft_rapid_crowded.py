@@ -141,7 +141,7 @@ def bkg_mask(image, use_segm=True, run_sextractor=True, segm_image=None, bsmask=
 
 def zero_mask(scidata, refdata, zero_margin):
     """
-    Mask pixels that are exactly 0 in either image, and those within zero_margin pixels of one (rapid: ported from commissioning ed2f1a73).
+    Mask pixels that are exactly 0 in either image, and those within zero_margin pixels of one.
 
     Parameters
     ----------

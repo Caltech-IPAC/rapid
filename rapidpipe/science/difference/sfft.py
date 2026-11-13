@@ -55,11 +55,10 @@ def build_sfft_command_args(python_cmd,
     setting selects that same fallback. ``sfft_use_segmentation`` of
     ``None`` defaults to ``crossconv_flag``, as an absent `dev` key does.
     ``sfft_zero_margin``, ``sfft_bsmask_isoarea`` and
-    ``sfft_bsmask_isofactor`` are commissioning's kernel-fit masking
-    (ed2f1a73): each empty one is left off the command, as commissioning
-    leaves off a key absent from its ``[SFFT]``, so with all three empty the
-    command is `dev`'s; ``--bsmaskisofactor`` is passed only with
-    ``--bsmaskisoarea``.
+    ``sfft_bsmask_isofactor`` are the kernel-fit masking: each empty one is
+    left off the command, as a key absent from ``[SFFT]`` is, so with all
+    three empty the command is unchanged; ``--bsmaskisofactor`` is passed
+    only with ``--bsmaskisoarea``.
     """
     if sfft_bsmask_value == "":
         logger.warning("*** Warning: [sfft] sfft_bsmask_value is empty; falling back to the "

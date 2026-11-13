@@ -1,4 +1,4 @@
-"""modules/sfft/sfft_rapid_crowded.py: commissioning's kernel-fit masks (ed2f1a73) on small synthetic images.
+"""modules/sfft/sfft_rapid_crowded.py: the kernel-fit masks on small synthetic images.
 
 The script imports sfft at module level; these tests stub those imports so
 the pure masking functions, ``bkg_mask`` (catalog masking, no segmentation)
