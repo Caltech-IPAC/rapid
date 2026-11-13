@@ -77,8 +77,8 @@ fail on the key, and the ``psf`` stage's rows are drawn); the catalogs write ``c
 dataset, each copy's prefix named.
 
 The kind comes from the scope only and is part of the PSF's key, so one
-file may be imported as more than one kind. A ``PSFKIND`` header keyword
-(`dev` writes one) is recorded in the manifest as it was, null when
+file may be imported as more than one kind. A ``PSFKIND`` header keyword,
+when a file has one, is recorded in the manifest as it was, null when
 absent, and never checked against the kind.
 
 A reference PSF set (``dir`` and ``files``, :func:`_psf_set`, the rows
