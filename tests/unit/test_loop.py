@@ -136,6 +136,11 @@ def test_listing_reads_every_page_and_keeps_cal_stems():
     assert loop.list_stems(Pages(keys), "s3://bucket/l2/", SEL) == [stem(1, 1, 1), stem(2, 1, 1)]
 
 
+def test_listing_refuses_a_root_without_its_trailing_slash():
+    with pytest.raises(ValueError, match="trailing / required"):
+        loop.list_stems(Pages([stem(1, 1, 1) + "_cal.asdf"]), "s3://bucket/l2", SEL)
+
+
 def test_listing_requests_only_the_selected_filters_observations():
     """F146 is observation 004 in passes 1 and 2 and 001 in pass 6; F087 holds 001 in pass 1."""
     f087 = "r0034201001001001001_0001_wfi08_f087"

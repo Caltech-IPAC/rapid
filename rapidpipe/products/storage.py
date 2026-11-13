@@ -47,6 +47,34 @@ def _key(location: Location, relative: str = "") -> str:
     return f"{location.prefix}/{relative}" if location.prefix else relative
 
 
+def split_source_root(url: str) -> tuple[str, str]:
+    """Split a source root, ``s3://bucket/prefix/``, into its bucket and key prefix, refusing any other form.
+
+    The loop lists it and ``scripts/stream_l2_files.py`` writes under it, so one value serves both.
+
+    Parameters
+    ----------
+    url : str
+        The source root: the ``s3://`` scheme, a bucket and a trailing ``/`` (``s3://bucket/`` is the bucket root).
+
+    Returns
+    -------
+    bucket : str
+        The bucket name.
+    prefix : str
+        The key prefix, ending in ``/``, or ``""`` for the bucket root.
+
+    Raises
+    ------
+    ValueError
+        If ``url`` lacks the ``s3://`` scheme, a bucket or the trailing ``/``.
+    """
+    bucket, _, prefix = url.removeprefix("s3://").partition("/")
+    if not url.startswith("s3://") or not bucket or not url.endswith("/"):
+        raise ValueError(f"source root {url!r} is not of the form s3://bucket/prefix/ (trailing / required)")
+    return bucket, prefix
+
+
 def s3_client(unsigned: bool = False) -> Any:
     """Return a fresh ``boto3`` S3 client; ``unsigned`` reads a public bucket anonymously.
 
