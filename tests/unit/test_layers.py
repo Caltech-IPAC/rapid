@@ -140,6 +140,38 @@ def test_every_dataset_overlay_resolves_and_holds_only_keys_that_differ_from_the
     differing(overlay, base)
 
 
+FLIGHT = SETTINGS / "datasets" / "flight-1049.toml"
+FLIGHT_DIFFERENCE = {("sci_image", "repair_extreme_artifact_pixels"): False,
+                     ("sfft", "crossconv_flag"): False,
+                     ("gainmatch", "magrefthresmin"): 10.0,
+                     ("gainmatch", "magrefthresmax"): 30.0,
+                     ("gainmatch", "refmagkeep"): 30.0,
+                     ("psfcat_diffimage", "sharphi"): 1.8}
+
+
+def test_the_flight_overlay_carries_commissionings_difference_values():
+    """Flight 1049's resolved body holds the flight difference values and crossconv_flag false."""
+    body, _ = resolve(SHIPPED, FLIGHT)
+    for (table, key), value in FLIGHT_DIFFERENCE.items():
+        assert body["difference"][table][key] == value, f"{table}.{key}"
+
+
+@pytest.mark.parametrize("path", sorted(p for p in (SETTINGS / "datasets").glob("*.toml") if p != FLIGHT),
+                         ids=lambda p: p.name)
+def test_the_base_and_the_sim_overlays_keep_devs_difference_values(path):
+    """The base keeps its own values for the flight keys, and a sim overlay resolves to its own value where it sets one, else the base's."""
+    base = tomllib.loads(SHIPPED.read_text())["difference"]
+    assert {(t, k): base[t][k] for t, k in FLIGHT_DIFFERENCE} == {
+        ("sci_image", "repair_extreme_artifact_pixels"): True, ("sfft", "crossconv_flag"): True,
+        ("gainmatch", "magrefthresmin"): 19.0, ("gainmatch", "magrefthresmax"): 24.0,
+        ("gainmatch", "refmagkeep"): 23.5, ("psfcat_diffimage", "sharphi"): 1.0}
+    own = tomllib.loads(path.read_text()).get("difference", {})
+    body, _ = resolve(SHIPPED, path)
+    for table, key in FLIGHT_DIFFERENCE:
+        expected = own.get(table, {}).get(key, base[table][key])
+        assert body["difference"][table][key] == expected, f"{table}.{key}"
+
+
 def test_the_retired_diff_flavor_cannot_select_zogy(tmp_path):
     """Only SFFT's difference image is registered: no run or overlay names a differencer."""
     assert "diff_flavor" not in resolve(SHIPPED)[0]["difference"]
