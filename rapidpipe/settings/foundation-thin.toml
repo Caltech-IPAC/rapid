@@ -41,7 +41,7 @@ reader = "soc-l2"
 sip_degree = 5
 sip_max_pix_error = 0.1
 gzip_level = 1
-# "" reads each file's own PROGRAM; a simulation's overlay sets its negative id; not dev's one RAPIDDATASOURCE id per run (Azalee, 2026-11-05).
+# "" reads each file's own PROGRAM; a simulation's overlay sets its negative id (Azalee, 2026-11-05).
 program_id = ""
 # dev's l2files.limmag, as [import] has it.
 limmag_nsigma = 5.0

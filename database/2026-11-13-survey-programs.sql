@@ -22,7 +22,7 @@ INSERT INTO surveys (program_id, program_title, category) VALUES
     (1083, 'Ecliptic Plane Moving Object Study', 'COM')
 ON CONFLICT (program_id) DO NOTHING;
 
--- Commissioning's title read "Guiging".
+-- An earlier title read "Guiging".
 UPDATE surveys SET program_title = 'High-Extinction Guiding Opportunity Activity' WHERE program_id = 1053;
 
 -- The HLWAS simulation's exposures written under -1, by its datasets' names (r00342-local, r00342-inj1, ...).
