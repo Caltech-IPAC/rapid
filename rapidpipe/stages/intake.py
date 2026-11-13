@@ -56,10 +56,10 @@ TAN-SIP WCS), ``<source_root><stem>_cal_lite.fits.gz`` with the SOC stem,
 by the same module: the key and ``expid`` are the SOC reader's, the
 observation identifiers the stem's.
 
-``[intake] dq_mask_bits`` is commissioning #238's DQ mask (0, `dev`'s
-behaviour, masks nothing): the conversion sets ``SCI``, ``ERR`` and
+``[intake] dq_mask_bits`` is commissioning #238's DQ mask (its default
+34671619, SATURATED included; 0 masks nothing): the conversion sets ``SCI``, ``ERR`` and
 ``VAR_*`` NaN where ``DQ`` has any of the bits. The manifest's ``dq``
-records the bits and three pixel counts of the science image: the file's
+records the bits (an integer) and three pixel counts of the science image: the file's
 own NaN (``nan_input``), the masked pixels (``masked``) and the NaN written
 (``nan_output``, their union); ``metrics.masked_fraction`` is ``masked``
 over the image's pixels.
@@ -234,7 +234,7 @@ def run(job: JobContext) -> None:
     lap("rows")
     fit = primary_fit(primary)
     masked = conversion["dq_masked"] or 0
-    dq = {"mask_bits": hex(int(settings["dq_mask_bits"])), "masked": masked,
+    dq = {"mask_bits": int(settings["dq_mask_bits"]), "masked": masked,
           "nan_input": conversion["sci_nan_input"], "nan_output": nan_output}
     metrics = {"masked_fraction": masked / n_pixels}
     wcs = {"rederived": distortion is not None}

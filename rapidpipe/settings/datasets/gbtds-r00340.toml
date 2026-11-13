@@ -25,7 +25,8 @@ rederive_wcs = true
 # frame (DO_NOT_USE, DEAD, NONLINEAR, NO_LIN_CORR, UNRELIABLE_FLAT; 0.077% of
 # pixels) and all 9 isolated pixels above 1000 DN/s carry one; SATURATED is
 # on 0.51%, the cores of the bulge's bright stars.
-dq_mask_bits = 0x2110C01
+# DO_NOT_USE 1 + DEAD 1024 + HOT 2048 + NONLINEAR 65536 + NO_LIN_CORR 1048576 + UNRELIABLE_FLAT 33554432
+dq_mask_bits = 34671617
 
 [difference]
 # The bulge is confusion-limited: on run 62's six-epoch reference mosaic the

@@ -410,6 +410,26 @@ def find_dq_masked_pixels(dq, mask_bits: int) -> np.ndarray:
     return (dq.astype(np.uint32, copy=False) & np.uint32(mask_bits)) != 0
 
 
+def dq_flag_names(mask_bits: int) -> str:
+    """The roman_datamodels pixel flags a DQ mask holds, joined by ``+``, for the log.
+
+    Parameters
+    ----------
+    mask_bits : int
+        The DQ mask, e.g. ``34671617``.
+
+    Returns
+    -------
+    str
+        The flag names in bit order, e.g. ``DO_NOT_USE+DEAD``; a bit no flag names appears as its value.
+    """
+    from roman_datamodels.dqflags import pixel
+
+    names = {int(flag): flag.name for flag in pixel if int(flag)}
+    bits = [1 << i for i in range(32) if mask_bits >> i & 1]
+    return "+".join(names.get(bit, str(bit)) for bit in bits)
+
+
 def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, exptime,
                     sip_degree: int, dq_masked: np.ndarray | None = None,
                     dq_mask_bits: int = 0) -> fits.ImageHDU:
@@ -444,7 +464,7 @@ def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, ex
         hdr["BUNIT"] = ("DN**2", "units of this array")
     hdr["EXPTSCAL"] = (float(exptime) ** exponent, "factor applied to convert from the ASDF units")
     if masked:
-        hdr["DQMASK"] = (dq_mask_bits, f"DQ bits ({hex(dq_mask_bits)}) set to NaN here")
+        hdr["DQMASK"] = (dq_mask_bits, "DQ bits set to NaN here")
         hdr["NDQMASK"] = (int(np.count_nonzero(dq_masked)), "number of pixels set to NaN by DQMASK")
     return fits.ImageHDU(data=data, header=hdr, name=extname)
 
@@ -491,8 +511,8 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
         # #238 converts a file without a usable DQ array unmasked, with a
         # warning; here a run that asked for the mask gets it or a failed job.
         dq_masked = find_dq_masked_pixels(dict(image_nodes)[DQ_NODE_NAME], dq_mask_bits)
-        log.info("DQ mask %s: %d pixels (%.3f%%) set to NaN", hex(dq_mask_bits),
-                 np.count_nonzero(dq_masked), 100.0 * np.mean(dq_masked))
+        log.info("DQ mask %d (%s): %d pixels (%.3f%%) set to NaN", dq_mask_bits,
+                 dq_flag_names(dq_mask_bits), np.count_nonzero(dq_masked), 100.0 * np.mean(dq_masked))
 
     partial = Path(str(fits_path) + ".partial")
     partial.unlink(missing_ok=True)

@@ -14,8 +14,8 @@ contradict its name fails before a manifest; the file name parses, and the
 expid packs, as the stage's docstring says; a file whose own ePSF
 reference is not the one its science PSF names (``EPSFREF``) fails before
 a manifest, and one whose PSF names the same reference publishes; the DQ
-mask (``[intake] dq_mask_bits``, default 0, `dev`'s behaviour: nothing
-masked) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
+mask (``[intake] dq_mask_bits``, default 34671619 with SATURATED,
+which masks a SATURATED pixel; 0 masks nothing) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
 bit, leaves ``DQ`` as it was, carries ``DQMASK`` and ``NDQMASK`` on each
 masked HDU and counts the file's own NaN, the masked pixels and their union
 in the manifest; the HLWAS overlay's bits are #238's names without
@@ -69,7 +69,7 @@ SETTINGS = {"intake": {"source_root": None, "unsigned": False, "reader": "soc-l2
             "psf": {"crds_server": "https://crds.invalid"}}
 DISTORTION = "roman_wfi_distortion_0003.asdf"
 #: Pixels the synthetic file flags, each (y, x, DQ value); (1, 1) is also NaN in the file itself.
-FLAGGED = [(1, 1, 0x1), (2, 3, 0x2000000), (5, 7, 0x2 | 0x400), (9, 9, 0x2), (11, 4, 0x4)]
+FLAGGED = [(1, 1, 1), (2, 3, 33554432), (5, 7, 2 | 1024), (9, 9, 2), (11, 4, 4)]
 NATIVE_NAN = [(1, 1), (20, 20)]
 
 
@@ -301,21 +301,34 @@ def hdus(prefix: Path) -> dict[str, fits.ImageHDU]:
         return {h.name: h.copy() for h in hdul[1:] if h.is_image}
 
 
-def test_dq_mask_bits_defaults_to_devs_behaviour_nothing_masked(tmp_path, source):
-    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
-    assert shipped["intake"]["dq_mask_bits"] == 0
+def test_dq_mask_bits_zero_is_devs_behaviour_nothing_masked(tmp_path, source):
     prefix = run_intake(tmp_path, source)
     images = hdus(prefix)
     assert all("DQMASK" not in h.header for h in images.values())
     assert np.isnan(images["SCI"].data).sum() == len(NATIVE_NAN)
     manifest = json.loads((prefix / "manifest.json").read_text())
-    assert manifest["dq"] == {"mask_bits": "0x0", "masked": 0, "nan_input": 2, "nan_output": 2}
+    assert manifest["dq"] == {"mask_bits": 0, "masked": 0, "nan_input": 2, "nan_output": 2}
     assert manifest["metrics"] == {"masked_fraction": 0.0}
 
 
-def test_the_mask_sets_sci_err_and_var_nan_keeps_dq_and_counts_the_union(tmp_path, source):
-    bits = 0x1 | 0x400 | 0x2000000  # DO_NOT_USE, DEAD, UNRELIABLE_FLAT
-    prefix = run_intake(tmp_path, source, dq_mask_bits=bits)
+def test_the_shipped_mask_is_238s_default_and_masks_a_saturated_pixel(tmp_path, source):
+    from roman_datamodels.dqflags import pixel
+
+    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
+    bits = shipped["intake"]["dq_mask_bits"]
+    names = ("DO_NOT_USE", "SATURATED", "DEAD", "HOT", "NONLINEAR", "NO_LIN_CORR", "UNRELIABLE_FLAT")
+    assert bits == sum(int(pixel[name]) for name in names) == 34671619  # the seven flags summed
+    images = hdus(run_intake(tmp_path, source, dq_mask_bits=bits))
+    assert (9, 9, int(pixel.SATURATED)) in FLAGGED
+    assert np.isnan(images["SCI"].data[9, 9]) and np.isnan(images["ERR"].data[9, 9])
+    assert int(images["DQ"].data[9, 9]) == int(pixel.SATURATED)
+
+
+def test_the_mask_sets_sci_err_and_var_nan_keeps_dq_and_counts_the_union(tmp_path, source, caplog):
+    bits = 1 | 1024 | 33554432  # DO_NOT_USE, DEAD, UNRELIABLE_FLAT
+    with caplog.at_level("INFO"):
+        prefix = run_intake(tmp_path, source, dq_mask_bits=bits)
+    assert "DQ mask 33555457 (DO_NOT_USE+DEAD+UNRELIABLE_FLAT): 3 pixels" in caplog.text
     images = hdus(prefix)
     masked = {(y, x) for y, x, flags in FLAGGED if flags & bits}
     assert masked == {(1, 1), (2, 3), (5, 7)}
@@ -329,9 +342,16 @@ def test_the_mask_sets_sci_err_and_var_nan_keeps_dq_and_counts_the_union(tmp_pat
     union = masked | set(NATIVE_NAN)
     assert {tuple(p) for p in np.argwhere(np.isnan(images["SCI"].data))} == union
     manifest = json.loads((prefix / "manifest.json").read_text())
-    assert manifest["dq"] == {"mask_bits": hex(bits), "masked": 3, "nan_input": 2,
+    assert manifest["dq"] == {"mask_bits": bits, "masked": 3, "nan_input": 2,
                               "nan_output": len(union)}
     assert manifest["metrics"]["masked_fraction"] == pytest.approx(3 / N**2)
+
+
+def test_dq_flag_names_decodes_the_mask_in_bit_order():
+    from rapidpipe.science.intake import dq_flag_names
+
+    assert dq_flag_names(34671619) == "DO_NOT_USE+SATURATED+DEAD+HOT+NONLINEAR+NO_LIN_CORR+UNRELIABLE_FLAT"
+    assert dq_flag_names(0) == ""
 
 
 def test_the_hlwas_mask_is_238s_named_bits_without_saturated():
@@ -343,7 +363,7 @@ def test_the_hlwas_mask_is_238s_named_bits_without_saturated():
     for name in names:
         named |= int(pixel[name])
     assert overlay["intake"]["dq_mask_bits"] == named
-    assert named | int(pixel.SATURATED) == 0x2110C03  # #238's default, dqMaskSubs.py
+    assert named | int(pixel.SATURATED) == 34671619  # #238's default, dqMaskSubs.py
     assert not named & int(pixel.SATURATED) and not named & int(pixel.JUMP_DET)
 
 
