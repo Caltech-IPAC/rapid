@@ -259,7 +259,7 @@ def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connec
     assert source["exposureTime"] == 60.0
     assert {WIRE_NAMES[k]: v for k, v in IDENTIFIERS.items() if k in WIRE_NAMES} == {
         w: source[w] for w in WIRE_NAMES.values()}
-    assert (source["program"], source["survey"]) == (-1, "SOCSIMS")
+    assert (source["program"], source["survey"]) == (-1, "SOCSIMS GBTDS")
     assert (source["reliability"], source["reliabilityThreshold"], source["reliabilityVersion"]) \
         == (None, None, None)
 
