@@ -21,9 +21,6 @@
 # 10.8 years, not the WCS: hence gaia_proper_motion below.
 
 [intake]
-# meta.observation.program; the exposures row's program_id is the
-# producer's program number, negative only for the simulations.
-program_id = 1049
 # HLWAS's mask (#238's bits without SATURATED): the files carry the same
 # roman_datamodels pixel flags, so the bits mean the same. Per file it masks
 # 0.231% of the pixels (DO_NOT_USE 0.039%, DEAD 0.097%, HOT 0.100%,

@@ -60,10 +60,24 @@ CREATE TABLE surveys (
     created timestamp without time zone DEFAULT now() NOT NULL
 );
 
+-- One negative id per simulation, and the commissioning programs (Azalee, 2026-11-10).
 INSERT INTO surveys (program_id, program_title, category) VALUES
-    (-1, 'SOCSIMS', 'SIM'),
+    (-1, 'SOCSIMS GBTDS', 'SIM'),
     (-2, 'OpenUniverse', 'SIM'),
-    (-3, 'RimTimSims', 'SIM');
+    (-3, 'RimTimSims', 'SIM'),
+    (-4, 'SOCSIMS HLWAS', 'SIM'),
+    (1006, 'WFI photometric and astrometric performance', 'COM'),
+    (1007, 'WFI Bandpass Uniformity', 'COM'),
+    (1008, 'WFI Photometric Stability', 'COM'),
+    (1018, 'Crowded Field Time Series', 'COM'),
+    (1020, 'Backgrounds', 'COM'),
+    (1043, 'Ice Characterization (Imaging)', 'COM'),
+    (1049, 'RAPID Implementation', 'COM'),
+    (1053, 'High-Extinction Guiding Opportunity Activity', 'COM'),
+    (1054, 'Early GBTDS observations', 'COM'),
+    (1055, 'Time Series of a Second Crowded Field', 'COM'),
+    (1062, 'Early Demonstration of HLTDS observation strategy and performance', 'COM'),
+    (1083, 'Ecliptic Plane Moving Object Study', 'COM');
 
 CREATE TABLE fields (
     field integer PRIMARY KEY,                       -- Roman tessellation index for (ra0,dec0)
@@ -199,7 +213,7 @@ CREATE TABLE exposures (
     expid integer NOT NULL,                          -- the exposure's scientific id, from its producer
     dateobs timestamp without time zone NOT NULL,    -- DATE-OBS
     exptime real NOT NULL,                           -- EXPTIME
-    program_id integer,                              -- the data source's program (dev's RAPIDDATASOURCE rule)
+    program_id integer,                              -- the file's PROGRAM, or the dataset's [intake] program_id
     -- The Roman observation identifiers, ASDF meta.observation, dev's
     -- migration 20261015 (5ba96e38): null for a source that has none.
     execution_plan smallint,                         -- EXECPLAN

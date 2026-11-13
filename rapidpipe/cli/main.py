@@ -35,7 +35,7 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   with Batch each check (``rapidpipe.foundation.loop.wait``), and prints the
   states; exit 0 when every job published, 1 when one failed, 2 when the
   timeout passes first: one blocking waiter for hand-submitted jobs;
-- ``loop --run --filters --scas --pointings [--passes] [--expids] --job-definition [--once]``
+- ``loop --run --filters --scas --pointings [--passes] [--expids] [--programs] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained: exit 0
@@ -236,6 +236,10 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--expids", default="all",
                              help="Comma-separated inclusive expid ranges LO-HI (or one ID), with the other "
                                   "terms; a SOC expid packs pass, observation, visit, exposure; 'all' (default).")
+    loop_parser.add_argument("--programs", default="all",
+                             help="Comma-separated program numbers, e.g. 1049,1018 or -2, or 'all' (default): "
+                                  "stems by the program intake writes, official L2 rows by their exposure's "
+                                  "official program_id.")
     loop_parser.add_argument("--job-definition", required=True,
                              help="The Batch job definition the run's revision is registered as.")
     loop_parser.add_argument("--job-queue",
@@ -390,7 +394,8 @@ def _loop(args: argparse.Namespace) -> int:
     intake = settings["intake"]
     try:
         selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes,
-                                         intake.get("reader", "soc-l2"), args.expids)
+                                         intake.get("reader", "soc-l2"), args.expids, args.programs,
+                                         intake.get("program_id", ""))
     except ValueError as exc:
         raise CommandExit(int(ExitCode.USAGE), str(exc)) from exc
     s3 = storage.s3_client(unsigned=bool(intake.get("unsigned")))
@@ -447,7 +452,7 @@ def _loop(args: argparse.Namespace) -> int:
             raise CommandExit(int(ExitCode.USAGE),
                               f"the first pass found no stem under {intake['source_root']} for filters"
                               f" {args.filters}, SCAs {args.scas}, pointings {args.pointings},"
-                              f" passes {args.passes}, expids {args.expids}")
+                              f" passes {args.passes}, expids {args.expids}, programs {args.programs}")
         first = False
         if args.once or summary["drained"]:
             if summary["failed"]:
