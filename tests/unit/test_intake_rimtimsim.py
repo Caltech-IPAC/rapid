@@ -118,10 +118,14 @@ def fake_connect(psf_filename: str, fid: int = 4, sca: int = 2):
             return False
 
         def execute(self, statement, params):
+            if "FROM surveys" in statement:  # the unknown-program check: every program is known
+                self.row = (1,)
+                return
             assert "FROM psfs" in statement and params[1:] == (fid, sca)  # K213, SCA 2 by default
+            self.row = (psf_filename,)
 
         def fetchone(self):
-            return (psf_filename,)
+            return self.row
 
     class Connection:
         def cursor(self):

@@ -7,8 +7,11 @@ bound, ``sip_max_pix_error`` (0.1 px: ``to_fits_sip`` raises when a
 fixed-degree fit misses it, and a corner is the domain's edge, where a
 polynomial fit is worst); the ``exposures`` and ``l2files`` rows have
 exactly their schema columns and the key the file name gives, the
-``exposures`` row the file's Roman observation identifiers; the
-``exposures`` row is declared only when the job expects its key; the
+``exposures`` row the file's Roman observation identifiers and, with
+``[intake] program_id`` unset (``""``, the shipped value), the file's own
+``PROGRAM``, a set value otherwise, a program with no ``surveys`` row
+written with a warning; the ``exposures`` row is declared only when the
+job expects its key; the
 manifest names the file's provenance; a file whose own identifiers
 contradict its name fails before a manifest; the file name parses, and the
 expid packs, as the stage's docstring says; a file whose own ePSF
@@ -139,8 +142,8 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
     model.save(path)
 
 
-def fake_connect(psf_filename: str):
-    """A connection factory whose one query, the PSF lookup, returns ``psf_filename``."""
+def fake_connect(psf_filename: str, surveys: tuple[int, ...] = (-1, -4)):
+    """A connection factory answering the PSF lookup with ``psf_filename`` and the surveys lookup from ``surveys``."""
     class Cursor:
         def __enter__(self):
             return self
@@ -149,10 +152,14 @@ def fake_connect(psf_filename: str):
             return False
 
         def execute(self, statement, params):
+            if "FROM surveys" in statement:
+                self.row = (1,) if params[0] in surveys else None
+                return
             assert "FROM psfs" in statement and params[1:] == (8, 8)
+            self.row = (psf_filename,)
 
         def fetchone(self):
-            return (psf_filename,)
+            return self.row
 
     class Connection:
         def cursor(self):
@@ -174,12 +181,13 @@ def source(tmp_path: Path) -> Path:
 def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                expects_exposure: bool = True, dq_mask_bits: int = 0,
                crpix_shift: tuple[float, float] = (0.0, 0.0),
-               rederive_wcs: bool = False) -> Path:
+               rederive_wcs: bool = False, program_id: int | str = -1,
+               surveys: tuple[int, ...] = (-1, -4)) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
     settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
                                        "dq_mask_bits": dq_mask_bits, "crpix_shift": list(crpix_shift),
-                                       "rederive_wcs": rederive_wcs}}
+                                       "rederive_wcs": rederive_wcs, "program_id": program_id}}
     expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
                 "binding": None}]
     if expects_exposure:
@@ -190,7 +198,7 @@ def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                      inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
                               "binding": None}, *expects],
                      attempt=1, prefix=prefix.as_uri() + "/",
-                     connect=fake_connect((source / "psf.fits").as_uri()))
+                     connect=fake_connect((source / "psf.fits").as_uri(), surveys))
     intake.run(job)
     return prefix
 
@@ -281,6 +289,50 @@ def test_a_file_whose_identifiers_contradict_its_name_fails_before_a_manifest(tm
     with pytest.raises(ValueError, match="identifiers"):
         run_intake(tmp_path, source, stem=other)
     assert not (tmp_path / "outputs" / "manifest.json").exists()
+
+
+def test_a_set_program_id_is_the_rows_whatever_the_file_says(tmp_path, source):
+    (exposure,) = pq.read_table(run_intake(tmp_path, source, program_id=-4) / "exposures.parquet").to_pylist()
+    assert exposure["program_id"] == -4  # the file's PROGRAM is 342
+
+
+def test_an_unset_program_id_is_each_files_own_program(tmp_path, source):
+    flight = "r0104901001001002001_0001_wfi08_f146"
+    write_asdf(source / f"{flight}_cal.asdf", flight)
+    programs = [pq.read_table(run_intake(tmp_path / stem, source, stem, program_id="",
+                                         surveys=(342, 1049)) / "exposures.parquet")
+                .column("program_id").to_pylist() for stem in (STEM, flight)]
+    assert programs == [[342], [1049]]
+
+
+def test_a_program_with_no_surveys_row_is_written_with_a_warning(tmp_path, source, caplog):
+    with caplog.at_level("WARNING", logger=intake.log.name):
+        known = run_intake(tmp_path / "known", source, program_id="", surveys=(342,))
+    assert not [r for r in caplog.records if "surveys" in r.getMessage()]
+    with caplog.at_level("WARNING", logger=intake.log.name):
+        unknown = run_intake(tmp_path / "unknown", source, program_id="", surveys=())
+    assert [r.getMessage() for r in caplog.records if "surveys" in r.getMessage()] == [
+        "program_id 342 is not in the surveys table"]
+    for prefix in (known, unknown):
+        assert pq.read_table(prefix / "exposures.parquet").column("program_id").to_pylist() == [342]
+
+
+def test_an_unset_program_id_refuses_a_file_with_no_program():
+    assert intake.program_id("", fits.Header({"PROGRAM": 1049}), STEM) == 1049
+    assert intake.program_id(-3, fits.Header(), STEM) == -3
+    with pytest.raises(ValueError, match="no PROGRAM"):
+        intake.program_id("", fits.Header(), STEM)
+
+
+def test_the_base_reads_the_files_program_and_each_simulation_sets_its_own():
+    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
+    assert shipped["intake"]["program_id"] == ""
+    datasets = REPO / "rapidpipe/settings/datasets"
+    overlays = {path.stem: tomllib.loads(path.read_text())["intake"] for path in datasets.glob("*.toml")}
+    assert "program_id" not in overlays["flight-1049"]
+    assert {name: overlays[name]["program_id"] for name in overlays if name != "flight-1049"} == {
+        "gbtds-r00340": -1, "gbtds-r00340-fakesrc": -1, "openuniverse-tds": -2,
+        "rimtimsim-260622": -3, "hlwas-r00342": -4}
 
 
 def test_the_stem_parses_and_the_expid_packs():

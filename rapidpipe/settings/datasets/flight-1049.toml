@@ -21,9 +21,6 @@
 # 10.8 years, not the WCS: hence gaia_proper_motion below.
 
 [intake]
-# meta.observation.program; the exposures row's program_id is the
-# producer's program number, negative only for the simulations.
-program_id = 1049
 # dq_mask_bits is the base's (no key): the files carry the same
 # roman_datamodels pixel flags as the SOC simulations, so the bits mean the
 # same. Without SATURATED the mask covers 0.231% of the pixels per file
