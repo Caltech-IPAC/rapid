@@ -56,8 +56,8 @@ TAN-SIP WCS), ``<source_root><stem>_cal_lite.fits.gz`` with the SOC stem,
 by the same module: the key and ``expid`` are the SOC reader's, the
 observation identifiers the stem's.
 
-``[intake] dq_mask_bits`` is commissioning #238's DQ mask (0, `dev`'s
-behaviour, masks nothing): the conversion sets ``SCI``, ``ERR`` and
+``[intake] dq_mask_bits`` is commissioning #238's DQ mask (its default
+34671619, SATURATED included; `dev`'s 0 masks nothing): the conversion sets ``SCI``, ``ERR`` and
 ``VAR_*`` NaN where ``DQ`` has any of the bits. The manifest's ``dq``
 records the bits (an integer) and three pixel counts of the science image: the file's
 own NaN (``nan_input``), the masked pixels (``masked``) and the NaN written
