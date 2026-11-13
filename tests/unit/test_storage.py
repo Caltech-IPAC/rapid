@@ -13,6 +13,7 @@ from rapidpipe.products.storage import (
     Location,
     LocationError,
     publish_dir,
+    split_source_root,
 )
 
 from .fakes3 import FakeS3
@@ -64,3 +65,16 @@ def test_publish_dir_s3_no_files_uploads_nothing(tmp_path):
     location = Location(kind="s3", bucket="bucket", prefix="runs/r1")
     publish_dir(src, location, client=fake)
     assert [c for c in fake.calls if c[0] == "upload_file"] == []
+
+
+@pytest.mark.parametrize("url, parts", [("s3://bucket/l2/", ("bucket", "l2/")),
+                                        ("s3://bucket/a/b/", ("bucket", "a/b/")),
+                                        ("s3://bucket/", ("bucket", ""))])
+def test_split_source_root_splits_bucket_and_prefix(url, parts):
+    assert split_source_root(url) == parts
+
+
+@pytest.mark.parametrize("url", ["s3://bucket/l2", "s3://bucket", "bucket/l2/", "file:///tmp/l2/", "s3:///l2/"])
+def test_split_source_root_refuses_other_forms(url):
+    with pytest.raises(ValueError, match="s3://bucket/prefix/"):
+        split_source_root(url)

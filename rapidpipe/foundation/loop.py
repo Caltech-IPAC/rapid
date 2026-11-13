@@ -183,6 +183,7 @@ from rapidpipe.foundation import attempts
 from rapidpipe.foundation.official import NotFound
 from rapidpipe.products import coverage
 from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
+from rapidpipe.products.storage import split_source_root
 
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
 STEM = re.compile(r"r(?P<program>\d{5})\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<visit>\d{3})"
@@ -370,9 +371,10 @@ def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]
     For :data:`OPENUNIVERSE`, each selected filter's prefix (``<root>H158/``) is
     listed through the paginator and its ``_simple.asdf`` stems kept. For
     :data:`RIMTIMSIM` (one flat prefix of 263 files) the root is listed through
-    the paginator and the selected filters' lite stems kept.
+    the paginator and the selected filters' lite stems kept. A root of any
+    other form is refused with ``ValueError`` (:func:`~rapidpipe.products.storage.split_source_root`).
     """
-    bucket, _, root = source_root.removeprefix("s3://").partition("/")
+    bucket, root = split_source_root(source_root)
     if selection.reader == RIMTIMSIM:
         found = []
         for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=root):
