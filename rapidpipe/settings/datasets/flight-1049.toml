@@ -46,8 +46,8 @@ program_id = 1049
 gaia_proper_motion = true
 
 [difference.sfft]
-# Commissioning's kernel-fit masking (ed2f1a73), its ini's [SFFT] values,
-# chosen by offline reruns of 20261021 req7 jid95 (PID 1062, F062, WFI06),
+# The kernel-fit masking values, chosen by offline reruns of 20261021 req7
+# jid95 (PID 1062, F062, WFI06),
 # not measured on 1049: there the fit, on this base's OpenUniverse block,
 # gave a kernel sum of 1.050 (negative/positive 0.755), dominated by one
 # saturated star and by the zero-filled DQ-masked pixels, of which about
