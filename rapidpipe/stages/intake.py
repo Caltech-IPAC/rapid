@@ -20,8 +20,11 @@ tessellation field, overlapping fields and HEALPix indexes the import
 stage derives the same way, and one ``exposures`` row only when the job
 expects the ``exposures`` key (the loop gives that expectation to one
 SCA of an exposure; a row nothing binds is not written). The row's
-``program_id`` is ``[intake] program_id``, `dev`'s ``RAPIDDATASOURCE`` rule
-(a simulation's fixed negative id, a flight program's own number), and its
+``program_id`` is the file's own ``PROGRAM`` (``meta.observation.program``)
+when ``[intake] program_id`` is ``""``, the shipped value, so one run can hold
+several flight programs; a dataset whose files carry no program of their own
+(a simulation) sets its fixed negative id there instead. A ``program_id``
+with no ``surveys`` row is written, with a warning. Its
 Roman observation identifiers (``execution_plan``, ``pass``, ``segment``,
 ``observation``, ``visit``, ``exposure``, ``visit_id``, ``observation_id``)
 are the converted header's (:func:`rapidpipe.science.intake.exposure_identifiers`,
@@ -223,11 +226,13 @@ def run(job: JobContext) -> None:
     l2file = _l2file(job, header, key, fits_name, limmag)
     dateobs = datetime.fromisoformat(header["DATE-OBS"])
     exposure = {"dataset": job.dataset, "expid": key["expid"], "dateobs": dateobs,
-                "exptime": float(header["EXPTIME"]), "program_id": int(settings["program_id"]),
+                "exptime": float(header["EXPTIME"]),
+                "program_id": program_id(settings["program_id"], header, stem),
                 **exposure_identifiers(header)}
     tables = [("l2files", [l2file])]
     if any(i["kind"] == "expects" and i["product"] == "exposures" for i in job.inputs):
         tables.insert(0, ("exposures", [exposure]))
+        _warn_unknown_program(job, exposure["program_id"])
     outputs = []
     for table, rows in tables:
         pq.write_table(pa.Table.from_pylist(rows), job.path / f"{table}.parquet")
@@ -290,6 +295,47 @@ def fetch_reference(server: str, name: str, directory: Path) -> Path:
 def primary_fit(primary) -> dict:
     """The Gaia fit's summary, from the primary header's ``meta wcs_fit_results`` cards."""
     return {name: primary.get(f"HIERARCH meta wcs_fit_results {name}") for name in WCS_FIT_SUMMARY}
+
+
+def program_id(setting: int | str, header, stem: str) -> int:
+    """The ``exposures`` row's program: the setting when a dataset sets one, else the file's own ``PROGRAM``.
+
+    Parameters
+    ----------
+    setting : int or str
+        ``[intake] program_id``; ``""`` means unset.
+    header : astropy.io.fits.Header
+        The converted file's science header.
+    stem : str
+        The file's stem, for the error message.
+
+    Returns
+    -------
+    int
+        The program number.
+    """
+    if setting != "":
+        return int(setting)
+    if header.get("PROGRAM") is None:
+        raise ValueError(f"{stem}: [intake] program_id is unset and the file has no PROGRAM")
+    return int(header["PROGRAM"])
+
+
+def _warn_unknown_program(job: JobContext, program: int) -> None:
+    """Log a warning when ``program`` has no ``surveys`` row; the row is written either way.
+
+    Parameters
+    ----------
+    job : JobContext
+        The intake job, for its database connection.
+    program : int
+        The ``exposures`` row's ``program_id``.
+    """
+    with job.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM surveys WHERE program_id = %s", (program,))
+        known = cur.fetchone() is not None
+    if not known:
+        log.warning("program_id %d is not in the surveys table", program)
 
 
 def _check_key(stem: str, ids: dict, header) -> None:

@@ -11,6 +11,8 @@
 # The SOC simulations sit in a public bucket, read anonymously: a Batch
 # container read 204 MB unsigned in 0.8 s (runbook part 7 step 6, run 12).
 unsigned = true
+# surveys: (-4, 'SOCSIMS HLWAS', 'SIM'), one id per simulation (Azalee, 2026-11-05).
+program_id = -4
 # #238's default mask 34671619 without SATURATED 2: the six flags summed
 # below (run 17 pass 4, F146 SCA 8; rapid_docs measurements.md, DQ mask). Every isolated pixel
 # above 1000 DN/s carries one of these bits and the reference-only spikes are
