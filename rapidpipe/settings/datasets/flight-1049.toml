@@ -35,7 +35,8 @@ program_id = 1049
 # with the dithers), this mask removes 2,644; of the 472 left, 341 carry no
 # flag and no one more bit removes more than 72 (WARM), so no value here
 # masks them.
-dq_mask_bits = 0x2110C01
+# DO_NOT_USE 1 + DEAD 1024 + HOT 2048 + NONLINEAR 65536 + NO_LIN_CORR 1048576 + UNRELIABLE_FLAT 33554432
+dq_mask_bits = 34671617
 # The sky moves: the intake's gaia_dx_px / gaia_dy_px carry Gaia DR3's stars
 # by their proper motions to each frame's mid-exposure (runbook part 13 step
 # gaia-pm). Without it run 118's intake read the field's proper motion,
