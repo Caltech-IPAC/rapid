@@ -23,7 +23,11 @@ covered pixels and is the one ZOGY gets, published and
 recorded in the manifest's ``metrics``; too few stars stops the job with
 exit 65 and the reason, before a manifest; ``[difference] reference_psf =
 "science"`` measures nothing and gives ZOGY the science PSF for both
-images, the manifest saying so; a reference ``psfs`` input
+images, the manifest saying so; ``"precomputed"`` gives ZOGY the bound
+set's row, checked (MD5, an odd square the science PSF's size) and
+normalised, and ``"measured"`` with a set named falls back to it on any
+measurement error, a fallback that fails its checks failing the job with
+both errors; a reference ``psfs`` input the settings do not call for
 fails; SFFT and naive catalogs take their detection
 overrides; the naive subtraction makes no PSF-fit catalog and so sets no
 naive catalog-outcome bit; the SFFT image is coverage-masked; every bad input fails the
@@ -121,6 +125,8 @@ def fake_connect(files: dict[str, Path], queries: list):
                 self.row = (RFID, files["reference"].as_uri(), 0)
             elif "FROM refimcatalogs" in statement:
                 self.row = (files["catalog"].as_uri(),)
+            elif "FROM psfs" in statement and "psf_set" in statement:
+                self.row = files.get("reference_psf_row")      # (psfid, filename, checksum)
             elif "FROM psfs" in statement:
                 self.row = (files["science_psf"].as_uri(),)
             elif "FROM objects" in statement:
@@ -858,3 +864,141 @@ def test_the_sources_and_the_xsources_prefilters_are_set_apart(tmp_path, files, 
     shut = {"sumrat_prefilter_threshold": 1e9}   # every finite sumrat is at or below it
     assert run("x", xsources_database_prefilter=shut) == (sources, [])
     assert run("s", sources_database_prefilter=shut) == ([], xsources_rows)
+
+
+# ----------------------------------------------------------------------
+# The reference PSF set: "precomputed", and "measured"'s fallback
+# ----------------------------------------------------------------------
+
+PSFID, PSF_SET = 77, "1043_20260928"
+
+
+def reference_input(psf_set=PSF_SET) -> dict:
+    return {"kind": "input", "product": "psfs", "source_job": 21, "binding": None,
+            "key": {"dataset": "D", "psf_set": psf_set, "fid": 1, "sca": 7, "kind": "reference"}}
+
+
+def with_set(files, tmp_path, *, size=9, checksum=None, missing=False) -> dict:
+    """``files`` with a set's reference PSF: a ``size`` square Gaussian of sigma 1.5, not normalised."""
+    path = tmp_path / "set" / "refimage_psf_fid1.fits"
+    path.parent.mkdir(exist_ok=True)
+    if not missing:
+        rows, cols = np.indices((size, size), dtype=float)
+        c = (size - 1) / 2
+        stamp = 4.0 * np.exp(-((cols - c) ** 2 + (rows - c) ** 2) / (2 * 1.5 ** 2))
+        fits.PrimaryHDU(stamp.astype(np.float32)).writeto(path, overwrite=True)
+    import hashlib
+    digest = checksum or (hashlib.md5(path.read_bytes()).hexdigest() if not missing else "0" * 32)
+    return {**files, "reference_psf_row": (PSFID, path.as_uri(), digest), "reference_psf_path": path}
+
+
+def set_body(mode: str, psf_set: str = PSF_SET) -> dict:
+    body = settings()
+    body["difference"]["reference_psf"] = mode
+    body["difference"]["reference_psf_set"] = psf_set
+    return body
+
+
+def test_precomputed_gives_zogy_the_bound_sets_row_checked_and_normalised(tmp_path, files, fakes, refpsf):
+    runner, _ = fakes
+    files, queries = with_set(files, tmp_path), []
+    prefix = run_difference(tmp_path, files, body=set_body("precomputed"),
+                            inputs=named_inputs(refpsf=reference_input()), queries=queries)
+    assert refpsf.calls == []
+    zogy = next(a for a in runner.calls if a[1].endswith("py_zogy.py"))
+    assert zogy[4:6] == ["sciimage_psf_f184_sca07_normalized.fits", "refimage_psf.fits"]
+    stamp = fits.getdata(prefix / "diff" / "refimage_psf.fits.gz")
+    source = fits.getdata(files["reference_psf_path"]).astype(float)
+    assert stamp == pytest.approx(source / source.sum(), abs=1e-6)
+    assert fits.getheader(prefix / "diff" / "refimage_psf.fits.gz")["PSFID"] == PSFID
+    # The row is read by job, set, fid and sca.
+    (statement, params), = [q for q in queries if "psf_set" in q[0]]
+    assert params == (21, "D", PSF_SET, 1, 7)
+    record = manifest(prefix)["difference"]["refpsf"]
+    assert record["mode"] == "precomputed" and record["psf_set"] == PSF_SET
+    assert record["psfs"] == {"psfid": PSFID, "filename": files["reference_psf_row"][1],
+                              "checksum": files["reference_psf_row"][2]}
+    assert "refpsf_stars" not in manifest(prefix)["metrics"]
+
+
+@pytest.mark.parametrize("error", [None, ValueError("refpsf: centroid still off")])
+def test_measured_with_a_set_falls_back_to_it_on_any_measurement_error(tmp_path, files, fakes, refpsf,
+                                                                      error):
+    refpsf.stars, refpsf.error = 7, error
+    files = with_set(files, tmp_path)
+    prefix = run_difference(tmp_path, files, body=set_body("measured"),
+                            inputs=named_inputs(refpsf=reference_input()))
+    record = manifest(prefix)["difference"]["refpsf"]
+    assert record["mode"] == "measured" and record["fallback"] is True
+    assert record["measure_error"] == str(error or "refpsf: 7 stars, 10 needed")
+    assert record["psfs"]["psfid"] == PSFID and record["psf_set"] == PSF_SET
+    stamp = fits.getdata(prefix / "diff" / "refimage_psf.fits.gz")
+    source = fits.getdata(files["reference_psf_path"]).astype(float)
+    assert stamp == pytest.approx(source / source.sum(), abs=1e-6)
+
+
+def test_measured_with_a_set_uses_the_measurement_when_it_succeeds(tmp_path, files, fakes, refpsf):
+    files = with_set(files, tmp_path)
+    prefix = run_difference(tmp_path, files, body=set_body("measured"),
+                            inputs=named_inputs(refpsf=reference_input()))
+    record = manifest(prefix)["difference"]["refpsf"]
+    assert (record["fallback"], record["measure_error"], record["stars"]) == (False, None, refpsf.stars)
+    assert "psfs" not in record
+    assert fits.getdata(prefix / "diff" / "refimage_psf.fits.gz").shape == (61, 61)   # the fake's
+
+
+def test_measured_without_a_set_fails_as_before_on_another_measurement_error(tmp_path, files, fakes,
+                                                                           refpsf):
+    refpsf.error = ValueError("refpsf: centroid still off")
+    with pytest.raises(ValueError, match="centroid still off"):
+        run_difference(tmp_path, files)
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"checksum": "f" * 32}, "is not the row's checksum"),
+    ({"size": 11}, "is not the science PSF's odd square"),
+    ({"missing": True}, "no such file"),
+])
+def test_a_precomputed_file_failing_its_checks_exits_65(tmp_path, files, fakes, change, message):
+    files = with_set(files, tmp_path, **change)
+    with pytest.raises(CommandExit, match=message) as stopped:
+        run_difference(tmp_path, files, body=set_body("precomputed"),
+                       inputs=named_inputs(refpsf=reference_input()))
+    assert stopped.value.code == 65
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_a_fallback_failing_its_checks_fails_the_job_with_both_errors(tmp_path, files, fakes, refpsf,
+                                                                      caplog):
+    refpsf.stars = 7
+    files = with_set(files, tmp_path, checksum="f" * 32)
+    with pytest.raises(CommandExit, match=r"checksum .*; the measurement before it: refpsf: 7 stars") as stopped:
+        run_difference(tmp_path, files, body=set_body("measured"),
+                       inputs=named_inputs(refpsf=reference_input()))
+    assert stopped.value.code == 65
+    assert "refpsf: 7 stars" in caplog.text and "checksum" in caplog.text
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("body, inputs, message", [
+    (set_body("precomputed"), named_inputs(), "of each key kind \\['reference', 'science'\\]"),
+    (set_body("measured"), named_inputs(), "of each key kind \\['reference', 'science'\\]"),
+    (set_body("precomputed"), named_inputs(refpsf=reference_input("other")), "reference_psf_set"),
+    (settings(), named_inputs(refpsf=reference_input()), "of each key kind \\['science'\\]"),
+])
+def test_the_reference_psf_input_must_be_the_one_the_settings_call_for(tmp_path, files, fakes, body,
+                                                                       inputs, message):
+    with pytest.raises(CommandExit, match=message) as stopped:
+        run_difference(tmp_path, with_set(files, tmp_path), body=body, inputs=inputs)
+    assert stopped.value.code == 65
+
+
+def test_precomputed_without_a_set_or_an_unknown_mode_fails_the_settings_check():
+    with pytest.raises(ValueError, match="names no reference_psf_set"):
+        difference.check_settings(set_body("precomputed", "")["difference"])
+    with pytest.raises(ValueError, match="not one of"):
+        difference.check_settings(set_body("static")["difference"])
+    assert difference.psf_kinds(settings()["difference"]) == ["science"]
+    assert difference.psf_kinds(set_body("science")["difference"]) == ["science"]
+    assert difference.psf_kinds(set_body("measured")["difference"]) == ["reference", "science"]

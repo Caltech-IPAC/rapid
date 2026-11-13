@@ -567,7 +567,10 @@ xy_fit_max_offset = 0.5
 # stars (core and ring residuals, the ring count, registration): "measured"
 # takes the measurement's finder stars, "science" the reference mosaic's
 # SExtractor catalog mapped onto the science grid.
+# "precomputed" reads the reference_psf_set's official reference psfs row, as commissioning does; its metrics' stars are the catalog's (Azalee, 2026-11-06).
 reference_psf = "measured"
+# The imported reference PSF set a run reads, by name (import_psf_set.py); "measured" falls back to it on any measurement error, and empty means no fallback (Azalee, 2026-11-13).
+reference_psf_set = ""
 
 [difference.paths]
 # `dev`: rapid_sw = "/code", cfg_path = rapid_sw + "/cdf" (hard-coded in

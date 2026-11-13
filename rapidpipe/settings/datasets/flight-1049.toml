@@ -42,3 +42,8 @@ dq_mask_bits = 0x2110C01
 # (-0.08 to +0.16, -0.56 to -0.35) px, as WCS offset; by hand the
 # propagation puts the WCS at (-0.09 to -0.04, -0.06 to -0.04) px.
 gaia_proper_motion = true
+
+[difference]
+# Commissioning's reference PSF: the 1043 per-filter set, computed for any orientation, so one file serves every roll; 10 measured stars are too few for a reliable PSF, worse in crowded fields (Azalee, 2026-11-13).
+reference_psf = "precomputed"
+reference_psf_set = "1043_20260928"

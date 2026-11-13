@@ -148,3 +148,16 @@ def test_the_retired_diff_flavor_cannot_select_zogy(tmp_path):
     overlay = _toml(tmp_path, "ds.toml", '[difference]\ndiff_flavor = "zogy"\n')
     with pytest.raises(LayerError, match="diff_flavor"):
         resolve(SHIPPED, overlay)
+
+def test_precomputed_without_a_reference_psf_set_is_refused():
+    """A run whose difference job would read a set names it (Azalee, 2026-11-10)."""
+    with pytest.raises(LayerError, match="needs a reference_psf_set"):
+        resolve(SHIPPED, None, ['difference.reference_psf="precomputed"'])
+    body, _ = resolve(SHIPPED, None, ['difference.reference_psf="precomputed"',
+                                      'difference.reference_psf_set="1043_20260928"'])
+    assert body["difference"]["reference_psf_set"] == "1043_20260928"
+    flight, _ = resolve(SHIPPED, SETTINGS / "datasets" / "flight-1049.toml")
+    assert (flight["difference"]["reference_psf"], flight["difference"]["reference_psf_set"]) == (
+        "precomputed", "1043_20260928")
+    with pytest.raises(LayerError, match="needs a reference_psf_set"):
+        resolve(SHIPPED, SETTINGS / "datasets" / "flight-1049.toml", ['difference.reference_psf_set=""'])

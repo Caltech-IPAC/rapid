@@ -18,7 +18,8 @@
 --   l2files, diffimages, sources,
 --   packets                            dataset, expid, sca, fid
 --   refimages                          dataset, field, fid
---   psfs                               dataset, fid, sca, kind
+--   psfs                               dataset, fid, sca, kind (science)
+--                                      dataset, psf_set, fid, sca, kind (reference)
 --   catalogs                           dataset, name, version
 --
 -- A set (a reference image, a source set, a packet set) is identified by its
@@ -343,11 +344,13 @@ CREATE TABLE psfs (
     fid smallint NOT NULL REFERENCES filters (fid),
     sca smallint NOT NULL REFERENCES scas (sca),
     kind text NOT NULL CHECK (kind IN ('science', 'reference')), -- a science image's PSF or a reference's
+    psf_set text, -- the imported set a reference PSF belongs to; none for a science PSF
     filename character varying(255) NOT NULL,
     checksum character varying(32) NOT NULL,
     status smallint DEFAULT 0 NOT NULL,
     created timestamp without time zone DEFAULT now() NOT NULL,
-    UNIQUE (dataset, fid, sca, kind, job)
+    CHECK ((kind = 'reference') = (psf_set IS NOT NULL)),
+    UNIQUE NULLS NOT DISTINCT (dataset, psf_set, fid, sca, kind, job)
 );
 
 CREATE INDEX psfs_job_idx ON psfs (job);
@@ -996,7 +999,8 @@ CREATE VIEW psfs_official AS
 SELECT t.*, o.id AS binding, j.run
 FROM psfs t
 JOIN official o ON o.closed_at IS NULL AND o.product = 'psfs' AND o.job = t.job
-    AND o.key = jsonb_build_object('dataset', t.dataset, 'fid', t.fid, 'sca', t.sca, 'kind', t.kind)
+    AND o.key = jsonb_strip_nulls(jsonb_build_object('dataset', t.dataset, 'psf_set', t.psf_set,
+                                                     'fid', t.fid, 'sca', t.sca, 'kind', t.kind))
 JOIN jobs j ON j.id = t.job;
 
 CREATE VIEW sources_official AS

@@ -10,6 +10,8 @@ key; a value in a higher layer replaces the lower's outright. A key the
 base does not have is refused, naming it, so a misspelt overlay key fails
 the command instead of being ignored by every stage; the only exceptions
 are :data:`OPTIONAL_KEYS`, which the base documents as absent by default.
+A resolved body whose values contradict one another is refused too
+(:func:`check_values`).
 
 :func:`resolve` returns the resolved body, which the run stores and every
 stage reads, and the record of how it was built, which the run stores
@@ -127,4 +129,26 @@ def resolve(base: Path, overlay: Path | None = None,
             resolved = _merge(resolved, nested, body, (), f"--set {text!r}")
         layers.append({"layer": "set", "sets": list(sets),
                        "sha256": hashlib.sha256("\n".join(sets).encode("utf-8")).hexdigest()})
+    check_values(resolved)
     return resolved, {"settings_hash": body_hash(resolved), "layers": layers}
+
+
+def check_values(body: dict[str, Any]) -> None:
+    """Refuse a resolved body whose values contradict one another, before a run stores it.
+
+    Parameters
+    ----------
+    body : dict
+        The resolved settings body.
+
+    Raises
+    ------
+    LayerError
+        ``[difference] reference_psf = "precomputed"`` names no ``reference_psf_set``.
+    """
+    difference = body.get("difference")
+    if not isinstance(difference, dict):
+        return
+    if difference.get("reference_psf") == "precomputed" and not difference.get("reference_psf_set"):
+        raise LayerError('[difference] reference_psf = "precomputed" needs a reference_psf_set,'
+                         " the name of an imported reference PSF set")

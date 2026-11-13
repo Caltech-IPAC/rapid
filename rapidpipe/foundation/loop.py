@@ -88,8 +88,9 @@ One pass, in order:
   ``psfs`` key has no official row, scoped to the first new stem of that
   SCA and expecting the key unbound, unless a ``psf`` job of this run
   already serves the pair (pending, failed or published). That SCA's stems
-  wait for intake until the row is official. (The reference PSF is the
-  difference job's own measurement, not a product.)
+  wait for intake until the row is official. (A reference PSF is the
+  difference job's own measurement or an imported set's row, never this
+  job's.)
 - ``intake``: a job per listed ``_cal.asdf`` stem the selection admits for
   which no intake job of the dataset is published and no intake job of this
   run exists, and whose filter and SCA have official PSFs, at most
@@ -121,7 +122,11 @@ One pass, in order:
 - ``difference``: a job per official L2 row whose field has an official
   reference and whose key has no official difference and no difference job
   of this run pending or failed. It associates its sources with the
-  field's objects as they stand when it reads them, in any order.
+  field's objects as they stand when it reads them, in any order. Under
+  ``[difference] reference_psf = "precomputed"``, and under ``"measured"``
+  with a ``reference_psf_set`` named (its fallback), it also names the
+  official reference ``psfs`` row of that set, filter and SCA; with none
+  official the pass stops with ``NotFound``, as for a missing science PSF.
 - ``packet``: a job per official source set of a selected key with no
   official packet set and no packet job of this run pending or failed,
   naming the reference, the dataset's catalogs whose ``[packet] <name>_match``
@@ -354,7 +359,7 @@ class Snapshot:
     fids: dict[str, int]
     published_stems: set[str]
     jobs: list[dict]
-    psfs: dict[tuple[int, int, str], tuple[int, int]]          # (fid, sca, kind) -> (job, binding)
+    psfs: dict[tuple[int, int, str, str | None], tuple[int, int]]  # (fid, sca, kind, psf_set) -> (job, binding)
     exposures: set[int]                                          # expids with an open binding
     l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job}
     refs: dict[tuple[int, int], int]                             # (field, fid) -> job
@@ -405,8 +410,8 @@ def snapshot(conn, run: int) -> Snapshot:
     return Snapshot(
         dataset=d, survey=meta[0]["survey"], settings=meta[0]["settings"], fids=fids,
         published_stems=stems, jobs=jobs,
-        psfs={(int(b["key"]["fid"]), int(b["key"]["sca"]), b["key"]["kind"]): (b["job"], b["id"])
-              for b in by["psfs"]},
+        psfs={(int(b["key"]["fid"]), int(b["key"]["sca"]), b["key"]["kind"], b["key"].get("psf_set")):
+              (b["job"], b["id"]) for b in by["psfs"]},
         exposures={int(b["key"]["expid"]) for b in by["exposures"]},
         l2=l2,
         refs={(int(b["key"]["field"]), int(b["key"]["fid"])): b["job"] for b in by["refimages"]},
@@ -577,12 +582,21 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     def scope_l2(job):
         return int(job["scope"]["expid"]), int(job["scope"]["sca"]), int(job["scope"]["fid"])
 
-    def psf(fid, sca, kind):
-        if (fid, sca, kind) not in snap.psfs:
-            raise NotFound(f"no official {kind} psfs row for fid {fid} sca {sca} in {d}")
-        job, binding = snap.psfs[fid, sca, kind]
-        return {"product": "psfs", "key": {"dataset": d, "fid": fid, "sca": sca, "kind": kind},
-                "source_job": job, "binding": binding}
+    def psf(fid, sca, kind, psf_set=None):
+        if (fid, sca, kind, psf_set) not in snap.psfs:
+            named = f" of set {psf_set!r}" if psf_set else ""
+            raise NotFound(f"no official {kind} psfs row{named} for fid {fid} sca {sca} in {d}")
+        job, binding = snap.psfs[fid, sca, kind, psf_set]
+        key = {"dataset": d, "fid": fid, "sca": sca, "kind": kind}
+        if psf_set:
+            key["psf_set"] = psf_set
+        return {"product": "psfs", "key": key, "source_job": job, "binding": binding}
+
+    # A reference set's row is bound under "precomputed", and under "measured" with a set named.
+    diff_settings = snap.settings.get("difference", {})
+    reference_set = diff_settings.get("reference_psf_set", "")
+    mode = diff_settings.get("reference_psf", "measured")
+    bind_reference = mode == "precomputed" or (mode == "measured" and bool(reference_set))
 
     out: list[dict] = []
     stems = list(stems)
@@ -601,7 +615,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     for stem in new:
         a = admitted[stem]
         pair = (fids[a["filter"]], a["sca"])
-        if (*pair, "science") not in snap.psfs:
+        if (*pair, "science", None) not in snap.psfs:
             unready.setdefault(pair, stem)
     for (fid, sca), stem in sorted(unready.items()):
         if (fid, sca) in served:
@@ -669,9 +683,10 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         ref = snap.refs.get((row["field"], fid))
         if ref is None or k in snap.diffs or k in held_diffs:
             continue
+        reference_psf = [psf(fid, sca, "reference", reference_set)] if bind_reference else []
         out.append({"stage": "difference", "scope": {"expid": expid, "sca": sca, "fid": fid},
                     "inputs": [{"product": "l2files", "key": key(*k), "source_job": row["job"]},
-                               psf(fid, sca, "science"),
+                               psf(fid, sca, "science"), *reference_psf,
                                {"product": "refimages", "key": {"dataset": d, "field": row["field"],
                                                                 "fid": fid}, "source_job": ref}],
                     "expects": [{"product": "diffimages", "key": key(*k), "binding": None},

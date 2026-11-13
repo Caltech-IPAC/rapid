@@ -16,6 +16,8 @@ The job's scope names what to import, relative to ``source_dir``::
                  "l2": "<L2 FITS>", "difference": "<difference job directory>"}],
      "reference": {"rfid": 4, "dir": "<reference job directory>"},
      "psf": {"kind": "science", "path": "<science-image PSF>"},
+     (or a reference PSF set: "psf": {"kind": "reference", "psf_set": "<name>",
+                                      "dir": "<directory>", "files": ["<name>", ...]})
      "gaia": {"version": "DR3", "prefix": "<the Gaia mirror's prefix>"},
      "ned": {"version": "36.1_20260527_v2", "prefix": "<the NED copy's prefix>"},
      "lvs": {"version": "20260424", "prefix": "<the same prefix: lvs/ is under it>"},
@@ -68,17 +70,25 @@ xsources read and kept per sign (``xsources``, null when none were
 imported). rapid_docs ``decisions.md``, import-both-signs. ``reference`` writes
 ``refimages`` and ``refimcatalogs`` (the mosaic SExtractor catalog, type
 1); ``psf`` writes ``psfs`` (a science-image PSF, ``kind`` ``science``, or
-the reference-image PSF the difference stage also reads, ``kind``
-``reference``; its ``psfid`` is drawn from the table's identity, never
+a reference-image PSF, ``kind`` ``reference``, which names its
+``psf_set``; its ``psfid`` is drawn from the table's identity, never
 supplied: an explicit id ahead of the sequence makes a later drawn insert
 fail on the key, and the ``psf`` stage's rows are drawn); the catalogs write ``catalogs`` under the job's
 dataset, each copy's prefix named.
 
-The kind is declared in the scope and is part of the PSF's key. `dev`'s
-PSF files carry it as ``PSFKIND`` (:data:`PSFKIND`): a file whose keyword
-names the other kind fails the job before a manifest; a file with no
-keyword imports under the declared kind, and the manifest records the
-keyword as it was (``psf.PSFKIND``, null when absent).
+The kind comes from the scope only and is part of the PSF's key, so one
+file may be imported as more than one kind. A ``PSFKIND`` header keyword
+(`dev` writes one) is recorded in the manifest as it was, null when
+absent, and never checked against the kind.
+
+A reference PSF set (``dir`` and ``files``, :func:`_psf_set`, the rows
+``scripts/import_psf_set.py`` plans) is imported in one job, so its
+bindings open in one change group. Each file's filter, and SCA when the
+name has one, come from its name (:data:`PSF_SET_FILE`), not its header: a
+per-filter file is copied once and gives 18 rows, one per SCA, sharing its
+URL and checksum. A name that is not a set file's, a missing file, two
+files giving one (filter, SCA), or rows that are not the job's ``psfs``
+expects one to one fail the job with exit 65 before a manifest.
 """
 
 from __future__ import annotations
@@ -86,6 +96,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -144,8 +155,10 @@ REFERENCE_CATALOG, REFERENCE_CATALOG_TYPE = "awaicgen_output_mosaic_refimsexcat.
 #: Rows of an imported image are good: the source system finished them.
 STATUS_GOOD = 1
 
-#: `dev`'s ``PSFKIND`` keyword value for each ``psfs.kind``.
-PSFKIND = {"science": "sciimage_psf", "reference": "refimage_psf"}
+#: A reference PSF set's file name: the filter id, and the SCA when the file is one SCA's.
+PSF_SET_FILE = re.compile(r"^refimage_psf_fid(\d+)(?:_sca(\d{2}))?\.fits$")
+#: The SCAs a per-filter file of a set serves.
+SCAS = range(1, 19)
 
 
 def run(job: JobContext) -> None:
@@ -166,7 +179,9 @@ def run(job: JobContext) -> None:
         recorded.update(epoch_record)
     if "reference" in scope:
         tables.update(_reference(job, source, scope["reference"]))
-    if "psf" in scope:
+    if "psf" in scope and "files" in scope["psf"]:
+        tables["psfs"], recorded["psf"] = _psf_set(job, source, scope["psf"])
+    elif "psf" in scope:
         row, keyword = _psf(job, source, scope["psf"])
         tables["psfs"] = [row]
         recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
@@ -335,9 +350,12 @@ def _epoch(job: JobContext, settings: dict, source: Path, epoch: dict) -> tuple[
     return tables, {"sources_kept": kept, "xsources": xsources_record}
 
 
+#: schema.sql's filters, by fid less one.
+FILTER_NAMES = ("F184", "H158", "J129", "K213", "R062", "Y106", "Z087", "W146")
+
+
 def _fid(filter_name: str) -> int:
-    names = ("F184", "H158", "J129", "K213", "R062", "Y106", "Z087", "W146")  # schema.sql's filters
-    return names.index(rapid_filter_name(filter_name)) + 1
+    return FILTER_NAMES.index(rapid_filter_name(filter_name)) + 1
 
 
 def _sources(settings: dict, prefilter: dict, difference: Path, key: dict, pid: int,
@@ -457,15 +475,101 @@ def _reference(job: JobContext, source: Path, reference: dict) -> dict:
 
 
 def _psf(job: JobContext, source: Path, psf: dict) -> tuple[dict, str | None]:
-    """The ``psfs`` row of the declared kind, and the file's ``PSFKIND`` as it was."""
+    """The ``psfs`` row of the declared kind, and the file's ``PSFKIND`` as it was.
+
+    Parameters
+    ----------
+    job : JobContext
+        The import job.
+    source : pathlib.Path
+        The scope's ``source_dir``.
+    psf : dict
+        The scope's ``psf``: ``kind``, ``path`` and, for a reference PSF, ``psf_set``.
+
+    Returns
+    -------
+    tuple
+        The row, and the header's ``PSFKIND`` (None when absent), never checked against the kind.
+    """
     kind = psf["kind"]
+    psf_set = psf.get("psf_set") if kind == "reference" else None
+    if kind == "reference" and not psf_set:
+        raise ValueError("a reference PSF names its psf_set")
     path = source / psf["path"]
     with fits.open(path) as hdul:
         header = hdul[0].header
         sca, fid = int(header["SCA"]), _fid(header["FILTER"])
         keyword = header.get("PSFKIND")
-    if keyword is not None and keyword != PSFKIND.get(kind):
-        raise ValueError(f"{path.name}: PSFKIND {keyword!r} is not a {kind} PSF ({PSFKIND.get(kind)!r})")
     url, md5 = _copy(job, path)
-    return {"dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind,
+    return {"dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind, "psf_set": psf_set,
             "filename": url, "checksum": md5, "status": STATUS_GOOD}, keyword
+
+
+def _psf_set(job: JobContext, source: Path, psf: dict) -> tuple[list[dict], dict]:
+    """A reference PSF set's ``psfs`` rows, one per (filter, SCA), and its manifest record.
+
+    Parameters
+    ----------
+    job : JobContext
+        The import job; its ``psfs`` expects must be the rows' keys, one to one.
+    source : pathlib.Path
+        The scope's ``source_dir``.
+    psf : dict
+        The scope's ``psf``: ``kind`` (``reference``), ``psf_set``, ``dir`` (under ``source``)
+        and ``files``, the names to import.
+
+    Returns
+    -------
+    tuple
+        The rows, and the record: the kind, the set and per file its keys and ``PSFKIND``.
+
+    Raises
+    ------
+    CommandExit
+        Exit 65 for a name not :data:`PSF_SET_FILE`'s, a missing file, two files giving one
+        (filter, SCA), or rows and expects that do not match one to one.
+    """
+    kind, psf_set = psf["kind"], psf.get("psf_set")
+    if kind != "reference" or not psf_set:
+        raise ValueError(f"a PSF set is kind reference with a psf_set, not {kind!r} and {psf_set!r}")
+    directory = source / psf["dir"]
+    names = list(psf["files"])
+    if not names:
+        raise _rejected(f"set {psf_set!r}: no files named")
+    owners: dict[tuple[int, int], str] = {}
+    planned = []
+    for name in names:
+        match = PSF_SET_FILE.match(name)
+        if match is None:
+            raise _rejected(f"set {psf_set!r}: {name} is not refimage_psf_fid<N>[_sca<NN>].fits")
+        fid = int(match[1])
+        scas = [int(match[2])] if match[2] else list(SCAS)
+        if fid < 1 or fid > len(FILTER_NAMES) or not set(scas) <= set(SCAS):
+            raise _rejected(f"set {psf_set!r}: {name} names no filter and SCA of the schema")
+        for sca in scas:
+            if (fid, sca) in owners:
+                raise _rejected(f"set {psf_set!r}: {name} and {owners[fid, sca]} both give "
+                                f"fid {fid} sca {sca}")
+            owners[fid, sca] = name
+        if not (directory / name).is_file():
+            raise _rejected(f"set {psf_set!r}: no file {directory / name}")
+        planned.append((name, fid, scas))
+    rows, files = [], []
+    for name, fid, scas in planned:
+        path = directory / name
+        with fits.open(path) as hdul:
+            keyword = hdul[0].header.get("PSFKIND")
+        url, md5 = _copy(job, path)
+        rows += [{"dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind, "psf_set": psf_set,
+                  "filename": url, "checksum": md5, "status": STATUS_GOOD} for sca in scas]
+        files.append({"file": name, "fid": fid, "sca": scas[0] if len(scas) == 1 else None,
+                      "rows": len(scas), "PSFKIND": keyword})
+    keys = {(r["dataset"], r["psf_set"], r["fid"], r["sca"], r["kind"]) for r in rows}
+    expects = [i["key"] for i in job.inputs if i["kind"] == "expects" and i["product"] == "psfs"]
+    expected = {(k.get("dataset"), k.get("psf_set"), int(k["fid"]), int(k["sca"]), k.get("kind"))
+                for k in expects}
+    if len(expected) != len(expects) or expected != keys:
+        raise _rejected(f"set {psf_set!r}: {len(keys)} rows and {len(expects)} psfs expects are not one"
+                        f" to one ({len(keys - expected)} rows unexpected, {len(expected - keys)}"
+                        " expects without a row)")
+    return rows, {"kind": kind, "psf_set": psf_set, "files": files}

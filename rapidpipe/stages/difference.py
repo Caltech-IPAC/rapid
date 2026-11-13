@@ -46,26 +46,39 @@ fetched with :func:`rapidpipe.foundation.prefix.get`:
   which). Its coverage and uncertainty maps sit beside the mosaic, and
   its mosaic SExtractor catalog (``refimcatalogs`` cattype 1) gives the
   reference FWHM.
-- ``psfs``: exactly one, the science-image PSF (key ``kind`` ``science``)
-  of the scope's filter and SCA.
+- ``psfs``: the science-image PSF (key ``kind`` ``science``) of the
+  scope's filter and SCA; and, under ``[difference] reference_psf =
+  "precomputed"`` or under ``"measured"`` with a ``reference_psf_set``
+  named, the run's set's reference PSF of that filter and SCA (key
+  ``{dataset, psf_set, fid, sca, kind: "reference"}``, :func:`psf_kinds`).
 
-The reference-image PSF is not an input: ZOGY needs the PSF of the image
-it is given, the reference after the per-epoch SWarp resample, so the job
-measures it there (:func:`rapidpipe.science.difference.refpsf.measure`,
-after the reference background subtraction, on pixels finite and covered
-at ``post_zogy_keep_diffimg_lower_cov_map_thresh``) and writes it as
-``refimage_psf.fits``. Too few stars fails the job with exit 65 and the
-reason (``refpsf: N stars, 10 needed``) on the job row; there is no
-fallback. ``[difference] reference_psf = "science"`` is a dataset's
-explicit choice instead (the GBTDS overlay's): no measurement, the science
-PSF written as ``refimage_psf.fits``, the manifest's ``refpsf`` saying so,
-the reference PSF's own metrics absent, and the residual, ring and
-registration stars taken from the reference mosaic's SExtractor catalog
-mapped onto the science grid (:func:`_catalog_stars`) instead of the
-measurement's finder. `dev` uses a static offline-compiled reference PSF per detector
-instead, so this is a recorded divergence (rapid_docs ``decisions.md``,
-2026-10-24: the empirical PSF was 15% wider than the science ePSF the
-``psf`` stage had handed ZOGY for both, run 17).
+``[difference] reference_psf`` chooses the reference PSF the differencers
+get, written as ``refimage_psf.fits``. ``"measured"`` (the base): ZOGY needs
+the PSF of the image it is given, the reference after the per-epoch SWarp
+resample, so the job measures it there
+(:func:`rapidpipe.science.difference.refpsf.measure`, after the reference
+background subtraction, on pixels finite and covered at
+``post_zogy_keep_diffimg_lower_cov_map_thresh``). Any measurement error
+(``refpsf: N stars, 10 needed`` or another) falls back to the set's row
+when the run names a ``reference_psf_set``; with none, too few stars fails
+the job with exit 65 and the reason on the job row, and any other error
+fails it as before. A fallback whose file fails its checks fails the job
+with exit 65, both errors logged and in the reason. ``"precomputed"``
+reads the set's row: its ``filename`` fetched, its MD5 checked against
+``checksum``, its stamp an odd square the science PSF's size, normalised
+(:func:`_precomputed_psf`); a missing or mismatched file exits 65.
+``"science"`` (the GBTDS overlay's) writes the science PSF, measuring
+nothing. Whenever nothing was measured, the reference PSF's star metrics
+are absent and the residual, ring and registration stars are the
+reference mosaic's SExtractor catalog mapped onto the science grid
+(:func:`_catalog_stars`) instead of the measurement's finder. The
+manifest's ``refpsf`` records the mode, and with a set the set's name, the
+``psfs`` row used (``psfid``, ``filename``, ``checksum``) and, for
+``"measured"``, ``fallback`` and ``measure_error``. `dev` uses a static
+offline-compiled reference PSF per detector, which ``"precomputed"``
+restores as an option; ``"measured"`` is a recorded divergence (rapid_docs
+``decisions.md``, 2026-10-24: the empirical PSF was 15% wider than the
+science ePSF the ``psf`` stage had handed ZOGY for both, run 17).
 
 Outputs under ``job.path``. ``[paths] work_subdirectory`` holds what the
 packet stage and a person read, and nothing else (:func:`trim`, Ben's
@@ -78,8 +91,8 @@ diagnostics, read by no stage; SFFT's two carry `dev`'s ``sumrat``,
 each catalog measured on the image its sources are positive in), and the packet
 stage's other reads beside the difference image, SFFT's difference PSF (forced photometry), the background-subtracted science
 image (forced photometry and the science cutout) and the resampled
-gain-matched reference (the template cutout), and the measured reference
-PSF (``refimage_psf.fits``). Every FITS file is
+gain-matched reference (the template cutout), and the reference
+PSF the differencers got (``refimage_psf.fits``). Every FITS file is
 gzipped (``.fits.gz``, level 1, as the intake's). The rest of `dev`'s
 diagnostic files (ZOGY's and naive's images, S_corr, intermediate
 images, text catalogs) is not published; a variant is re-created by
@@ -145,7 +158,7 @@ over ``sci_psf_sigma_px``; and the
 uncapped catalog's ``n_sources_near_bright_px`` and
 ``n_sources_ring_snr_gt20``, defined there; the job's seconds by step,
 wall clock: ``refpsf_s``, the reference PSF's measurement (or the science
-PSF's copy under ``reference_psf = "science"``); ``pixel_columns_s``, the
+PSF's or the set's copy); ``pixel_columns_s``, the
 pixel columns of both SFFT catalogs; ``rb_s``, the real/bogus calls on both
 SFFT PSF-fit catalogs; ``xsources_s``, the xsources' extra columns and
 their real/bogus scores, both signs; the classifier's session and its four
@@ -254,9 +267,9 @@ logger = logging.getLogger(__name__)
 REFERENCE_CATALOG_TYPE = 1
 #: The status of a difference image the stage finished.
 STATUS_GOOD = 1
-#: The ``psfs`` key kind the job names, one.
-PSF_KINDS = ("science",)
-#: The measured reference PSF's file name in the work directory.
+#: The ``[difference] reference_psf`` modes.
+REFERENCE_PSF_MODES = ("measured", "science", "precomputed")
+#: The reference PSF's file name in the work directory, whichever mode made it.
 REFERENCE_PSF_NAME = "refimage_psf.fits"
 #: The gzip level of the published FITS files, the intake's.
 GZIP_LEVEL = 1
@@ -372,6 +385,35 @@ def check_settings(settings: dict[str, Any]) -> None:
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < -1:
         raise ValueError(f"[difference] max_sources must be -1 (no cap) or a non-negative integer, "
                          f"got {cap!r}")
+    mode, psf_set = settings["reference_psf"], settings.get("reference_psf_set", "")
+    if mode not in REFERENCE_PSF_MODES:
+        raise ValueError(f"[difference] reference_psf is {mode!r}, not one of {REFERENCE_PSF_MODES}")
+    if not isinstance(psf_set, str):
+        raise ValueError(f"[difference] reference_psf_set must be a set's name, got {psf_set!r}")
+    if mode == "precomputed" and not psf_set:
+        raise ValueError('[difference] reference_psf = "precomputed" names no reference_psf_set')
+
+
+def psf_kinds(settings: dict[str, Any]) -> list[str]:
+    """The ``psfs`` kinds a difference job names as inputs under its run's ``[difference]`` table.
+
+    The science PSF always; the reference set's row under ``"precomputed"``, and under
+    ``"measured"`` when a set is named, since the fallback is bound before the job knows it needs it.
+
+    Parameters
+    ----------
+    settings : dict
+        The run's ``[difference]`` table.
+
+    Returns
+    -------
+    list of str
+        ``["science"]`` or ``["reference", "science"]``.
+    """
+    mode, psf_set = settings["reference_psf"], settings.get("reference_psf_set", "")
+    if mode == "precomputed" or (mode == "measured" and psf_set):
+        return ["reference", "science"]
+    return ["science"]
 
 
 def _seed(settings: dict[str, Any]) -> int | None:
@@ -441,6 +483,8 @@ class Inputs:
     reference_catalog: Path
     science_psf: Path
     pid: int
+    #: The bound reference ``psfs`` row (``psfid``, ``filename``, ``checksum``, ``psf_set``), fetched only if used.
+    reference_psf: dict | None = None
 
 
 def _beside(url: str, name: str) -> Path:
@@ -465,11 +509,13 @@ def read_inputs(job: JobContext) -> Inputs:
     if others:
         raise _rejected(f"job {job.job}: difference reads l2files, refimages and psfs, not {others}")
     counts = {p: len(by_product.get(p, [])) for p in ("l2files", "refimages")}
-    psf_kinds = sorted((i["key"].get("kind") for i in by_product.get("psfs", [])), key=str)
-    if counts != {"l2files": 1, "refimages": 1} or psf_kinds != sorted(PSF_KINDS):
+    named_kinds = sorted((i["key"].get("kind") for i in by_product.get("psfs", [])), key=str)
+    wanted = psf_kinds(job.settings["difference"])
+    if counts != {"l2files": 1, "refimages": 1} or named_kinds != wanted:
         raise _rejected(f"job {job.job}: difference names one l2files, one refimages and one "
-                        f"psfs input of key kind {PSF_KINDS}, got {counts} and psfs "
-                        f"kinds {psf_kinds}")
+                        f"psfs input of each key kind {wanted}, got {counts} and psfs "
+                        f"kinds {named_kinds}")
+    psf_set = job.settings["difference"].get("reference_psf_set", "")
     (l2_in,), (ref_in,) = by_product["l2files"], by_product["refimages"]
     if l2_in["key"] != key:
         raise _rejected(f"job {job.job}: l2files input {l2_in['key']} is not the epoch {key}")
@@ -498,12 +544,27 @@ def read_inputs(job: JobContext) -> Inputs:
         if refcat is None:
             raise _rejected(f"job {job.job}: reference rfid {ref[0]} has no mosaic catalog "
                             f"(refimcatalogs cattype {REFERENCE_CATALOG_TYPE})")
-        psf_urls = {}
+        psf_urls, reference_psf = {}, None
         for item in by_product["psfs"]:
             psf_key = item["key"]
             if (int(psf_key["fid"]), int(psf_key["sca"])) != (key["fid"], key["sca"]):
                 raise _rejected(f"job {job.job}: psfs input {psf_key} is not the scope's fid "
                                 f"and sca")
+            if psf_key["kind"] == "reference":
+                if psf_key.get("psf_set") != psf_set:
+                    raise _rejected(f"job {job.job}: psfs input {psf_key} is not the run's "
+                                    f"reference_psf_set {psf_set!r}")
+                cur.execute("SELECT psfid, filename, checksum FROM psfs WHERE job = %s AND dataset = %s"
+                            " AND psf_set = %s AND fid = %s AND sca = %s AND kind = 'reference'",
+                            (item["source_job"], psf_key["dataset"], psf_set, psf_key["fid"],
+                             psf_key["sca"]))
+                row = cur.fetchone()
+                if row is None:
+                    raise _rejected(f"job {job.job}: no psfs row {psf_key} in job "
+                                    f"{item['source_job']}")
+                reference_psf = {"psfid": int(row[0]), "filename": row[1], "checksum": row[2],
+                                 "psf_set": psf_set}
+                continue
             cur.execute("SELECT filename FROM psfs WHERE job = %s AND dataset = %s AND fid = %s"
                         " AND sca = %s AND kind = %s",
                         (item["source_job"], psf_key["dataset"], psf_key["fid"], psf_key["sca"],
@@ -530,7 +591,7 @@ def read_inputs(job: JobContext) -> Inputs:
         reference_uncertainty=_beside(ref_url,
                                       image_name.replace("_image.fits", "_uncert_image.fits")),
         reference_catalog=get(refcat[0]),
-        science_psf=get(psf_urls["science"]), pid=pid)
+        science_psf=get(psf_urls["science"]), pid=pid, reference_psf=reference_psf)
 
 
 def _stage_input(source: Path, work_dir: Path, taken: set[str]) -> str:
@@ -735,21 +796,22 @@ def run(job: JobContext) -> None:
                 kit.runner, work_dir, paths["bkgest_code"], paths["bkgest_include_dir"],
                 output_resampled_reference_image, output_resampled_reference_cov_map, bkgest)
 
-    # The reference PSF, measured on the resampled, background-subtracted reference.
+    # The reference PSF: measured on the resampled, background-subtracted reference, or the bound set's.
     with step("refpsf"):
         refpsf_record, metrics, measured_psf = _measure_reference_psf(
             kit, w(output_resampled_reference_image), w(output_resampled_reference_cov_map), thresh,
-            w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"])
+            w(filename_sciimage_psf_normalized), w(REFERENCE_PSF_NAME), settings["reference_psf"],
+            inputs.reference_psf)
     metrics["refpsf_s"] = refpsf_record["seconds"]
     # The reference catalog's sky positions; the metrics' stars, the measurement's finder stars
-    # or, under reference_psf = "science", the catalog's own (_catalog_stars).
+    # or, when nothing was measured, the catalog's own (_catalog_stars).
     with step("registration"):
         reference_sky = sextractor.parse_ascii_text_sextractor_catalog(
             w(staged["catalog"]), cfg_path + "/rapidSexParamsRefImage.inp", REFERENCE_CATALOG_COLUMNS)
         science_pixels = fits.getdata(w(filename_bkg_subbed_science_image), 0).astype(float)
         reference_pixels = fits.getdata(w(output_resampled_reference_image), 0).astype(float)
         found, stars_xy = measured_psf.found, measured_psf.stars_xy
-        if settings["reference_psf"] == "science":
+        if refpsf_record["mode"] != "measured" or refpsf_record.get("fallback"):
             found, stars_xy = _catalog_stars(
                 reference_sky, fits.getheader(w(filename_bkg_subbed_science_image), 0), reference_pixels)
         # Registration, before the subpixel offset corrects it; the science stars' own width beside
@@ -1182,11 +1244,41 @@ def _with_neighbours(fields: set[int]) -> set[int]:
 
 def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh: float,
                            science_psf: Path, target: Path, mode: str = "measured",
+                           precomputed: dict | None = None,
                            ) -> tuple[dict, dict, refpsf.ReferencePsf]:
-    """Measure the reference PSF into ``target``; return the manifest's record, metrics and the measurement.
+    """Write the reference PSF the differencers get into ``target``; return the manifest's record, metrics and the measurement.
 
-    Too few stars stops the job with exit 65 and the measurement's reason.
-    ``mode`` ``"science"`` writes the science PSF instead, measuring nothing.
+    ``"measured"`` measures it on the resampled reference and, on any measurement error, falls back
+    to the bound set's row ``precomputed`` when there is one; ``"science"`` writes the science PSF;
+    ``"precomputed"`` writes the bound set's row.
+
+    Parameters
+    ----------
+    kit : Toolkit
+        The stage's tools; ``kit.reference_psf`` measures.
+    reference, coverage : pathlib.Path
+        The resampled, background-subtracted reference and its coverage map.
+    thresh : float
+        The coverage a usable pixel reaches.
+    science_psf : pathlib.Path
+        The normalised science PSF.
+    target : pathlib.Path
+        Where the reference PSF is written.
+    mode : str
+        ``[difference] reference_psf``.
+    precomputed : dict or None
+        The bound reference ``psfs`` row (``psfid``, ``filename``, ``checksum``, ``psf_set``).
+
+    Returns
+    -------
+    tuple
+        The manifest's ``refpsf`` record, the metrics, and the measurement (no stars when none was used).
+
+    Raises
+    ------
+    CommandExit
+        Exit 65: too few stars with no set to fall back to, or a set's file missing, not its
+        checksum or not the science PSF's shape; a failed fallback carries both errors.
     """
     start = time.perf_counter()
     science = fits.getdata(science_psf, 0).astype(float)
@@ -1202,14 +1294,31 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
                                    star_sigma_px=float("nan"))
         return ({"mode": "science", "seconds": round(time.perf_counter() - start, 3)},
                 {"sci_psf_sigma_px": sci[2]}, none)
+    if mode == "precomputed":
+        if precomputed is None:
+            raise _rejected('[difference] reference_psf = "precomputed" but the job names no reference psfs row')
+        return _precomputed_psf(precomputed, science, sci, target, start, {"mode": "precomputed"})
     if mode != "measured":
-        raise ValueError(f"[difference] reference_psf is {mode!r}, not 'measured' or 'science'")
+        raise ValueError(f"[difference] reference_psf is {mode!r}, not one of {REFERENCE_PSF_MODES}")
     image = fits.getdata(reference, 0)
     usable = fits.getdata(coverage, 0) >= thresh
     try:
         measured = kit.reference_psf(image, usable, science)
-    except refpsf.TooFewStars as exc:
-        raise CommandExit(int(ExitCode.INPUT_REJECTED), str(exc)) from exc
+    except Exception as exc:
+        if precomputed is None:
+            if isinstance(exc, refpsf.TooFewStars):
+                raise CommandExit(int(ExitCode.INPUT_REJECTED), str(exc)) from exc
+            raise
+        logger.warning("reference PSF: the measurement failed (%s); falling back to set %s, psfs %d",
+                       exc, precomputed["psf_set"], precomputed["psfid"])
+        try:
+            return _precomputed_psf(precomputed, science, sci, target, start,
+                                    {"mode": "measured", "fallback": True, "measure_error": str(exc)})
+        except Exception as fallback_exc:
+            logger.error("reference PSF: the measurement failed (%s) and so did the fallback (%s)",
+                         exc, fallback_exc)
+            raise CommandExit(int(ExitCode.INPUT_REJECTED),
+                              f"{fallback_exc}; the measurement before it: {exc}") from fallback_exc
     header = fits.Header()
     header["PSFKIND"] = ("refimage_psf", "measured on the resampled reference")
     header["OVERSAMP"] = (1, "detector pixels")
@@ -1222,6 +1331,8 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
     record = {"mode": "measured", "stars": measured.stars, "detections": measured.detections,
               "passed_cuts": measured.passed_cuts, "seconds": seconds,
               "centroid_px": list(measured.centroid_px), "science_centroid_px": [sci[0], sci[1]]}
+    if precomputed is not None:
+        record.update(psf_set=precomputed["psf_set"], fallback=False, measure_error=None)
     metrics = {"refpsf_sigma_px": measured.sigma_px, "refpsf_stars": measured.stars,
                "ref_sigma_px": measured.star_sigma_px, "sci_psf_sigma_px": sci[2],
                "psf_centroid_offset_x_px": measured.centroid_px[0] - sci[0],
@@ -1229,6 +1340,72 @@ def _measure_reference_psf(kit: Toolkit, reference: Path, coverage: Path, thresh
     if sci[2] > 0:
         metrics["ref_sci_sigma_ratio"] = measured.star_sigma_px / sci[2]
     return record, metrics, measured
+
+
+def _precomputed_psf(row: dict, science: np.ndarray, sci: tuple[float, float, float], target: Path,
+                     start: float, record: dict) -> tuple[dict, dict, refpsf.ReferencePsf]:
+    """Write the bound reference ``psfs`` row's file, checked and normalised, into ``target``.
+
+    Parameters
+    ----------
+    row : dict
+        The reference ``psfs`` row: ``psfid``, ``filename``, ``checksum`` and ``psf_set``.
+    science : numpy.ndarray
+        The science PSF's stamp, whose shape the file must have.
+    sci : tuple of float
+        The science stamp's :func:`~rapidpipe.science.difference.refpsf.moments`.
+    target : pathlib.Path
+        Where the reference PSF is written.
+    start : float
+        The step's ``time.perf_counter()`` start.
+    record : dict
+        The manifest record's mode fields, completed here.
+
+    Returns
+    -------
+    tuple
+        The manifest's ``refpsf`` record, the metrics, and an empty measurement.
+
+    Raises
+    ------
+    CommandExit
+        Exit 65 when the file is missing, its MD5 is not the row's checksum, or it is not an odd
+        square the science PSF's size with a positive finite sum.
+    """
+    where = f"reference psfs {row['psfid']} of set {row['psf_set']!r} ({row['filename']})"
+    try:
+        path = get(row["filename"])
+        digest = hashlib.md5(path.read_bytes()).hexdigest()
+    except FileNotFoundError as exc:
+        raise _rejected(f"{where}: no such file") from exc
+    if digest != row["checksum"]:
+        raise _rejected(f"{where}: MD5 {digest} is not the row's checksum {row['checksum']}")
+    stamp = np.asarray(fits.getdata(path, 0), dtype=float)
+    size = science.shape[0]
+    if stamp.shape != science.shape or stamp.shape != (size, size) or size % 2 == 0:
+        raise _rejected(f"{where}: shape {stamp.shape} is not the science PSF's odd square {science.shape}")
+    total = stamp.sum()
+    if not np.isfinite(total) or total <= 0:
+        raise _rejected(f"{where}: its sum {total} is not positive and finite")
+    stamp = stamp / total
+    header = fits.Header()
+    header["PSFKIND"] = ("refimage_psf", "the precomputed reference PSF set's")
+    header["PSFSET"] = (row["psf_set"], "[difference] reference_psf_set")
+    header["PSFID"] = (row["psfid"], "the psfs row")
+    header["OVERSAMP"] = (1, "detector pixels")
+    fits.PrimaryHDU(stamp.astype("float32"), header).writeto(target, overwrite=True)
+    moments = refpsf.moments(stamp)
+    logger.info("reference PSF: set %s, psfs %d, sigma %.3f px (science %.3f)",
+                row["psf_set"], row["psfid"], moments[2], sci[2])
+    record = {**record, "psf_set": row["psf_set"],
+              "psfs": {k: row[k] for k in ("psfid", "filename", "checksum")},
+              "seconds": round(time.perf_counter() - start, 3)}
+    metrics = {"refpsf_sigma_px": moments[2], "sci_psf_sigma_px": sci[2],
+               "psf_centroid_offset_x_px": moments[0] - sci[0],
+               "psf_centroid_offset_y_px": moments[1] - sci[1]}
+    none = refpsf.ReferencePsf(stamp=stamp, stars=0, detections=0, passed_cuts=0, sigma_px=moments[2],
+                               centroid_px=(moments[0], moments[1]), star_sigma_px=float("nan"))
+    return record, metrics, none
 
 
 def _reference_on_grid(reference_sky: list, header) -> tuple[np.ndarray, np.ndarray]:
@@ -1270,7 +1447,7 @@ def flag_bright_footprint(sources: pa.Table, reference_xy: np.ndarray, reference
 
 
 def _catalog_stars(reference_sky: list, header, reference: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The metrics' star rows under ``reference_psf = "science"``, from the reference mosaic's catalog.
+    """The metrics' star rows when no reference PSF was measured, from the reference mosaic's catalog.
 
     ``reference_sky`` rows are :data:`REFERENCE_CATALOG_COLUMNS`, mapped onto
     the science grid of ``header`` (:func:`_reference_on_grid`) and kept on

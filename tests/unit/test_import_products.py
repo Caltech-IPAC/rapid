@@ -8,8 +8,9 @@ the fit-position bounds; overlapping fields and sky indices are computed
 from the image's WCS; the manifest declares every table and the
 provenance line; both signs' PSF-fit catalogs load into ``sources`` and
 both SExtractor catalogs into ``xsources``, with the extra columns `dev`
-wrote into them, as `dev`'s loaders read them; a PSF imports under its declared kind, which `dev`'s
-``PSFKIND`` keyword must not contradict; an import supplies no identity
+wrote into them, as `dev`'s loaders read them; a PSF imports under the kind its scope declares,
+its ``PSFKIND`` keyword recorded and never checked; a reference PSF set expands a per-filter
+file to 18 rows and refuses what it cannot import exactly; an import supplies no identity
 column but the source system's ids the plan keeps.
 """
 
@@ -346,23 +347,85 @@ def test_an_epoch_without_its_psfs_input_is_rejected_65_with_its_reason(tmp_path
 
 # dev's two PSF files on the 20260821 night carry PSFKIND 'sciimage_psf'
 # (sciimage_psf_f146_sca08.fits) and 'refimage_psf' (refimage_psf_f146_sca08.fits).
-@pytest.mark.parametrize("keyword, kind", [("sciimage_psf", "science"), ("refimage_psf", "reference")])
-def test_a_psf_whose_keyword_matches_its_declared_kind_imports_under_it(
-        tmp_path, source, keyword, kind):
+@pytest.mark.parametrize("keyword, kind", [("sciimage_psf", "science"), ("refimage_psf", "reference"),
+                                           ("refimage_psf", "science"), ("sciimage_psf", "reference")])
+def test_the_kind_is_the_calls_and_psfkind_is_recorded_never_checked(tmp_path, source, keyword, kind):
     fits.setval(source / "psf.fits", "PSFKIND", value=keyword)
-    prefix = run_import(tmp_path, source, {"psf": {"kind": kind, "path": "psf.fits"}}, kind)
-    assert [p["kind"] for p in read(prefix, "psfs")] == [kind]
+    psf = {"kind": kind, "path": "psf.fits", **({"psf_set": "S1"} if kind == "reference" else {})}
+    prefix = run_import(tmp_path, source, {"psf": psf}, f"{keyword}-{kind}")
+    rows = read(prefix, "psfs")
+    assert [(p["kind"], p["psf_set"]) for p in rows] == [(kind, "S1" if kind == "reference" else None)]
     assert json.loads((prefix / "manifest.json").read_text())["psf"] == {
         "kind": kind, "PSFKIND": keyword}
 
 
-@pytest.mark.parametrize("keyword, kind", [("refimage_psf", "science"), ("sciimage_psf", "reference")])
-def test_a_psf_whose_keyword_names_the_other_kind_fails_before_a_manifest(
-        tmp_path, source, keyword, kind):
-    fits.setval(source / "psf.fits", "PSFKIND", value=keyword)
-    with pytest.raises(ValueError, match="PSFKIND"):
-        run_import(tmp_path, source, {"psf": {"kind": kind, "path": "psf.fits"}}, kind)
-    assert not (tmp_path / "outputs" / kind / "manifest.json").exists()
+def test_a_single_reference_psf_names_its_set(tmp_path, source):
+    with pytest.raises(ValueError, match="psf_set"):
+        run_import(tmp_path, source, {"psf": {"kind": "reference", "path": "psf.fits"}}, "noset")
+
+
+def psf_set_dir(source: Path, names=("refimage_psf_fid8.fits", "refimage_psf_fid2_sca03.fits")) -> str:
+    """A set directory under ``source``: a per-filter file and one SCA's file of another filter."""
+    directory = source / "set"
+    directory.mkdir(exist_ok=True)
+    for n, name in enumerate(names):
+        stamp = np.zeros((9, 9), dtype=np.float32)
+        stamp[4, 4] = 1.0 + n
+        header = fits.Header({"PSFKIND": "sciimage_psf"} if "sca" in name else {})
+        fits.PrimaryHDU(stamp, header).writeto(directory / name, overwrite=True)
+    return "set"
+
+
+def set_expects(keys) -> list[dict]:
+    return [{"kind": "expects", "product": "psfs", "source_job": None, "binding": None,
+             "key": {"dataset": "D", "psf_set": "S1", "fid": fid, "sca": sca, "kind": "reference"}}
+            for fid, sca in keys]
+
+
+SET_KEYS = [(8, sca) for sca in range(1, 19)] + [(2, 3)]
+
+
+def run_set(tmp_path, source, name, files=("refimage_psf_fid8.fits", "refimage_psf_fid2_sca03.fits"),
+            keys=SET_KEYS):
+    return run_import(tmp_path, source, {"psf": {"kind": "reference", "psf_set": "S1",
+                                                 "dir": psf_set_dir(source), "files": list(files)}},
+                      name, inputs=set_expects(keys))
+
+
+def test_a_per_filter_file_is_18_rows_sharing_one_copy_and_a_per_sca_file_one_row(tmp_path, source):
+    prefix = run_set(tmp_path, source, "set")
+    rows = read(prefix, "psfs")
+    assert set(rows[0]) == schema_columns("psfs") - {"psfid"}
+    assert sorted((r["fid"], r["sca"]) for r in rows) == sorted(SET_KEYS)
+    assert {(r["kind"], r["psf_set"], r["dataset"]) for r in rows} == {("reference", "S1", "D")}
+    per_filter = [r for r in rows if r["fid"] == 8]
+    assert len({(r["filename"], r["checksum"]) for r in per_filter}) == 1
+    assert per_filter[0]["filename"].endswith("/refimage_psf_fid8.fits")
+    assert sorted(p.name for p in prefix.glob("refimage_psf_*")) == [
+        "refimage_psf_fid2_sca03.fits", "refimage_psf_fid8.fits"]
+    recorded = json.loads((prefix / "manifest.json").read_text())["psf"]
+    assert recorded == {"kind": "reference", "psf_set": "S1", "files": [
+        {"file": "refimage_psf_fid8.fits", "fid": 8, "sca": None, "rows": 18, "PSFKIND": None},
+        {"file": "refimage_psf_fid2_sca03.fits", "fid": 2, "sca": 3, "rows": 1,
+         "PSFKIND": "sciimage_psf"}]}
+
+
+@pytest.mark.parametrize("files, keys, message", [
+    (("refimage_psf_fid8.fits", "refimage_psf_fid8_sca03.fits"), SET_KEYS, "both give fid 8 sca 3"),
+    (("refimage_psf_fid8.fits",), SET_KEYS, "not one to one"),
+    (("refimage_psf_fid8.fits", "refimage_psf_fid2_sca03.fits"), SET_KEYS[1:], "not one to one"),
+    (("psf.fits",), SET_KEYS, "is not refimage_psf_fid"),
+    (("refimage_psf_fid9.fits",), SET_KEYS, "no filter and SCA"),
+    (("refimage_psf_fid1.fits",), SET_KEYS, "no file"),
+])
+def test_a_set_the_job_cannot_import_exactly_is_rejected_65_before_a_manifest(
+        tmp_path, source, files, keys, message):
+    psf_set_dir(source, ("refimage_psf_fid8.fits", "refimage_psf_fid2_sca03.fits",
+                         "refimage_psf_fid8_sca03.fits"))
+    with pytest.raises(CommandExit, match=message) as stopped:
+        run_set(tmp_path, source, "bad", files, keys)
+    assert stopped.value.code == 65
+    assert not (tmp_path / "outputs" / "bad" / "manifest.json").exists()
 
 
 #: The source system's ids an import keeps in identity columns (plan Part 1:
