@@ -38,6 +38,17 @@ admitted when its ``expid`` is in any of them, with the other terms. A SOC
 range is a contiguous stretch of a pass's observations (pass 2 whole and
 pass 5 observation 3 visits 61 to 64 are ``2000000-2999999,5036101-5036401``).
 
+``--programs`` selects programs within the dataset, comma-separated
+program numbers (``1049,1018``, or ``-2``), all by default. A stem's program
+is the one intake will write for it: the run's ``[intake] program_id`` when
+its dataset sets one, else the SOC stem's own five digits; a stem with
+neither is not admitted. An official L2 row's program is its exposure's
+official ``exposures`` row's ``program_id``; a row whose exposure has no
+official row yet is not selected until it has one. So references are built
+only from the selected programs' frames and only their images are
+differenced and packeted, while an official reference of the field, built
+from any program, is reused. Objects are matched within the run, as always.
+
 "Pending" is a job of the run in state ``launched`` or ``running``; a
 ``declined`` job is neither pending nor failed (below). A job
 of the run in state ``failed`` is reported (``failed``, with its scope) and
@@ -174,7 +185,7 @@ from rapidpipe.products import coverage
 from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
 
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
-STEM = re.compile(r"r\d{5}\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<visit>\d{3})"
+STEM = re.compile(r"r(?P<program>\d{5})\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<visit>\d{3})"
                   r"_(?P<exposure>\d{4})_wfi(?P<sca>\d{2})_(?P<filter>f\d{3})$")
 #: Any key under the source root that begins with a stem.
 KEY = re.compile(STEM.pattern.removesuffix("$"))
@@ -207,7 +218,8 @@ class Selection:
     """Filters (``F146``), SCAs, pointings (``(visit, exposure)``, or the observing sequence's row for
     :data:`OPENUNIVERSE`) and the survey's passes, ``None`` for all pointings or all passes; ``reader``
     the run's ``[intake] reader``; ``expids`` inclusive ``(lo, hi)`` ranges of the ``expid``, ``None``
-    for all."""
+    for all; ``programs`` the program numbers, ``None`` for all; ``fixed_program`` the run's
+    ``[intake] program_id`` when its dataset sets one, every stem's program then, ``None`` when unset."""
 
     filters: frozenset[str]
     scas: frozenset[int]
@@ -215,10 +227,31 @@ class Selection:
     passes: frozenset[int] | None = None
     reader: str = "soc-l2"
     expids: tuple[tuple[int, int], ...] | None = None
+    programs: frozenset[int] | None = None
+    fixed_program: int | None = None
 
     @classmethod
     def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all",
-              reader: str = "soc-l2", expids: str = "all") -> "Selection":
+              reader: str = "soc-l2", expids: str = "all", programs: str = "all",
+              fixed_program: int | str = "") -> "Selection":
+        """A selection from the ``loop`` verb's terms, each comma-separated or ``all``.
+
+        Parameters
+        ----------
+        filters, scas, pointings, passes, expids : str
+            The verb's ``--filters``, ``--scas``, ``--pointings``, ``--passes`` and ``--expids``.
+        reader : str
+            The run's ``[intake] reader``.
+        programs : str
+            The verb's ``--programs``: program numbers, e.g. ``1049,1018`` or ``-2``, or ``all``.
+        fixed_program : int or str
+            The run's ``[intake] program_id``; ``""`` means unset, each stem's own program.
+
+        Returns
+        -------
+        Selection
+            The parsed selection; ``ValueError`` names a malformed term.
+        """
         ranges = None
         if expids != "all":
             ranges = tuple(sorted((int(lo), int(hi or lo)) for lo, _, hi in
@@ -234,7 +267,9 @@ class Selection:
                 (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
         return cls(frozenset(f.strip().upper() for f in filters.split(",")),
                    frozenset(int(s) for s in scas.split(",")), points,
-                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader, ranges)
+                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader, ranges,
+                   None if programs == "all" else frozenset(int(p) for p in programs.split(",")),
+                   None if fixed_program == "" else int(fixed_program))
 
     def admits_expid(self, expid: int) -> bool:
         return self.expids is None or any(lo <= expid <= hi for lo, hi in self.expids)
@@ -252,13 +287,33 @@ class Selection:
             return None
         if not self.admits_expid(ids["expid"]):
             return None
+        if self.programs is not None and self.stem_program(ids) not in self.programs:
+            return None
         return {"sca": ids["sca"], "filter": ids["filter"], "expid": ids["expid"]}
 
-    def admits_row(self, expid: int, sca: int, fid: int, fids: set[int]) -> bool:
+    def stem_program(self, ids: dict) -> int | None:
+        """The program intake writes for a stem: the fixed program when the run sets one, else the stem's own.
+
+        Parameters
+        ----------
+        ids : dict
+            :func:`stem_ids` of the stem.
+
+        Returns
+        -------
+        int or None
+            The program number; ``None`` for a stem with no program and no fixed program.
+        """
+        return self.fixed_program if self.fixed_program is not None else ids["program"]
+
+    def admits_row(self, expid: int, sca: int, fid: int, fids: set[int], program: int | None = None) -> bool:
         """Whether an L2 key is selected, ``fids`` the selected filters' fids; ``expid``
         packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits, or is the
-        OpenUniverse pointing."""
+        OpenUniverse pointing; ``program`` its official ``exposures`` row's ``program_id``,
+        ``None`` when the exposure has none, which a program selection never admits."""
         if sca not in self.scas or fid not in fids or not self.admits_expid(expid):
+            return False
+        if self.programs is not None and program not in self.programs:
             return False
         if self.reader in PASSLESS:
             return self.pointings is None or expid in self.pointings
@@ -272,7 +327,8 @@ class Selection:
             points = [f"{v:03d}_{e:04d}" for v, e in points]
         return {"filters": sorted(self.filters), "scas": sorted(self.scas), "pointings": points,
                 "passes": "all" if self.passes is None else sorted(self.passes),
-                "expids": "all" if self.expids is None else [f"{lo}-{hi}" for lo, hi in self.expids]}
+                "expids": "all" if self.expids is None else [f"{lo}-{hi}" for lo, hi in self.expids],
+                "programs": "all" if self.programs is None else sorted(self.programs)}
 
 
 def stem_expid(stem: str) -> int:
@@ -284,19 +340,19 @@ def stem_expid(stem: str) -> int:
 
 def stem_ids(stem: str) -> dict | None:
     """A SOC, OpenUniverse or RimTimSim stem's ``reader``, ``sca``, ``filter`` (the pipeline's name,
-    ``F158``), ``expid``, ``pointing`` and ``pass`` (``None`` but for the SOC's); ``None`` for any other
-    name."""
+    ``F158``), ``expid``, ``pointing``, ``pass`` and ``program`` (both ``None`` but for the SOC's);
+    ``None`` for any other name."""
     if m := STEM.match(stem):
         return {"reader": "soc-l2", "sca": int(m["sca"]), "filter": m["filter"].upper(),
                 "expid": stem_expid(stem), "pointing": (int(m["visit"]), int(m["exposure"])),
-                "pass": int(m["pass"])}
+                "pass": int(m["pass"]), "program": int(m["program"])}
     if m := OU_STEM.match(stem):
         return {"reader": OPENUNIVERSE, "sca": int(m["sca"]),
                 "filter": RAPID_TO_ROMAN_FILTER_NAMES.get(m["filter"], m["filter"]),
-                "expid": int(m["pointing"]), "pointing": int(m["pointing"]), "pass": None}
+                "expid": int(m["pointing"]), "pointing": int(m["pointing"]), "pass": None, "program": None}
     if m := RTS_STEM.match(stem):
         return {"reader": RIMTIMSIM, "sca": int(m["sca"]), "filter": m["filter"],
-                "expid": int(m["exposure"]), "pointing": int(m["exposure"]), "pass": None}
+                "expid": int(m["exposure"]), "pointing": int(m["exposure"]), "pass": None, "program": None}
     return None
 
 
@@ -377,7 +433,7 @@ class Snapshot:
     jobs: list[dict]
     psfs: dict[tuple[int, int, str], tuple[int, int]]          # (fid, sca, kind) -> (job, binding)
     exposures: set[int]                                          # expids with an open binding
-    l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job, ra0, dec0, corners}
+    l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job, program, ra0, dec0, corners}
     refs: dict[tuple[int, int], int]                             # (field, fid) -> job
     diffs: dict[tuple[int, int, int], int]                       # key -> difference job
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
@@ -410,12 +466,14 @@ def snapshot(conn, run: int) -> Snapshot:
                           " ORDER BY id", (run, list(STAGES)))
         bound = _rows(cur, "SELECT id, product, key, job FROM official WHERE closed_at IS NULL"
                            " AND job IS NOT NULL AND key->>'dataset' = %s", (d,))
+        # A row's program is its exposure's official exposures row's, null while none is bound.
         l2 = {_l2key(r): {"field": r["field"], "overlapfields": r["overlapfields"], "mjdobs": r["mjdobs"],
-                          "job": r["job"], "ra0": r["ra0"], "dec0": r["dec0"],
+                          "job": r["job"], "program": r["program_id"], "ra0": r["ra0"], "dec0": r["dec0"],
                           "corners": ([r[f"ra{i}"] for i in range(1, 5)], [r[f"dec{i}"] for i in range(1, 5)])}
-              for r in _rows(cur, "SELECT expid, sca, fid, field, overlapfields, mjdobs, job, ra0, dec0,"
-                                  " ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4 FROM l2files_official"
-                                  " WHERE dataset = %s", (d,))}
+              for r in _rows(cur, "SELECT l.expid, l.sca, l.fid, l.field, l.overlapfields, l.mjdobs, l.job,"
+                                  " l.ra0, l.dec0, l.ra1, l.dec1, l.ra2, l.dec2, l.ra3, l.dec3, l.ra4, l.dec4,"
+                                  " e.program_id FROM l2files_official l LEFT JOIN exposures_official e"
+                                  " ON e.dataset = l.dataset AND e.expid = l.expid WHERE l.dataset = %s", (d,))}
         declined = defaultdict(set)
         for r in _rows(cur, "SELECT i.job, i.key FROM job_inputs i JOIN jobs j ON j.id = i.job"
                             " WHERE j.run = %s AND j.stage = 'reference' AND j.state = 'declined'"
@@ -730,7 +788,7 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         out.append({"stage": "intake", "scope": {"dataset": d, "file": stem},
                     "inputs": inputs, "expects": expects})
 
-    selected = {k: v for k, v in snap.l2.items() if selection.admits_row(*k, set(fids.values()))}
+    selected = {k: v for k, v in snap.l2.items() if selection.admits_row(*k, set(fids.values()), v["program"])}
     intake_pending = bool(pending["intake"])
     bound = snap.settings["reference"]["selection"].get("before_mjd")
     after = {k: v for k, v in selected.items() if bound is None or v["mjdobs"] >= float(bound)}
