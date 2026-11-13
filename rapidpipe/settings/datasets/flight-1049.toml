@@ -24,21 +24,39 @@
 # meta.observation.program; the exposures row's program_id is the
 # producer's program number, negative only for the simulations.
 program_id = 1049
-# HLWAS's mask (#238's bits without SATURATED): the files carry the same
-# roman_datamodels pixel flags, so the bits mean the same. Per file it masks
-# 0.231% of the pixels (DO_NOT_USE 0.039%, DEAD 0.097%, HOT 0.100%,
-# NONLINEAR 0.105%, NO_LIN_CORR 0.116%, UNRELIABLE_FLAT 0.011%); 1.36% carry
-# any flag, the largest unmasked GW_AFFECTED_DATA 0.370% (the guide window),
-# UNRELIABLE_SLOPE 0.362% and OTHER_BAD_PIXEL 0.274%. SATURATED is on 0.001%
-# to 0.002%. Of the 3,116 pixels above 10 sigma of their local background at
-# the same detector position in all four frames (hot pixels: the sky moved
-# with the dithers), this mask removes 2,644; of the 472 left, 341 carry no
-# flag and no one more bit removes more than 72 (WARM), so no value here
-# masks them.
-dq_mask_bits = 0x2110C01
+# dq_mask_bits is the base's (no key): the files carry the same
+# roman_datamodels pixel flags as the SOC simulations, so the bits mean the
+# same. Without SATURATED the mask covers 0.231% of the pixels per file
+# (DO_NOT_USE 0.039%, DEAD 0.097%, HOT 0.100%, NONLINEAR 0.105%, NO_LIN_CORR
+# 0.116%, UNRELIABLE_FLAT 0.011%); 1.36% carry any flag, the largest
+# unmasked GW_AFFECTED_DATA 0.370% (the guide window), UNRELIABLE_SLOPE
+# 0.362% and OTHER_BAD_PIXEL 0.274%. SATURATED is on 0.001% to 0.002%, real
+# saturated cores, so HLWAS's reason for leaving it out (every star core
+# above about 100 DN/s flagged) does not hold here and the base masks it
+# (Azalee, 2026-11-10). Of the 3,116 pixels above 10 sigma of their local
+# background at the same detector position in all four frames (hot pixels:
+# the sky moved with the dithers), the mask without SATURATED removes 2,644;
+# of the 472 left, 341 carry no flag and no one more bit removes more than
+# 72 (WARM), so no value here masks them.
 # The sky moves: the intake's gaia_dx_px / gaia_dy_px carry Gaia DR3's stars
 # by their proper motions to each frame's mid-exposure (runbook part 13 step
 # gaia-pm). Without it run 118's intake read the field's proper motion,
 # (-0.08 to +0.16, -0.56 to -0.35) px, as WCS offset; by hand the
 # propagation puts the WCS at (-0.09 to -0.04, -0.06 to -0.04) px.
 gaia_proper_motion = true
+
+[difference.sfft]
+# The kernel-fit masking values, chosen by offline reruns of 20261021 req7
+# jid95 (PID 1062, F062, WFI06),
+# not measured on 1049: there the fit, on this base's OpenUniverse block,
+# gave a kernel sum of 1.050 (negative/positive 0.755), dominated by one
+# saturated star and by the zero-filled DQ-masked pixels, of which about
+# 500 to 1,250 inside source footprints carried 22% to 29% of the fit's
+# (sci - ref)^2. With zero margin 2 and isoarea 2000 / isofactor 2.0 the
+# kernel sum was 0.997 and the bright-star residuals largely gone; a star
+# whose missing saturated core leaves FLUX_MAX at 176 DN/s has ISOAREA
+# 143,000 px^2, radius 427 px. jid95 was tuned with SATURATED masked, as
+# the base dq_mask_bits masks it (Azalee, 2026-11-10).
+sfft_zero_margin = "2"
+sfft_bsmask_isoarea = "2000"
+sfft_bsmask_isofactor = "2.0"

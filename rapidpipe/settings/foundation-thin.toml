@@ -48,9 +48,15 @@ limmag_nsigma = 5.0
 limmag_clip_sigma = 3.0
 limmag_maxiters = 10
 # DQ bits whose pixels the conversion sets NaN in SCI, ERR and VAR_*
-# (commissioning #238's DQMASKBITS, pipeline/dqMaskSubs.py). 0 is dev's
-# behaviour: nothing masked, DQ written and never read.
-dq_mask_bits = 0
+# (commissioning #238's DQMASKBITS, pipeline/dqMaskSubs.py). The default
+# masks DO_NOT_USE, SATURATED, DEAD, HOT, NONLINEAR, NO_LIN_CORR and
+# UNRELIABLE_FLAT; 0 masks nothing. On flight
+# data SATURATED marks 0.001% to 0.002% of pixels, real saturated cores
+# (flight-1049.toml); the simulations that flag every star core override it.
+# (Azalee, 2026-11-10) A nonzero value is written in decimal under a comment
+# giving it as a sum of the named roman_datamodels pixel flags.
+# DO_NOT_USE 1 + SATURATED 2 + DEAD 1024 + HOT 2048 + NONLINEAR 65536 + NO_LIN_CORR 1048576 + UNRELIABLE_FLAT 33554432
+dq_mask_bits = 34671619
 # New, not dev's: pixels [dx, dy] added to CRPIX1 and CRPIX2 at intake, a
 # dataset's measured WCS translation (measured minus predicted star
 # position). [0.0, 0.0] is dev's behaviour: the file's WCS unchanged.
@@ -679,6 +685,16 @@ sfft_bsmask_value = "50.0"
 sfft_bsmask_radius = "100.0"
 sfft_use_gainmatch_catalogs = true
 sfft_use_segmentation = true
+# The kernel-fit masking: --zeromargin
+# leaves out of the fit pixels that are 0 in either image (the stage's
+# NaN fill) and those within this many pixels of one; --bsmaskisoarea also
+# masks catalog sources with ISOAREA_IMAGE >= this, radius max(bsmask
+# radius, isofactor * sqrt(ISOAREA_IMAGE / pi)). Empty, as here, leaves the
+# option off the command, which is then unchanged; flight-1049 sets them
+# (Azalee, 2026-11-10).
+sfft_zero_margin = ""
+sfft_bsmask_isoarea = ""
+sfft_bsmask_isofactor = ""
 sfft_code = "/code/modules/sfft/sfft_rapid_crowded.py"
 # The interpreter that runs sfft_code; empty means the interpreter
 # running this stage (the pipeline image's main conda environment, where
