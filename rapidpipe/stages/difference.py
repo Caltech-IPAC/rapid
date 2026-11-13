@@ -184,7 +184,11 @@ SExtractor catalogs are, as `dev` makes them), so its two outcome bits
 are never set (decisions page, 28 to 72 min of a RimTimSim F213
 difference went to PSF-fit catalogs, PR 437); a missing SFFT positive
 PSF-fit catalog publishes an empty source set with its outcome bit set, where
-`dev`'s loader skips the job.
+`dev`'s loader skips the job. The science-image and difference-image
+SExtractor catalogs take ``MAG_ZEROPOINT`` from the reformatted science
+image's ``ZPTMAG`` at run time (:func:`with_catalog_zero_point`), where
+the settings tables leave it 0; the gain-match
+runs keep the table's 0, because gain matching adds the zero point itself.
 
 This module may import ``rapidpipe.products``, ``rapidpipe.db``,
 ``rapidpipe.foundation`` and ``rapidpipe.science``; never another stage,
@@ -574,6 +578,36 @@ class _Catalogs:
     xsources: dict[str, Any] | None = None
 
 
+def with_catalog_zero_point(settings: dict[str, Any], science_image: Path) -> dict[str, Any]:
+    """The job's table with ``[sextractor_sciimage]`` and ``[sextractor_diffimage]`` magnitudes on the science header's ``[gainmatch] zero_point_sci_keyword``.
+
+    ``[sextractor_gainmatch]`` is left alone, because gain matching adds the zero point itself.
+
+    Parameters
+    ----------
+    settings : dict
+        The job's ``[difference]`` table; not changed.
+    science_image : Path
+        The reformatted science image (DN/s), its zero point in HDU 0.
+
+    Returns
+    -------
+    dict
+        A shallow copy with new ``sextractor_sciimage`` and ``sextractor_diffimage`` tables, or
+        ``settings`` itself, with a warning, when the header has no zero point.
+    """
+    keyword = settings["gainmatch"]["zero_point_sci_keyword"]
+    zero_point = fits.getheader(science_image, 0).get(keyword)
+    if zero_point is None:
+        logger.warning("no %s in the science-image header; science- and difference-image "
+                       "SExtractor magnitudes left on MAG_ZEROPOINT = %s", keyword,
+                       settings["sextractor_sciimage"]["sextractor_mag_zeropoint"])
+        return settings
+    logger.info("science- and difference-image SExtractor MAG_ZEROPOINT = %s", zero_point)
+    return {**settings, **{table: {**settings[table], "sextractor_mag_zeropoint": str(zero_point)}
+                           for table in ("sextractor_sciimage", "sextractor_diffimage")}}
+
+
 def _sextractor_catalogs(*, kit: Toolkit, work_dir: Path, settings: dict[str, Any],
                          positive: dict[str, str], negative: dict[str, str], weight_image: str,
                          override_weight_type_and_filter: bool,
@@ -684,6 +718,8 @@ def run(job: JobContext) -> None:
         reformat.reformat_simdata_fits_file_and_compute_uncertainty_image_via_simple_model(
             w(science_image_filename), sca_gain, sca_readout_noise, avg_sci_img,
             w(reformatted_science_image_filename), w(reformatted_science_uncert_image_filename))
+
+    settings = with_catalog_zero_point(settings, w(reformatted_science_image_filename))
 
     # Science-image catalog and point-source FWHM; reference FWHM from its catalog.
     filename_sciimage_catalog = reformatted_science_image_filename.replace(".fits", "_secat.txt")
