@@ -150,8 +150,8 @@ def test_the_retired_diff_flavor_cannot_select_zogy(tmp_path):
     with pytest.raises(LayerError, match="diff_flavor"):
         resolve(SHIPPED, overlay)
 
-#: Each overlay's resolved [intake] dq_mask_bits, as it was before the values were written in decimal (0x2110C01 = 34671617).
-DQ_MASK_BITS = {"flight-1049.toml": 34671617, "gbtds-r00340-fakesrc.toml": 0, "gbtds-r00340.toml": 34671617,
+#: Each overlay's resolved [intake] dq_mask_bits: flight inherits the base's mask with SATURATED, the SOC simulations keep theirs without it, readers without a usable DQ plane keep 0.
+DQ_MASK_BITS = {"flight-1049.toml": 34671619, "gbtds-r00340-fakesrc.toml": 0, "gbtds-r00340.toml": 34671617,
                 "hlwas-r00342.toml": 34671617, "openuniverse-tds.toml": 0, "rimtimsim-260622.toml": 0}
 
 
