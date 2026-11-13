@@ -1,9 +1,8 @@
-"""The SFFT command line: commissioning's equivalence test, ported to rebuild's builder.
+"""The SFFT command line: the builder's equivalence with the legacy command.
 
-Ported from commissioning ``pipeline/test/test_sfft_command_equivalence.py``
-(ed2f1a73). ``legacy_sfft_command_args`` is the command before the explicit
+``legacy_sfft_command_args`` is the command before the explicit
 ``[SFFT]`` bright-source and segmentation keys, frozen as the specification;
-rebuild's builder takes each key as an argument, and the commissioning
+the builder takes each key as an argument, and the
 kernel-fit masking keys (``sfft_zero_margin``, ``sfft_bsmask_isoarea``,
 ``sfft_bsmask_isofactor``) are off when empty, so off they must leave the
 command unchanged.
@@ -33,7 +32,7 @@ SOCSIMS = 'r0034001002001003059_0001_wfi07_f146_cal_lite_reformatted.fits'
 RIMTIMSIM = 'rimtimsim_wfi_lvl02_K213_stars_only_SCA02_2027_02_14.fits'
 OPENUNIVERSE = 'Roman_TDS_simple_model_H158_26041_8.fits'
 
-# A dev [SFFT] with none of the keys: empty bsmask value selects the filename fallback, None segmentation follows crossconv.
+# An [SFFT] with none of the keys: empty bsmask value selects the filename fallback, None segmentation follows crossconv.
 ABSENT_CFG = {'sfft_bsmask_value': '', 'sfft_bsmask_radius': '', 'sfft_use_gainmatch_catalogs': False,
               'sfft_use_segmentation': None}
 
@@ -83,7 +82,7 @@ def legacy_sfft_command_args(science_image_filename, crossconv_flag):
 
 
 def build(science_image_filename, crossconv_flag, sfft_dict):
-    """Rebuild's command for one [difference.sfft] table.
+    """The builder's command for one [difference.sfft] table.
 
     Parameters
     ----------
