@@ -58,6 +58,11 @@ admitted, a selection with passes is refused.
 socsims lite (``socsims-lite``): the listing pages the SOC observations and
 keeps ``_cal_lite.fits.gz`` stems. ``--expids``: a stem or row is admitted
 only when its expid is in one of the inclusive ranges, with the other terms.
+``--programs``: a stem is admitted only when the program intake will write
+for it (the run's fixed ``program_id``, else the stem's) is selected, a row
+only when its exposure's official ``program_id`` is, a row without one never;
+no intake, reference frame or difference comes from an unselected program,
+and an official reference built from any program is still used; all by default.
 """
 
 from __future__ import annotations
@@ -79,8 +84,8 @@ SETTINGS = {"intake": {"source_root": "s3://bucket/l2/", "unsigned": True},
                        "lvs_match": False, "ss_match": False}, "kafka": {}}
 
 
-def stem(p: int, v: int, e: int, sca: int = 8) -> str:
-    return f"r00342010{p:02d}001004{v:03d}_{e:04d}_wfi{sca:02d}_f146"
+def stem(p: int, v: int, e: int, sca: int = 8, program: int = 342) -> str:
+    return f"r{program:05d}010{p:02d}001004{v:03d}_{e:04d}_wfi{sca:02d}_f146"
 
 
 def expid(p: int, v: int, e: int) -> int:
@@ -121,9 +126,10 @@ def snap(**kw) -> loop.Snapshot:
     return loop.Snapshot(**base)
 
 
-def l2row(field: int, mjd: float, job: int, overlap: tuple[int, ...] = ()) -> dict:
-    """An official L2 row centred in ``field`` that overlaps ``overlap`` too."""
-    return {"field": field, "overlapfields": sorted({field, *overlap}), "mjdobs": mjd, "job": job}
+def l2row(field: int, mjd: float, job: int, overlap: tuple[int, ...] = (), program: int | None = 342) -> dict:
+    """An official L2 row centred in ``field`` that overlaps ``overlap`` too, of exposure program ``program``."""
+    return {"field": field, "overlapfields": sorted({field, *overlap}), "mjdobs": mjd, "job": job,
+            "program": program}
 
 
 def stages(subs: list[dict], name: str) -> list[dict]:
@@ -799,3 +805,69 @@ def test_expids_admit_stems_and_rows_inside_any_range_with_the_other_terms():
     assert SEL.summary()["expids"] == "all"
     with pytest.raises(ValueError, match="low end"):
         loop.Selection.parse("F146", "8", "all", expids="5-4")
+
+
+def test_programs_admit_stems_by_their_program_and_rows_by_their_exposures_program():
+    sel = loop.Selection.parse("F146", "8", "all", programs="1049,1018")
+    stems = [stem(1, 1, 1, program=1049), stem(1, 2, 1, program=1083), stem(1, 3, 1, program=1018)]
+    assert [s for s in stems if sel.admits_stem(s)] == [stems[0], stems[2]]
+    assert sel.admits_row(expid(1, 1, 1), 8, 8, {8}, 1049) and not sel.admits_row(expid(1, 1, 1), 8, 8, {8}, 1083)
+    assert not sel.admits_row(expid(1, 1, 1), 8, 8, {8}, None)      # no official exposures row yet
+    assert not sel.admits_row(expid(1, 1, 1), 9, 8, {8}, 1049)      # with the other terms
+    assert sel.summary()["programs"] == [1018, 1049] and SEL.programs is None
+    assert SEL.summary()["programs"] == "all" and SEL.admits_row(expid(1, 1, 1), 8, 8, {8}, None)
+    with pytest.raises(ValueError):
+        loop.Selection.parse("F146", "8", "all", programs="1049,x")
+
+
+def test_a_fixed_program_is_every_stems_program_whatever_its_digits():
+    """A simulation's dataset sets its negative id, which intake writes for every file: r00340 is -1."""
+    sel = loop.Selection.parse("F146", "8", "all", reader="socsims-lite", programs="-1", fixed_program=-1)
+    assert sel.admits_stem(stem(1, 1, 1, program=340))
+    assert not loop.Selection.parse("F146", "8", "all", programs="340", fixed_program=-1).admits_stem(
+        stem(1, 1, 1, program=340))
+    sim = loop.Selection.parse("F158", "10", "all", reader=OU, programs="-2", fixed_program="-2")
+    assert sim.admits_stem(ou(1012))
+    assert not loop.Selection.parse("F158", "10", "all", reader=OU, programs="-2").admits_stem(
+        ou(1012))                                                 # no program in the stem, none fixed
+
+
+def test_a_program_selection_plans_nothing_from_an_unselected_programs_rows():
+    sel = loop.Selection.parse("F146", "8", "all", programs="1049")
+    mine, theirs = (expid(1, 1, 1), 8, 8), (expid(1, 2, 1), 8, 8)
+    later_mine, later_theirs, orphan = (expid(2, 1, 1), 8, 8), (expid(2, 2, 1), 8, 8), (expid(2, 3, 1), 8, 8)
+    l2 = {mine: l2row(7, 1.0, 20, program=1049), theirs: l2row(7, 1.1, 21, program=1018),
+          later_mine: l2row(7, 2.0, 22, program=1049), later_theirs: l2row(7, 2.1, 23, program=1018),
+          orphan: l2row(7, 2.2, 24, program=None)}
+    stems = [stem(3, 1, 1, program=1049), stem(3, 2, 1, program=1018)]
+    subs, counts = loop.plan(snap(l2=l2), stems, sel)
+    assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stems[0]] and counts["admitted"] == 1
+    refs = stages(subs, "reference")
+    assert len(refs) == 1 and [i["key"]["expid"] for i in refs[0]["inputs"]] == [mine[0], later_mine[0]]
+    # The field's official reference, whichever programs built it, serves the selected rows only.
+    sources = {later_mine: 42, later_theirs: 43}
+    subs, _ = loop.plan(snap(l2=l2, refs={(7, 8): 30}, sources=sources, diffs=dict(sources)), [], sel)
+    assert stages(subs, "reference") == []
+    assert sorted(s["scope"]["expid"] for s in stages(subs, "difference")) == [mine[0]]
+    assert [s["scope"]["expid"] for s in stages(subs, "packet")] == [later_mine[0]]
+
+
+@pytest.mark.parametrize("programs", ["1049", "1049,x"])
+def test_the_loop_selects_by_programs_and_exits_64_when_none_of_the_listing_is_selected(
+        monkeypatch, capsys, programs):
+    monkeypatch.setattr(loop, "snapshot", lambda conn, run: snap())
+    monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
+    monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
+    monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf"]))
+    monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "settling_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.publish_kafka, "late_sets", lambda conn, run: 0)
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: Batch({}))
+    monkeypatch.setattr(loop, "reconcile", lambda conn, run, client, *a: {"retrying": []})
+    monkeypatch.setattr(loop.attempts, "run_entries", lambda conn, run: [])
+    assert cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "all",
+                     "--programs", programs, "--job-definition", "jd", "--interval", "0"]) == ExitCode.USAGE
+    captured = capsys.readouterr()
+    if programs == "1049":                      # the listed stem is program 342's
+        assert json.loads(captured.out)["selection"]["programs"] == [1049]
+        assert "programs 1049" in captured.err
