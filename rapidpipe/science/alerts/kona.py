@@ -239,16 +239,18 @@ def ingest_day(dest: str, day: str, cache_dir: str | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="kona-") as tmp:
         local = Path(tmp) / STATES_NAME
         k.SimultaneousStates(moved).save_parquet(str(local))
-        store.put_bytes(f"{day}/{STATES_NAME}", local.read_bytes())
+        # Conditional creates: the catalogs bucket is sealed create-once (its policy denies an
+        # unconditional put), and a day is written once by design.
+        store.put_bytes(f"{day}/{STATES_NAME}", local.read_bytes(), create_once=True)
         hg = pa.table({"desig": pa.array([str(d) for d in orbits.desig]),
                        "h": pa.array([float(h) for h in orbits.H], pa.float64()),
                        "g": pa.array([float(g) for g in orbits.G], pa.float64())})
         pq.write_table(hg, Path(tmp) / HG_NAME)
-        store.put_bytes(f"{day}/{HG_NAME}", (Path(tmp) / HG_NAME).read_bytes())
+        store.put_bytes(f"{day}/{HG_NAME}", (Path(tmp) / HG_NAME).read_bytes(), create_once=True)
     record = {"release": day, "epoch_jd": epoch, "n_objects": len(moved),
               "n_dropped_epoch": len(states) - len(placeable), "fetched_at": fetched_at,
               "tool": "rapidpipe.science.alerts.kona", "complete": True}
-    store.write_text(f"{day}/{SS_INFO}", json.dumps(record, indent=1))
+    store.write_text(f"{day}/{SS_INFO}", json.dumps(record, indent=1), create_once=True)
     return record
 
 

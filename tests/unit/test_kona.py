@@ -172,6 +172,38 @@ def test_ingest_day_sets_the_cache_directory_before_importing_kete(tmp_path, mon
     assert seen["cache"] == str(tmp_path / "kete")
 
 
+def test_a_days_files_are_conditional_creates_as_the_sealed_bucket_requires(tmp_path, monkeypatch):
+    """The catalogs bucket denies an unconditional put once sealed: every file of a day goes up
+    with If-None-Match: *, and a local store refuses to overwrite one."""
+    from rapidpipe.science.catalogs.store import Store
+
+    class Client:
+        puts: list[dict] = []
+
+        def put_object(self, **kwargs):
+            self.puts.append(kwargs)
+    monkeypatch.setattr(Store, "_bucket_region", lambda self: "us-east-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    store = Store("s3://bucket/ss")
+    store._client = Client()
+    store.put_bytes("20271007/ss.json", b"{}", create_once=True)
+    store.put_bytes("plain", b"x")
+    assert [p.get("IfNoneMatch") for p in Client.puts] == ["*", None]
+    assert Client.puts[0]["Key"] == "ss/20271007/ss.json"
+    local = Store(str(tmp_path))
+    local.put_bytes("a", b"1", create_once=True)
+    with pytest.raises(FileExistsError):
+        local.put_bytes("a", b"2", create_once=True)
+    # the ingest writes its three files that way
+    calls = []
+    monkeypatch.setattr(Store, "put_bytes", lambda self, rel, data, create_once=False: calls.append((rel, create_once)))
+    monkeypatch.setattr(fakekete.horizons, "fetch_known_orbit_data",
+                        staticmethod(lambda: type("O", (), {"desig": [], "H": [], "G": [], "ra": [], "dec": []})()))
+    kona.ingest_day(str(tmp_path / "ss"), "20271008")
+    assert calls == [(f"20271008/{kona.STATES_NAME}", True), (f"20271008/{kona.HG_NAME}", True),
+                     (f"20271008/{kona.SS_INFO}", True)]
+
+
 def test_the_import_stage_registers_an_ss_root_by_its_days_and_refuses_an_empty_one(tmp_path):
     root = tmp_path / "ss"
     write_ss_store(root, "20271005", [("433", 10.0, 5.0, 11.0)])

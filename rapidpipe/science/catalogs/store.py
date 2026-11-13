@@ -277,17 +277,28 @@ class Store:
         with self.fs.open_input_stream(self.fs_path(rel)) as f:
             return f.read().decode()
 
-    def write_text(self, rel: str, text: str) -> None:
-        self.put_bytes(rel, text.encode())
+    def write_text(self, rel: str, text: str, create_once: bool = False) -> None:
+        self.put_bytes(rel, text.encode(), create_once=create_once)
 
-    def put_bytes(self, rel: str, data: bytes) -> str:
+    def put_bytes(self, rel: str, data: bytes, create_once: bool = False) -> str:
+        """Store ``data`` under ``rel``; returns its md5.
+
+        ``create_once`` makes the write a conditional create: on S3 the
+        request carries ``If-None-Match: *``, which the catalogs bucket's
+        sealed policy requires of every put (an unconditional put is denied
+        once a release is sealed, and an existing object is never
+        overwritten); locally an existing file raises ``FileExistsError``.
+        """
         md5 = hashlib.md5(data).hexdigest()
         if self.is_s3:
+            extra = {"IfNoneMatch": "*"} if create_once else {}
             self.client.put_object(Bucket=self.bucket, Key=self.key(rel), Body=data,
-                                   Metadata={self.MD5_META: md5})
+                                   Metadata={self.MD5_META: md5}, **extra)
         else:
             path = Path(self.key(rel))
             path.parent.mkdir(parents=True, exist_ok=True)
+            if create_once and path.exists():
+                raise FileExistsError(f"{path}: exists, and the write is create-once")
             path.write_bytes(data)
             self._write_local_md5(rel, md5)
         return md5
