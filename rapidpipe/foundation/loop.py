@@ -682,7 +682,9 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     for k, row in sorted(after.items()):
         if k not in snap.sources or k in snap.packets or k in packet_keys:
             continue
-        wanted = [n for n in ("gaia", "ned", "lvs", "ss") if snap.settings["packet"].get(f"{n}_match", True)]
+        # A switch the run's body lacks is off: the body was resolved before that catalog
+        # existed and the run never named it (ss joined on 2026-11-12).
+        wanted = [n for n in ("gaia", "ned", "lvs", "ss") if snap.settings["packet"].get(f"{n}_match", False)]
         missing = [n for n in wanted if n not in snap.catalogs]
         if missing:
             raise NotFound(f"the run has no official catalogs binding named {', '.join(missing)} for the"

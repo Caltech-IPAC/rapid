@@ -543,6 +543,11 @@ def test_a_packet_job_names_every_switched_on_catalog_and_a_missing_one_is_a_usa
     # ss on but not official: refused like the others
     with pytest.raises(loop.NotFound, match="named ss for the packet stage, and .*ss_match is on"):
         loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs, "ned": ned}), [], SEL)
+    # a run whose body predates a switch (resolved before ss existed) has it off: gaia alone named
+    older = {**SETTINGS, "packet": {k: v for k, v in SETTINGS["packet"].items() if k != "ss_match"}}
+    subs, _ = loop.plan(snap(**base, settings=older, catalogs={"gaia": gaia}), [], SEL)
+    named = [i["key"]["name"] for i in stages(subs, "packet")[0]["inputs"] if i["product"] == "catalogs"]
+    assert named == ["gaia"]
     # ned on but not official: refused as a usage error, naming the switch
     with pytest.raises(loop.NotFound, match="named ned for the packet stage, and .*ned_match is on"):
         loop.plan(snap(**base, settings=on, catalogs={"gaia": gaia, "lvs": lvs, "ss": ss}), [], SEL)

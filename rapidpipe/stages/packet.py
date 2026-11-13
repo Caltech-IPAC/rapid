@@ -556,7 +556,8 @@ def _read(job: JobContext) -> Read:
     names = [i["key"].get("name") for i in catalog_ins]
     if len(set(names)) != len(names) or not set(names) <= set(CATALOG_KINDS):
         raise ValueError(f"job {job.job}: catalogs inputs named {names}; at most one of each of {CATALOG_KINDS}")
-    switched_on = [n for n in CATALOG_KINDS if job.settings["packet"][f"{n}_match"]]
+    # A switch the run's body lacks is off (the body predates that catalog), as the loop reads it.
+    switched_on = [n for n in CATALOG_KINDS if job.settings["packet"].get(f"{n}_match", False)]
     if not set(switched_on) <= set(names):
         raise ValueError(f"job {job.job}: [packet] switches on {switched_on} but the job names {names}")
     ref_in = _one(inputs, "refimages", job.job)

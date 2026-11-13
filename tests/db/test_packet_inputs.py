@@ -102,7 +102,7 @@ def image_rows(directory) -> dict[str, list[dict]]:
 def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
                max_alerts: int | None = None, second_source: bool = False,
                xsources: list[dict] | None = None, alert_catalog: str | None = None,
-               ss: bool = False):
+               ss: bool = False, without: tuple[str, ...] = ()):
     """A live run's packet job over one imported epoch, and the import, stray and exposure jobs.
 
     The set's xsources (rows of ``xsources`` but ``job``) are published with it: by default one
@@ -114,8 +114,11 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
     that it is refused; None leaves it out, as the shipped settings do. ``ss`` switches the
     solar-system match on: an ``ss`` catalog registered at a root holding the day of the epoch
     with one known object 0.3" from the first xsource, and the epoch's L2 file carrying the
-    ephemeris cards (the match runs on tests/support/fakekete.py)."""
+    ephemeris cards (the match runs on tests/support/fakekete.py). ``without`` names
+    ``[packet]`` keys left out of the run's body, as a body resolved before they existed."""
     settings = {**RUN_SETTINGS, "associate": {"xsource_flags": 0}}
+    if without:
+        settings = {**settings, "packet": {k: v for k, v in settings["packet"].items() if k not in without}}
     if ss:
         settings = {**settings, "packet": {**settings["packet"], "ss_match": True}}
     if max_alerts is not None:
@@ -214,6 +217,18 @@ def test_a_packet_job_matches_the_registered_ss_days_predictions_from_the_l2_hea
     recorded = query(conn, "SELECT key ->> 'name' FROM job_inputs WHERE job = %s AND kind = 'input'"
                            " AND product = 'catalogs' ORDER BY 1", (job,))
     assert recorded == [("gaia",), ("ss",)]
+
+
+def test_a_run_body_without_a_catalog_switch_has_that_match_off(connect, tmp_path):
+    """A body resolved before a catalog existed (ss, 2026-11-12) lacks its switch: the job runs,
+    the match did not run, and no binding is demanded, as the loop reads the same body."""
+    conn = connect()
+    job, *_ = packet_job(conn, tmp_path, without=("ss_match", "ss_radius_arcsec", "ss_max_matches",
+                                                  "ss_cone_radius_deg"))
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+    (record,) = _records(conn, job).values()
+    assert record["ssMatches"] is None and record["diaSource"]["isSSCandidate"] is None
 
 
 def test_a_packet_job_reads_the_catalog_as_it_stands_and_records_the_read(connect, tmp_path):
