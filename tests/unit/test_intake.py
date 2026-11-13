@@ -14,8 +14,8 @@ contradict its name fails before a manifest; the file name parses, and the
 expid packs, as the stage's docstring says; a file whose own ePSF
 reference is not the one its science PSF names (``EPSFREF``) fails before
 a manifest, and one whose PSF names the same reference publishes; the DQ
-mask (``[intake] dq_mask_bits``, default 0, `dev`'s behaviour: nothing
-masked) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
+mask (``[intake] dq_mask_bits``, default #238's 34671619 with SATURATED,
+which masks a SATURATED pixel; 0 is `dev`'s behaviour, nothing masked) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
 bit, leaves ``DQ`` as it was, carries ``DQMASK`` and ``NDQMASK`` on each
 masked HDU and counts the file's own NaN, the masked pixels and their union
 in the manifest; the HLWAS overlay's bits are #238's names without
@@ -301,9 +301,7 @@ def hdus(prefix: Path) -> dict[str, fits.ImageHDU]:
         return {h.name: h.copy() for h in hdul[1:] if h.is_image}
 
 
-def test_dq_mask_bits_defaults_to_devs_behaviour_nothing_masked(tmp_path, source):
-    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
-    assert shipped["intake"]["dq_mask_bits"] == 0
+def test_dq_mask_bits_zero_is_devs_behaviour_nothing_masked(tmp_path, source):
     prefix = run_intake(tmp_path, source)
     images = hdus(prefix)
     assert all("DQMASK" not in h.header for h in images.values())
@@ -311,6 +309,19 @@ def test_dq_mask_bits_defaults_to_devs_behaviour_nothing_masked(tmp_path, source
     manifest = json.loads((prefix / "manifest.json").read_text())
     assert manifest["dq"] == {"mask_bits": 0, "masked": 0, "nan_input": 2, "nan_output": 2}
     assert manifest["metrics"] == {"masked_fraction": 0.0}
+
+
+def test_the_shipped_mask_is_238s_default_and_masks_a_saturated_pixel(tmp_path, source):
+    from roman_datamodels.dqflags import pixel
+
+    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
+    bits = shipped["intake"]["dq_mask_bits"]
+    names = ("DO_NOT_USE", "SATURATED", "DEAD", "HOT", "NONLINEAR", "NO_LIN_CORR", "UNRELIABLE_FLAT")
+    assert bits == sum(int(pixel[name]) for name in names) == 34671619  # #238's default, dqMaskSubs.py
+    images = hdus(run_intake(tmp_path, source, dq_mask_bits=bits))
+    assert (9, 9, int(pixel.SATURATED)) in FLAGGED
+    assert np.isnan(images["SCI"].data[9, 9]) and np.isnan(images["ERR"].data[9, 9])
+    assert int(images["DQ"].data[9, 9]) == int(pixel.SATURATED)
 
 
 def test_the_mask_sets_sci_err_and_var_nan_keeps_dq_and_counts_the_union(tmp_path, source, caplog):
