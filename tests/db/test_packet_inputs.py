@@ -44,7 +44,7 @@ from tests.db.foundation_helpers import write_attempt
 from tests.db.test_child_reads import _script
 from tests.db.test_children import xsource_rows
 from tests.support import fakekete
-from tests.support.catalogs import ra_offset, write_ss_store
+from tests.support.catalogs import ra_offset, write_hp6_store, write_lvs_store, write_ss_store
 from tests.unit.test_packet import MJD, SETTINGS, corners, wcs, write_epoch, write_l2, write_refcat
 
 SURVEY, DATASET, FIELD = "S", "D", 4658155
@@ -102,7 +102,7 @@ def image_rows(directory) -> dict[str, list[dict]]:
 def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
                max_alerts: int | None = None, second_source: bool = False,
                xsources: list[dict] | None = None, alert_catalog: str | None = None,
-               ss: bool = False, without: tuple[str, ...] = ()):
+               ss: bool = False, without: tuple[str, ...] = (), host: str | None = None):
     """A live run's packet job over one imported epoch, and the import, stray and exposure jobs.
 
     The set's xsources (rows of ``xsources`` but ``job``) are published with it: by default one
@@ -115,12 +115,16 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
     solar-system match on: an ``ss`` catalog registered at a root holding the day of the epoch
     with one known object 0.3" from the first xsource, and the epoch's L2 file carrying the
     ephemeris cards (the match runs on tests/support/fakekete.py). ``without`` names
-    ``[packet]`` keys left out of the run's body, as a body resolved before they existed."""
+    ``[packet]`` keys left out of the run's body, as a body resolved before they existed.
+    ``host`` switches the NED and NED-LVS matches on: one galaxy of that name 3" from the first
+    xsource in both copies, the import job registering both, as one import registers them live."""
     settings = {**RUN_SETTINGS, "associate": {"xsource_flags": 0}}
     if without:
         settings = {**settings, "packet": {k: v for k, v in settings["packet"].items() if k not in without}}
     if ss:
         settings = {**settings, "packet": {**settings["packet"], "ss_match": True}}
+    if host:
+        settings = {**settings, "packet": {**settings["packet"], "ned_match": True, "lvs_match": True}}
     if max_alerts is not None:
         settings = {**settings, "packet": {**settings["packet"], "max_alerts": max_alerts}}
     if alert_catalog is not None:
@@ -142,6 +146,9 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
     catalog_keys = [{"dataset": DATASET, "name": "gaia", "version": "DR3"}]
     if ss:
         catalog_keys.append({"dataset": DATASET, "name": "ss", "version": kona.SS_RELEASE})
+    if host:
+        catalog_keys += [{"dataset": DATASET, "name": "ned", "version": "36.1"},
+                         {"dataset": DATASET, "name": "lvs", "version": "20260424"}]
     imported = create_job(conn, live, "import", {}, expects=[
         {"product": p, "key": k, "binding": None} for p, k in (
             ("l2files", IMAGE_KEY), ("diffimages", IMAGE_KEY), ("sources", IMAGE_KEY),
@@ -161,6 +168,15 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
                          xsources[0]["dec"], 18.0)])
         tables["catalogs"].append({"dataset": DATASET, "name": "ss", "version": kona.SS_RELEASE,
                                    "location": (tmp_path / "ss").as_uri() + "/"})
+    if host:
+        ra, dec = xsources[0]["ra"], xsources[0]["dec"]
+        galaxy = {"ra": ra - ra_offset(dec, 3.0), "dec": dec}
+        (tmp_path / "ned").mkdir()
+        write_hp6_store(tmp_path / "ned", [{**galaxy, "prefname": host, "ptype": "G"}])
+        write_lvs_store(tmp_path / "ned", [{**galaxy, "objname": host}])
+        tables["catalogs"] += [{"dataset": DATASET, "name": name, "version": version,
+                                "location": (tmp_path / "ned").as_uri() + "/"}
+                               for name, version in (("ned", "36.1"), ("lvs", "20260424"))]
     tables["refimages"] = [{"rfid": 801, "dataset": DATASET, "field": FIELD, "fid": 8,
                             "filename": (tmp_path / "e1" / "ref.fits").as_uri(), "checksum": "0" * 32}]
     if refcat_row:
@@ -217,6 +233,23 @@ def test_a_packet_job_matches_the_registered_ss_days_predictions_from_the_l2_hea
     recorded = query(conn, "SELECT key ->> 'name' FROM job_inputs WHERE job = %s AND kind = 'input'"
                            " AND product = 'catalogs' ORDER BY 1", (job,))
     assert recorded == [("gaia",), ("ss",)]
+
+
+def test_a_source_matched_to_one_name_in_ned_and_ned_lvs_publishes_one_external_row(connect, tmp_path):
+    """Every NED-LVS galaxy is a NED object under the same name, and one import registers both
+    copies, so a source within both radii of one galaxy matches it twice under one catalog job
+    (run 241, 2026-11-14: every packet job of the flight field failed on external's key). The set
+    publishes, each field carries its match, and `external` holds the entry once, the closer kept."""
+    conn = connect()
+    job, founder, *_ = packet_job(conn, tmp_path, host="COSMOS 0518787")
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+    (record,) = _records(conn, job).values()
+    assert [m["prefName"] for m in record["nedMatches"]] == ["COSMOS 0518787"]
+    assert [m["prefName"] for m in record["lvsMatches"]] == ["COSMOS 0518787"]
+    rows = query(conn, "SELECT catid, catalog_job, sep FROM external WHERE job = %s", (job,))
+    assert [(catid, catalog_job) for catid, catalog_job, _ in rows] == [("COSMOS 0518787", founder)]
+    assert rows[0][2] == pytest.approx(min(record["nedMatches"][0]["sep"], record["lvsMatches"][0]["sep"]))
 
 
 def test_a_run_body_without_a_catalog_switch_has_that_match_off(connect, tmp_path):
