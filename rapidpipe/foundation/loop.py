@@ -825,8 +825,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     # PSF: per (filter, SCA) of the new stems without an official science row, one job; its stems wait.
     served = set()
     for job in run_jobs["psf"]:
-        ids = stem_ids(job["scope"]["file"])
-        served.add((_fid(ids["filter"], snap.fids), ids["sca"]))
+        of = stem_ids(job["scope"]["file"])
+        served.add((_fid(of["filter"], snap.fids), of["sca"]))
     unready = {}
     for stem in new:
         a = admitted[stem]

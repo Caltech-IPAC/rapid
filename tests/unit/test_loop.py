@@ -563,6 +563,13 @@ def test_an_official_science_psf_admits_intakes_and_submits_no_psf_job():
     assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(2, 1, 1)]
 
 
+def test_a_psf_job_of_the_run_leaves_the_intakes_their_exposure_ids():
+    done = [{"id": 60, "stage": "psf", "state": "published", "scope": {"dataset": D, "file": stem(1, 1, 1)}}]
+    stems = [stem(1, 1, 1), stem(2, 1, 1)]
+    subs, _ = loop.plan(snap(jobs=done), stems, SEL, ids=resolved(*stems))
+    assert [s["scope"]["expid"] for s in stages(subs, "intake")] == [resolved(s)[name(s)] for s in stems]
+
+
 def test_a_pending_psf_job_submits_nothing_more():
     pending = [{"id": 60, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": stem(1, 1, 1)}}]
     subs, counts = loop.plan(snap(psfs={}, jobs=pending), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
