@@ -1172,13 +1172,22 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 container.write(alert)
                 container.flush()  # one record per block: the index's locator is exact
                 order.append((source, aid))
+                # One row per catalogue entry of this source, the closer kept: an LVS galaxy is
+                # a NED object under the same name, and one import job registers both copies, so
+                # a source matched in both would otherwise write `external`'s key twice (run 241).
+                rows: dict[tuple[int, str], dict] = {}
                 for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches),
                                     ("ss", ss_matches)):
-                    external.extend({"catid": (str(m.source_id) if kind == "gaia" else m.designation
-                                               if kind == "ss" else m.prefname),
-                                     "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
-                                     "source_job": read.source_job, "sid": source.sid,
-                                     "catalog_job": read.catalogs[kind].job} for m in found or ())
+                    for m in found or ():
+                        row = {"catid": (str(m.source_id) if kind == "gaia" else m.designation
+                                         if kind == "ss" else m.prefname),
+                               "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
+                               "source_job": read.source_job, "sid": source.sid,
+                               "catalog_job": read.catalogs[kind].job}
+                        seen = rows.setdefault((row["catalog_job"], row["catid"]), row)
+                        if row["sep"] < seen["sep"]:
+                            rows[(row["catalog_job"], row["catid"])] = row
+                external.extend(rows.values())
     timing["cutouts_s"] += cutout_s
     timing["assembly_s"] = time.perf_counter() - t0 - cutout_s
 
