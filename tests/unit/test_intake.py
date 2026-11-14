@@ -214,7 +214,7 @@ def test_the_fits_file_has_devs_layout_and_the_keywords_the_difference_stage_rea
     for keyword in ("FILTER", "EXPTIME", "DATE-OBS", "MJD-OBS", "SCA_NUM", "ZPTMAG", "TARGRA",
                     "TARGDEC", "CRVAL1", "CRPIX1", "CD1_1", "CD2_2", "A_ORDER", "B_ORDER"):
         assert keyword in header, keyword
-    assert header["FILTER"] == "F146" and header["SCA_NUM"] == 8 and header["BUNIT"] == "DN"
+    assert header["FILTER"] == "W146" and header["SCA_NUM"] == 8 and header["BUNIT"] == "DN"
     assert all(f"{p}_{i}_{j}" in header for p in ("A", "B", "AP", "BP") for i in range(6) for j in range(6))
     assert np.isclose(np.nanmedian(data), EXPTIME, rtol=0.01)  # DN/s of about 1 times EXPTIME
 
