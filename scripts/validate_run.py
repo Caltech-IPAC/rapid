@@ -9,8 +9,11 @@ jobs of ``--run``:
 
 - ``lineage``: every row of the run's jobs, every ``input`` row they
   recorded (those a stage recorded at its read included) and every binding naming them resolves to
-  a published job's row of its key; every ``expects`` binding names its
-  product and key.
+  a published job's row of its key, but a binding of a published job whose
+  manifest lists its product in ``empty_ok`` and that holds no rows of it (a
+  set declared empty, as ``[difference] skip_loading_sources_records``
+  writes), which is counted by product and not resolved; every ``expects``
+  binding names its product and key.
 - ``tables``: the run has a published job; every published job's declared
   Parquet outputs hold as many rows as its table rows, match their manifest
   checksums, and no table holds rows of the job that it did not declare.
@@ -23,7 +26,8 @@ jobs of ``--run``:
   different jobs are within the radius of each other, in one field or
   either side of a boundary (no duplicate founders); ``memberships_official`` holds no membership of a source set
   that is not official; every ``objects_official`` row's sums are its
-  official members' aggregated directly.
+  official members' aggregated directly. Its summary counts the official
+  ``sources`` sets declared empty, which it checks nothing of.
 - ``packets``: every packet set of the run decodes, by its index, to the
   records of its sid, object and trigger, its source set is its recorded
   input and its trigger a member of the object, every history detection
@@ -240,23 +244,31 @@ def check_lineage(run: int) -> bool:
                   AND (o.id IS NULL OR o.product <> i.product OR o.key <> i.key)""", (run,))
     bad += [f"job {r['job']} expects binding {r['binding']}, which is not {r['product']} {r['key']}"
             for r in rows]
-    n_bindings = 0
+    n_bindings, declared = 0, Counter()
     for product in KEYS:
-        rows = q(f"""SELECT o.id, o.job, o.key FROM official o JOIN jobs rj ON rj.id = o.job
-                     WHERE rj.run = %s AND o.product = %s AND NOT EXISTS (
+        rows = q(f"""SELECT o.id, o.job, o.key,
+                       rj.state = 'published' AND coalesce(rj.manifest -> 'empty_ok' ? %(product)s, false)
+                       AND NOT EXISTS (SELECT 1 FROM {rows_of(product, 'ARRAY[o.job]')} t
+                                       WHERE t.job = o.job) AS declared_empty
+                     FROM official o JOIN jobs rj ON rj.id = o.job
+                     WHERE rj.run = %(run)s AND o.product = %(product)s AND NOT EXISTS (
                        SELECT 1 FROM {rows_of(product, 'ARRAY[o.job]')} t
                        JOIN jobs j ON j.id = t.job AND j.state = 'published'
-                       WHERE t.job = o.job AND o.key = {keyed(product)})""", (run, product))
+                       WHERE t.job = o.job AND o.key = {keyed(product)})""",
+                 {"run": run, "product": product})
+        declared[product] += sum(r["declared_empty"] for r in rows)
         bad += [f"binding {r['id']}: {product} {r['key']} of job {r['job']} has no published row"
-                for r in rows]
+                for r in rows if not r["declared_empty"]]
     (r,) = q("SELECT count(*) n FROM official o JOIN jobs j ON j.id = o.job WHERE j.run = %s", (run,))
     n_bindings = r["n"]
     (r,) = q("SELECT count(*) n FROM official o JOIN jobs j ON j.id = o.job WHERE j.run = %s"
              " AND NOT o.product = ANY(%s)", (run, list(KEYS)))
     if r["n"]:
         bad.append(f"{r['n']} bindings of an unknown product")
-    return report("lineage", bad, f"0 orphans: {n_inputs} input rows and {n_bindings}"
-                  " bindings resolve to published rows", t0)
+    empty = ", ".join(f"{n} {p}" for p, n in sorted(declared.items()) if n) or "none"
+    return report("lineage", bad, f"0 orphans: {n_inputs} input rows and"
+                  f" {n_bindings - sum(declared.values())} bindings resolve to published rows;"
+                  f" bindings declared empty (empty_ok, no rows), not resolved: {empty}", t0)
 
 
 def job_table_failures(j: dict) -> tuple[list[str], int, int]:
@@ -326,6 +338,12 @@ def check_catalog(run: int) -> bool:
                      AND NOT EXISTS (SELECT 1 FROM m WHERE m.job = s.job AND m.sid = s.sid)""",
                   (run, INFORMATIONAL_SOURCE_FLAGS, flags, snr))
     bad += [f"source ({r['job']}, {r['sid']}) is accepted and a member of nothing" for r in unmatched[:5]]
+    (r,) = q("""SELECT count(*) n FROM official o JOIN jobs oj ON oj.id = o.job
+                WHERE o.closed_at IS NULL AND o.product = 'sources' AND oj.run = %s
+                  AND coalesce(oj.manifest -> 'empty_ok' ? 'sources', false)
+                  AND NOT EXISTS (SELECT 1 FROM sources_of(ARRAY[o.job]) s WHERE s.job = o.job)""",
+             (run,))
+    declared_empty = r["n"]
     members = q(f"""WITH m AS MATERIALIZED (SELECT * FROM memberships_of({RUN_JOBS}))
                    SELECT m.job, m.sid, m.object_job, m.aid, s.ra, s.dec, s.field, o.ra0, o.dec0,
                           o.field AS object_field
@@ -381,7 +399,9 @@ def check_catalog(run: int) -> bool:
            or not math.isclose(x["sumdec"], x["dec"], rel_tol=1e-6, abs_tol=1e-12)]
     bad += [f"object ({x['job']}, {x['aid']}): sums {x['nsources']} members, the direct aggregation"
             f" {x['n']}" for x in off[:5]]
-    return report("catalog", bad, f"{len(objects)} objects in {len({o['field'] for o in objects})} fields,"
+    return report("catalog", bad, f"{declared_empty} official sources sets declared empty (empty_ok,"
+                  f" no rows), so not checked; {len(objects)} objects in"
+                  f" {len({o['field'] for o in objects})} fields,"
                   f" {len(members)} memberships within the radius ({superseded} of source sets not official,"
                   " out of the view), every accepted source a member of an object in its own field or a"
                   f" neighbour; no duplicate founders; {len(sums)} official"
