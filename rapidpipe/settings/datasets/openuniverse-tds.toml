@@ -14,8 +14,6 @@ unsigned = true
 reader = "openuniverse"
 # surveys: (-2, 'OpenUniverse', 'SIM').
 program_id = -2
-# Nothing masked, as before the base mask changed (Azalee, 2026-11-10).
-dq_mask_bits = 0
 # GalSim's images are one-based and the file's gWCS takes its pixels: R062
 # pointing 10032 SCA 17's 69 bright stars sit at (-1.16, -1.06) px from the
 # file's WCS (zero-based centroids, scatter 0.08 and 0.04 px), the truth
