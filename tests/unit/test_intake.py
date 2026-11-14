@@ -206,9 +206,24 @@ def test_the_fits_file_has_devs_layout_and_the_keywords_the_difference_stage_rea
     for keyword in ("FILTER", "EXPTIME", "DATE-OBS", "MJD-OBS", "SCA_NUM", "ZPTMAG", "TARGRA",
                     "TARGDEC", "CRVAL1", "CRPIX1", "CD1_1", "CD2_2", "A_ORDER", "B_ORDER"):
         assert keyword in header, keyword
-    assert header["FILTER"] == "W146" and header["SCA_NUM"] == 8 and header["BUNIT"] == "DN"
+    assert header["FILTER"] == "F146" and header["SCA_NUM"] == 8 and header["BUNIT"] == "DN"
     assert all(f"{p}_{i}_{j}" in header for p in ("A", "B", "AP", "BP") for i in range(6) for j in range(6))
     assert np.isclose(np.nanmedian(data), EXPTIME, rtol=0.01)  # DN/s of about 1 times EXPTIME
+
+
+def test_the_zptmag_is_the_files_own_and_the_nominal_table_only_without_photometry():
+    """The ingest fallback is unchanged by the reference stage's use of the same table."""
+    from rapidpipe.science.intake import compute_zptmag
+
+    table = {"F146": 27.01}
+    calibrated = types.SimpleNamespace(meta=types.SimpleNamespace(
+        photometry=types.SimpleNamespace(conversion_megajanskys=0.24, pixel_area=2.72e-13)))
+    assert compute_zptmag(calibrated, "F146", table) == pytest.approx(
+        -2.5 * np.log10(0.24 * 1.0e6 * 2.72e-13 / 3631.0))
+    assert compute_zptmag(types.SimpleNamespace(meta=types.SimpleNamespace()), "F146", table) == 27.01
+    unset = types.SimpleNamespace(meta=types.SimpleNamespace(
+        photometry=types.SimpleNamespace(conversion_megajanskys=None, pixel_area=None)))
+    assert compute_zptmag(unset, "F146", table) == 27.01
 
 
 def test_the_sip_header_reproduces_the_gwcs_within_the_fits_own_bound(tmp_path, source):

@@ -42,3 +42,28 @@ dq_mask_bits = 0x2110C01
 # (-0.08 to +0.16, -0.56 to -0.35) px, as WCS offset; by hand the
 # propagation puts the WCS at (-0.09 to -0.04, -0.06 to -0.04) px.
 gaia_proper_motion = true
+
+[intake.nominal_zptmag]
+# Commissioning 687c93b2's on-orbit values (Azalee, 2026-11-05): per filter,
+# the median over all 18 SCAs of -2.5 log10(conversion_megajanskys * 1e6 *
+# pixel_area / 3631) from meta.photometry, measured 2026-10-29 on 7283 of
+# 8453 commissioning ingest files (r0104301* and r0104302* excluded: an older
+# CRDS context, up to 0.29 mag off). SCAs differ from the median by up to
+# about 0.25 mag (0.39 to 0.42 mag across SCAs). The base's values, of unknown
+# provenance, run 0.1 to 0.6 mag above these. The sims keep the base's.
+F062 = 26.04
+F087 = 25.73
+F106 = 25.78
+F129 = 25.77
+F146 = 27.01
+F158 = 25.80
+F184 = 25.34
+F213 = 25.29
+
+[reference.awaicgen]
+# Each reference input is scaled by the table above, not its own ZPTMAG, so
+# every frame of a filter gets one scale factor while the per-frame
+# calibration settles (Azalee, 2026-11-05). Commissioning's ini ships it
+# false; a flight run can turn it off with --set
+# reference.awaicgen.use_nominal_zptmag=false.
+use_nominal_zptmag = true

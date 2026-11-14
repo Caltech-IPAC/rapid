@@ -68,8 +68,9 @@ rederive_wcs = false
 gaia_proper_motion = false
 
 [intake.nominal_zptmag]
-# dev's nominal WFI AB zeropoints [mag], used only when the file carries no
-# meta.photometry.
+# dev's nominal WFI AB zeropoints [mag], keyed by Roman filter name: intake's
+# ZPTMAG when the file carries no meta.photometry, and the reference stage's
+# input scaling under [reference.awaicgen] use_nominal_zptmag.
 F062 = 26.4
 F087 = 26.3
 F106 = 26.4
@@ -388,6 +389,10 @@ zprefimg_f184 = 25.1999194557
 zprefimg_k213 = 25.1449429981
 zprefimg_w146 = 26.8630336165
 zprefimg = 17.0
+# Commissioning 8a4a172d: true scales each input frame by its filter's
+# [intake.nominal_zptmag] value instead of its own ZPTMAG; zptmag_rms still
+# reads the header. Off, as commissioning ships it; flight-1049 turns it on.
+use_nominal_zptmag = false
 
 [reference.psfcat]
 # [PSFCAT_REFIMAGE]. `dev`'s Photutils reference catalog needs a

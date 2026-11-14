@@ -148,3 +148,17 @@ def test_the_retired_diff_flavor_cannot_select_zogy(tmp_path):
     overlay = _toml(tmp_path, "ds.toml", '[difference]\ndiff_flavor = "zogy"\n')
     with pytest.raises(LayerError, match="diff_flavor"):
         resolve(SHIPPED, overlay)
+
+def test_flight_scales_reference_inputs_by_the_on_orbit_nominal_zptmag_and_the_base_does_not():
+    """Commissioning 687c93b2's table and 8a4a172d's flag: on for flight-1049, off in the base (the sims)."""
+    from rapidpipe.products.filters import ROMAN_TO_RAPID_FILTER_NAMES
+
+    base, _ = resolve(SHIPPED)
+    flight, _ = resolve(SHIPPED, SETTINGS / "datasets" / "flight-1049.toml")
+    assert base["reference"]["awaicgen"]["use_nominal_zptmag"] is False
+    assert flight["reference"]["awaicgen"]["use_nominal_zptmag"] is True
+    assert flight["intake"]["nominal_zptmag"] == {
+        "F062": 26.04, "F087": 25.73, "F106": 25.78, "F129": 25.77,
+        "F146": 27.01, "F158": 25.80, "F184": 25.34, "F213": 25.29}
+    for body in (base, flight):
+        assert set(body["intake"]["nominal_zptmag"]) == set(ROMAN_TO_RAPID_FILTER_NAMES)
