@@ -63,8 +63,7 @@ a neighbouring tile of the reference's footprint is a candidate, and not
 under ``"nframes"``; candidates are walked by ``mjdobs``, then distance from
 the reference's centre, then key, to ``max_frames``; a field short of
 coverage is held, with or without the bound, and planned once a new frame
-lifts its estimate; frames across R.A. 0 are taken, nearest first; a field
-whose job declined is held, not failed, until its frames change.
+lifts its estimate; frames across R.A. 0 are taken, nearest first.
 ``--programs``: a stem is admitted only when the program intake will write
 for it (the run's fixed ``program_id``, else the stem's) is selected, a row
 only when its exposure's official ``program_id`` is, a row without one never;
@@ -914,23 +913,6 @@ def test_coverage_across_ra_zero_takes_the_frames_on_both_sides_nearest_first():
     subs, counts = loop.plan(snap(settings=covering(min_coverage_fraction=0.01), l2=l2), [], SEL)
     (ref,) = references(subs, field)
     assert [i["source_job"] for i in ref["inputs"]] == [21, 20, 22]
-
-
-def test_a_declined_field_is_held_until_its_frames_change_and_never_counted_failed():
-    ra, dec = CENTRE
-    a, b = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
-    l2 = {a: sky_row(ra, dec, 1.0, 20, size=0.3)}
-    gone = {"id": 70, "stage": "reference", "state": "declined", "refusal": "measured coverage 0.4800 < 0.5",
-            "scope": {"field": FIELD, "fid": 8, "sca": 8}}
-    subs, counts = loop.plan(snap(settings=covering(), l2=l2, jobs=[gone], declined={70: frozenset({a})}), [], SEL)
-    assert references(subs) == [] and counts["failed"] == []
-    assert counts["held"] == [{"field": FIELD, "fid": 8,
-                               "reason": "job 70 declined these frames: measured coverage 0.4800 < 0.5"}]
-
-    l2[b] = sky_row(ra, dec, 2.0, 21, size=0.3)
-    subs, counts = loop.plan(snap(settings=covering(), l2=l2, jobs=[gone], declined={70: frozenset({a})}), [], SEL)
-    (ref,) = references(subs)
-    assert [i["source_job"] for i in ref["inputs"]] == [20, 21] and counts["held"] == []
 
 
 def test_programs_admit_stems_by_their_program_and_rows_by_their_exposures_program():

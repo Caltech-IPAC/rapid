@@ -23,10 +23,7 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   records a job and runs it; ``job run --job <id>``
   runs an existing job's next attempt. Both run the stage's ``run(job)``
   in this process under ``RAPIDPIPE_OUTPUTS_ROOT`` and publish it
-  (``rapidpipe.foundation.run_job``), printing the publisher's result (a
-  job that declined, its stage ending with nothing to publish, exits 0 with
-  ``declined``, and ``job run`` on a published or declined job stops before
-  its stage);
+  (``rapidpipe.foundation.run_job``), printing the publisher's result;
 - ``job submit`` takes ``job local``'s arguments and ``--job-definition``
   (or ``--job <id>`` in their place, a new attempt of an existing job),
   records the job and submits one Batch job running ``job run --job <id>``
@@ -34,9 +31,9 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   ``[batch.memory_mib]`` memory and ``[batch.vcpus]`` vCPUs for the stage, recording the Batch job id
   on the row (``job show`` prints it) and printing both ids;
 - ``job wait --job N [N ...] [--timeout S] [--interval S]`` blocks until
-  every named job is ``published``, ``failed`` or ``declined``, reconciling their runs
+  every named job is ``published`` or ``failed``, reconciling their runs
   with Batch each check (``rapidpipe.foundation.loop.wait``), and prints the
-  states; exit 0 when every job published or declined, 1 when one failed, 2 when the
+  states; exit 0 when every job published, 1 when one failed, 2 when the
   timeout passes first: one blocking waiter for hand-submitted jobs;
 - ``loop --run --filters --scas --pointings [--passes] [--expids] [--programs] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each

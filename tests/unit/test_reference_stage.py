@@ -11,14 +11,15 @@ setting and a tool that writes nothing each fail the job before a manifest
 is written, and a frame of another SCA is coadded; the mosaic catalog's ``MAG_ZEROPOINT`` is the
 coadd's ``MAGZP``, the run's body unchanged; the row and the header carry the reference's grade; the run settings body's ``[reference]`` table is valid as it
 ships. Under ``selection_type = "coverage"``: a reference whose estimate
-clears the minimum is coadded with ``covfrac``/``covdepth`` on its row,
-``COVFRAC``/``COVDEPTH``/``COVTARG`` in its header and the selected and
-skipped rids, estimate and measured fraction in its manifest, a named frame
-that misses the reference skipped; an estimate below the minimum less the
-tolerance declines before awaicgen, and a measured fraction below the
-minimum declines after it, each with no table and the reason in the
-manifest's ``declined``; ``"nframes"`` leaves the columns null and the
-header without them.
+clears the minimum is coadded with ``COVFRAC``/``COVDEPTH``/``COVTARG`` in
+its header and the selected and skipped rids, estimate and measured fraction
+in its manifest, a named frame that misses the reference skipped, the
+frames in the loop's order (``mjdobs``, then distance from the reference's
+centre, then key), not ``rid``'s; an estimate below the minimum less the
+tolerance fails before awaicgen, and a measured fraction below the minimum
+fails after it, each exit 65 with the fraction as the reason and no
+manifest; ``"nframes"`` leaves the header without them; a body stored
+before ``selection_type`` reads ``"nframes"``.
 """
 
 from __future__ import annotations
@@ -68,9 +69,11 @@ def settings(**tables) -> dict:
     return {"reference": body}
 
 
-def fake_connect(rows: dict[int, tuple[int, str]], queries: list, corners: dict | None = None):
+def fake_connect(rows: dict[int, tuple[int, str]], queries: list, corners: dict | None = None,
+                 mjdobs: dict | None = None):
     """A connection answering the filter, each ``l2files`` row by source job, ``nextval`` and
-    the named rows' corners by ``rid`` (``corners``)."""
+    the named rows' corners by ``rid`` (``corners``), each with its corners' mean as its centre,
+    its ``mjdobs`` (``mjdobs``, else its frame's) and its key."""
     class Cursor:
         def __enter__(self):
             return self
@@ -83,7 +86,9 @@ def fake_connect(rows: dict[int, tuple[int, str]], queries: list, corners: dict 
             if "FROM filters" in statement:
                 self.row = ("W146",) if params == (FID,) else None
             elif "rid = ANY" in statement:
-                self.found = [(rid, *(v for pair in zip(*corners[rid]) for v in pair))
+                self.found = [(rid, *(v for pair in zip(*corners[rid]) for v in pair),
+                               sum(corners[rid][0]) / 4, sum(corners[rid][1]) / 4,
+                               (mjdobs or {}).get(rid, FRAMES[rid - 7000][4]), 100 + rid - 7000, SCA, FID)
                               for rid in params[0] if rid in (corners or {})]
             elif "FROM l2files" in statement:
                 self.row = rows.get(params[0])
@@ -127,7 +132,7 @@ def frame_corners(path: Path) -> tuple[list[float], list[float]]:
 
 
 def run_reference(tmp_path: Path, frames: list[Path], *, order=(2, 0, 1), body=None,
-                  key_override=None, corners=None) -> Path:
+                  key_override=None, corners=None, mjdobs=None) -> Path:
     """Run a job naming ``frames`` (as source jobs 10, 11, ... in ``order``); return its prefix."""
     prefix = tmp_path / "prefix"
     prefix.mkdir(exist_ok=True)
@@ -141,7 +146,8 @@ def run_reference(tmp_path: Path, frames: list[Path], *, order=(2, 0, 1), body=N
     job = JobContext(job=5, run=3, stage="reference", scope={"field": RTID, "fid": FID, "sca": SCA},
                      survey="S", dataset="D", settings=body or settings(), inputs=inputs,
                      attempt=1, prefix=prefix.as_uri() + "/",
-                     connect=fake_connect(rows, [], corners or {7000 + i: frame_corners(f) for i, f in enumerate(frames)}))
+                     connect=fake_connect(rows, [], corners or {7000 + i: frame_corners(f) for i, f in enumerate(frames)},
+                                          mjdobs))
     reference.run(job)
     return prefix
 
@@ -294,20 +300,29 @@ def test_the_thin_settings_body_reference_table_is_valid():
     assert reference.check_settings(stored).use_nominal_zptmag is False  # a body stored before the flag
 
 
+def test_a_body_stored_before_the_coverage_selection_reads_nframes_and_needs_no_coverage_key():
+    stored = copy.deepcopy(THIN["reference"])
+    for key in ("selection_type", "min_coverage_depth", "min_coverage_fraction", "max_coverage_depth",
+                "max_coverage_fraction", "coverage_estimate_tolerance"):
+        del stored["selection"][key]
+    checked = reference.check_settings(stored)
+    assert (checked.selection_type, checked.min_coverage_fraction) == ("nframes", None)
+
+
 def by_coverage(**selection) -> dict:
     return settings(selection={"selection_type": "coverage", **selection})
 
 
-def test_a_reference_selected_by_coverage_records_its_coverage_on_the_row_header_and_manifest(tmp_path, frames):
+def test_a_reference_selected_by_coverage_records_its_coverage_in_its_header_and_manifest(tmp_path, frames):
     # The 96-pixel frames cover about 60% of the 128-pixel mosaic once.
     prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.3))
     manifest = json.loads((prefix / "manifest.json").read_text())
     covered = manifest["reference"]["coverage"]
-    assert "declined" not in manifest and covered["decision"] == "build"
+    assert covered["decision"] == "build"
     assert covered["selected"] == [7000, 7001, 7002] and covered["skipped"] == []
     assert 0.35 <= covered["estimate"] < 1.0 and 0.3 <= covered["measured"] < 1.0
     (ref,) = read(prefix, "refimages")
-    assert ref["covfrac"] == pytest.approx(covered["measured"]) and ref["covdepth"] == 1.0
+    assert set(ref) == schema_columns("refimages")
     header = fits.getheader(Path(ref["filename"].removeprefix("file://")))
     assert (header["COVFRAC"], header["COVDEPTH"], header["COVTARG"]) == (
         pytest.approx(covered["measured"]), 1, 0.3)
@@ -323,31 +338,40 @@ def test_a_named_frame_that_misses_the_reference_is_skipped(tmp_path, frames):
     assert sorted(r["rid"] for r in read(prefix, "refimimages")) == [7000, 7002]
 
 
-def test_an_estimate_below_the_minimum_declines_before_awaicgen(tmp_path, frames, monkeypatch):
+def test_under_coverage_the_coadd_takes_the_loops_order_not_rids(tmp_path, frames, monkeypatch):
+    """Frames tied on ``mjdobs`` coadd nearest the reference's centre first, as the loop chose them."""
+    from rapidpipe.products.coverage import angular_distance
+    from rapidpipe.science.spatial import field_center
+
+    corners = {7000 + i: frame_corners(f) for i, f in enumerate(frames)}
+    corners[7000] = ([c + 0.002 for c in corners[7000][0]], corners[7000][1])     # the farthest
+    centre = field_center(RTID)
+    distance = {rid: angular_distance(sum(ras) / 4, sum(decs) / 4, *centre) for rid, (ras, decs) in corners.items()}
+    prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.3), corners=corners,
+                           mjdobs={rid: 61679.0 for rid in corners})
+    covered = json.loads((prefix / "manifest.json").read_text())["reference"]["coverage"]
+    assert covered["selected"] == sorted(corners, key=distance.get) and covered["selected"][-1] == 7000
+
+
+@pytest.mark.parametrize("selection, step", [({"min_coverage_fraction": 0.95}, "estimated"),
+                                             ({"min_coverage_fraction": 0.95, "coverage_estimate_tolerance": 0.5},
+                                              "measured")])
+def test_a_coverage_short_of_the_minimum_fails_the_job_with_exit_65_and_no_manifest(tmp_path, frames, monkeypatch,
+                                                                                    selection, step):
+    """Short by the estimate, before awaicgen; short by the coverage map, after it."""
     kit = fakereftools.fake_toolkit()
     monkeypatch.setattr(reference, "toolkit", lambda: kit)
-    prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.95))
-    manifest = json.loads((prefix / "manifest.json").read_text())
-    assert manifest["outputs"] == [] and manifest["declined"].startswith("estimated coverage ")
-    assert manifest["reference"]["coverage"]["decision"] == "reject"
-    assert kit.runner.calls == [] and not list(prefix.glob("*.parquet"))
+    with pytest.raises(CommandExit) as raised:
+        run_reference(tmp_path, frames, body=by_coverage(**selection))
+    assert raised.value.code == 65 and str(raised.value).startswith(f"{step} coverage ")
+    assert str(raised.value).endswith("< 0.95")
+    assert not (tmp_path / "prefix" / "manifest.json").exists()
+    assert (kit.runner.calls == []) == (step == "estimated")
 
 
-def test_a_measured_coverage_below_the_minimum_declines_after_awaicgen(tmp_path, frames):
-    prefix = run_reference(tmp_path, frames, body=by_coverage(min_coverage_fraction=0.95,
-                                                              coverage_estimate_tolerance=0.5))
-    manifest = json.loads((prefix / "manifest.json").read_text())
-    covered = manifest["reference"]["coverage"]
-    assert covered["decision"] == "verify" and covered["measured"] < 0.95
-    assert manifest["outputs"] == [] and manifest["declined"] == f"measured coverage {covered['measured']:.4f} < 0.95"
-    assert not list(prefix.glob("*.parquet"))
-    assert (prefix / "ref" / "awaicgen_output_mosaic_cov_map.fits").is_file()     # the files stay
-
-
-def test_nframes_leaves_the_coverage_columns_null_and_the_header_without_them(tmp_path, frames):
+def test_nframes_leaves_the_header_without_coverage(tmp_path, frames):
     prefix = run_reference(tmp_path, frames)
     (ref,) = read(prefix, "refimages")
-    assert (ref["covfrac"], ref["covdepth"]) == (None, None)
     assert "COVFRAC" not in fits.getheader(Path(ref["filename"].removeprefix("file://")))
     assert "coverage" not in json.loads((prefix / "manifest.json").read_text())["reference"]
 
@@ -356,5 +380,5 @@ def test_nframes_leaves_the_coverage_columns_null_and_the_header_without_them(tm
                                        {"max_coverage_depth": 0.5}, {"coverage_estimate_tolerance": -0.1}])
 def test_refused_coverage_settings_fail_before_a_manifest(tmp_path, frames, selection):
     with pytest.raises(ValueError):
-        run_reference(tmp_path, frames, body=settings(selection=selection))
+        run_reference(tmp_path, frames, body=by_coverage(**selection))
     assert not (tmp_path / "prefix" / "manifest.json").exists()

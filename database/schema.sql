@@ -119,13 +119,13 @@ CREATE TABLE jobs (
     stage text NOT NULL,
     scope jsonb NOT NULL,
     state text DEFAULT 'launched' NOT NULL
-        CHECK (state IN ('launched', 'running', 'published', 'failed', 'declined')),  -- declined: the stage ended normally and published nothing (a reference short of its coverage), its manifest and reason on the row
+        CHECK (state IN ('launched', 'running', 'published', 'failed')),
     image_digest text,                               -- none for a local checkout
     instance_type text,                              -- the EC2 instance type it ran on; null when unknown
     settings_hash text,
     published_attempt integer,
     manifest jsonb,
-    refusal text,                                    -- why the automatic binding was refused, why Batch ended it unrecorded, why the stage failed (a named failure's message, any other exception's type and message), or why it declined
+    refusal text,                                    -- why the automatic binding was refused, why Batch ended it unrecorded, or why the stage failed (a named failure's message, any other exception's type and message)
     launched timestamp with time zone DEFAULT now() NOT NULL,
     started timestamp with time zone,
     ended timestamp with time zone,
@@ -290,8 +290,6 @@ CREATE TABLE refimages (
     infobits integer DEFAULT 0 NOT NULL,
     nframes smallint,                                -- images in the stack
     cov5percent real,                                -- coverage-depth QA metric
-    covfrac real,                                    -- fraction of its pixels at covdepth or deeper, from its coverage map; null unless selected by coverage
-    covdepth real,                                   -- the depth covfrac counts, [reference.selection] min_coverage_depth [frames]
     created timestamp without time zone DEFAULT now() NOT NULL,
     UNIQUE (dataset, field, fid, job)
 );
