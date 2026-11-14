@@ -418,6 +418,25 @@ def test_a_run_body_from_before_diff_flavor_retired_publishes_sfft(tmp_path, fil
     assert row["filename"].endswith("/diff/sfftdiffimage_masked.fits.gz")
 
 
+def test_the_kernel_fit_masking_keys_reach_sfft_and_a_body_without_them_runs_it_unmasked(
+        tmp_path, files, fakes):
+    """A run created before [difference.sfft]'s kernel-fit masking keys existed lacks them: its SFFT
+    command is the empty keys' one; each key set reaches the command."""
+    runner, _ = fakes
+    masks = ("sfft_zero_margin", "sfft_bsmask_isoarea", "sfft_bsmask_isofactor")
+    older = settings()
+    for key in masks:
+        del older["difference"]["sfft"][key]
+    for name, body in (("older", older), ("empty", settings()),
+                       ("set", settings(sfft=dict(zip(masks, ("2", "2000", "2.0")))))):
+        (tmp_path / name).mkdir()
+        run_difference(tmp_path / name, files, body=body)
+    older_cmd, empty_cmd, set_cmd = runner.shell_calls
+    assert older_cmd.replace(str(tmp_path / "older"), "") == empty_cmd.replace(str(tmp_path / "empty"), "")
+    assert "--zeromargin" not in older_cmd and "--bsmaskisoarea" not in older_cmd
+    assert "--zeromargin 2" in set_cmd and "--bsmaskisoarea 2000 --bsmaskisofactor 2.0" in set_cmd
+
+
 def test_run_sfft_false_fails_the_settings_check(tmp_path, files, fakes):
     with pytest.raises(ValueError, match="run_sfft = false"):
         run_difference(tmp_path, files, body=settings(sfft={"run_sfft": False}))
