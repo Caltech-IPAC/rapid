@@ -1182,12 +1182,10 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches),
                                     ("ss", ss_matches)):
                     for m in found or ():
-                        rows[(read.catalogs[kind].job,
-                              str(m.source_id) if kind == "gaia" else m.designation
-                              if kind == "ss" else m.prefname)] = {
-                            "catid": (str(m.source_id) if kind == "gaia" else m.designation
-                                      if kind == "ss" else m.prefname),
-                            "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
+                        catid = (str(m.source_id) if kind == "gaia" else m.designation
+                                 if kind == "ss" else m.prefname)
+                        rows[(read.catalogs[kind].job, catid)] = {
+                            "catid": catid, "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
                             "source_job": read.source_job, "sid": source.sid,
                             "catalog_job": read.catalogs[kind].job}
                 external.extend(rows.values())
