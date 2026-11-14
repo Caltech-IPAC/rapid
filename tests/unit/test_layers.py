@@ -113,12 +113,16 @@ def test_the_hlwas_overlay_resolves_to_the_hand_built_body():
     """Shipped defaults + the HLWAS overlay + the per-run --sets equals the
     full body earlier runs were created from (base, the two intake keys and
     the reference bound, e.g. run 17's) with the DQ mask, the WCS
-    translation and the HLWAS program id that followed them, hash included; dev's OpenUniverse SFFT
+    translation, the HLWAS program id and the cutover's scope cut (no sources records, ZOGY or naive
+    subtraction) that followed them, hash included; dev's OpenUniverse SFFT
     block, once the overlay's, is the base's since sfft-block-base."""
     root, bound = "s3://bucket/r00342/l2/", 61591.4056
     hand_built = tomllib.loads(SHIPPED.read_text())
     hand_built["intake"].update(source_root=root, unsigned=True, dq_mask_bits=34671617,
                                 crpix_shift=[0.12, -0.99], program_id=-4)
+    hand_built["difference"]["skip_loading_sources_records"] = True
+    hand_built["difference"]["zogy"]["run_zogy"] = False
+    hand_built["difference"]["naive_diffimage"]["naive_diffimage_flag"] = False
     hand_built["reference"]["selection"]["before_mjd"] = bound
     body, record = resolve(SHIPPED, HLWAS, [f'intake.source_root="{root}"',
                                             f"reference.selection.before_mjd={bound}"])

@@ -577,7 +577,8 @@ max_sources = -1
 # true: the difference job loads no sources records. Its source set is still
 # declared, with no rows, so the set's binding opens and its xsources, which
 # are always loaded, are official through it; with no sources nothing is
-# associated (no objects or memberships) and the epoch's packet set is empty.
+# associated into objects or memberships, while the xsources still found
+# their xobjects and xmemberships and the epoch's packets come from them.
 # The quality metrics are still those of the set computed. dev's sources
 # loader (loadPSFCatIntoDBSourcesTable.py) is a step a run can skip; this is
 # that choice (Russ Laher, 2026-11-04).

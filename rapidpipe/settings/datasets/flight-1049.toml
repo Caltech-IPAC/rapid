@@ -80,6 +80,20 @@ max_frames = 50
 # reference.awaicgen.use_nominal_zptmag=false.
 use_nominal_zptmag = true
 
+[difference]
+# The cutover's scope, as the flight and HLWAS overlays share it: SFFT's
+# difference, its xsources and their packets, which is what commissioning
+# publishes. No sources records (the PSF-fit catalogs stay as files), no
+# ZOGY and no naive subtraction, whose products are diagnostics nothing
+# published reads (Ben, 2026-11-14).
+skip_loading_sources_records = true
+
+[difference.zogy]
+run_zogy = false
+
+[difference.naive_diffimage]
+naive_diffimage_flag = false
+
 [difference.sci_image]
 # False is meant for in-flight data (Azalee, 2026-11-10).
 repair_extreme_artifact_pixels = false
