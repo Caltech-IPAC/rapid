@@ -5,7 +5,7 @@ held, not sent, and reported each pass as ``held`` fields are. The gate
 itself sits at the send boundary (the packet job's own send and the loop's
 recovery sweep, ``rapidpipe.foundation.publish_kafka``); this module only
 answers. Given a packet set (its job), :func:`decide` reads the metrics of
-the difference job whose source set it names (``job_metrics``) and holds it
+the difference job of the set's own exposure and SCA (``job_metrics``) and holds it
 when any of:
 
 - ``usable_fraction`` below ``[gate] usable_fraction_min`` (lost sky: a
@@ -82,15 +82,20 @@ def decide(conn, packet_job: int, settings: dict[str, Any] | None = None) -> dic
     """:func:`judge` for the packet set ``packet_job``, read from ``job_metrics`` in one transaction.
 
     ``settings`` is the run's ``[gate]`` table (its defaults when absent). Adds
-    ``difference_job`` to the answer; ``NotFound`` when the set names no source set.
+    ``difference_job`` to the answer. The difference judged is the set's own: of the
+    ``sources`` inputs it names (its own, and the source sets of the objects it
+    associated with), the one keyed by its scope's ``expid``, ``sca`` and ``fid``;
+    ``NotFound`` when it names no such input.
     """
     with conn.cursor() as cur:
-        cur.execute("SELECT source_job FROM job_inputs WHERE job = %s AND kind = 'input'"
-                    " AND product = 'sources'", (packet_job,))
+        cur.execute("SELECT DISTINCT i.source_job FROM job_inputs i JOIN jobs p ON p.id = i.job"
+                    " WHERE i.job = %s AND i.kind = 'input' AND i.product = 'sources'"
+                    " AND i.key -> 'expid' = p.scope -> 'expid' AND i.key -> 'sca' = p.scope -> 'sca'"
+                    " AND i.key -> 'fid' = p.scope -> 'fid'", (packet_job,))
         row = cur.fetchone()
         if row is None:
             conn.commit()
-            raise NotFound(f"packet set {packet_job} names no sources input")
+            raise NotFound(f"packet set {packet_job} names no sources input of its own exposure and SCA")
         difference = row[0]
         cur.execute("SELECT metric, value FROM job_metrics WHERE job = %s", (difference,))
         metrics = dict(cur.fetchall())
