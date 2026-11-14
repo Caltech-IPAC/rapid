@@ -47,7 +47,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "Kron-like automatic-aperture magnitude MAG_AUTO (instrumental; nJy calibration pending); null when the measurement failed [mag]"
+            "doc": "Kron-like automatic-aperture magnitude MAG_AUTO (AB, on the reference image's MAGZP); null when the measurement failed [mag]"
         },
         {
             "name": "magErrAuto",
