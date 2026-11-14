@@ -8,8 +8,9 @@ fixed-degree fit misses it, and a corner is the domain's edge, where a
 polynomial fit is worst); the ``exposures`` and ``l2files`` rows have
 exactly their schema columns and the key the file name gives, the
 ``exposures`` row the file's Roman observation identifiers and, with
-``[intake] program_id`` unset (``""``, the shipped value), the file's own
-``PROGRAM``, a set value otherwise, a program with no ``surveys`` row
+``[intake] program_id`` unset (``""``, flight's value), the file's own
+``PROGRAM``, a set value otherwise (the base's -1), a set value that is not
+negative or a file's ``PROGRAM`` that is not positive refused, a program with no ``surveys`` row
 written with a warning; the ``exposures`` row is declared only when the
 job expects its key; the
 manifest names the file's provenance; a file whose own identifiers
@@ -324,15 +325,24 @@ def test_an_unset_program_id_refuses_a_file_with_no_program():
         intake.program_id("", fits.Header(), STEM)
 
 
-def test_the_base_reads_the_files_program_and_each_simulation_sets_its_own():
-    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
-    assert shipped["intake"]["program_id"] == ""
-    datasets = REPO / "rapidpipe/settings/datasets"
-    overlays = {path.stem: tomllib.loads(path.read_text())["intake"] for path in datasets.glob("*.toml")}
-    assert "program_id" not in overlays["flight-1049"]
-    assert {name: overlays[name]["program_id"] for name in overlays if name != "flight-1049"} == {
-        "gbtds-r00340": -1, "gbtds-r00340-fakesrc": -1, "openuniverse-tds": -2,
-        "rimtimsim-260622": -3, "hlwas-r00342": -4}
+@pytest.mark.parametrize("setting, program", [(1049, 1049), (0, 342), ("", 0), ("", -4)])
+def test_the_program_id_sign_guard_refuses_a_set_id_not_negative_and_a_file_program_not_positive(
+        setting, program):
+    """A simulation's set id is negative and flight's own PROGRAM positive, so the two never share one."""
+    with pytest.raises(ValueError, match="not negative" if setting != "" else "not positive"):
+        intake.program_id(setting, fits.Header({"PROGRAM": program}), STEM)
+
+
+def test_flight_reads_the_files_program_and_every_simulation_resolves_to_a_negative_id():
+    from rapidpipe.foundation.layers import resolve
+
+    settings = REPO / "rapidpipe/settings"
+    for path in sorted((settings / "datasets").glob("*.toml")):
+        program = resolve(settings / "foundation-thin.toml", path)[0]["intake"]["program_id"]
+        if path.stem == "flight-1049":
+            assert program == "", path.name
+        else:
+            assert isinstance(program, int) and program < 0, path.name
 
 
 def test_the_stem_parses_and_the_expid_packs():

@@ -21,6 +21,10 @@
 # 10.8 years, not the WCS: hence gaia_proper_motion below.
 
 [intake]
+# Each file's own PROGRAM (meta.observation.program) is its exposures row's
+# program_id, so one flight dataset can hold several programs (Azalee,
+# 2026-11-05).
+program_id = ""
 # The files carry the same roman_datamodels pixel flags as the SOC
 # simulations, so the bits mean the same. Without SATURATED the mask covers 0.231% of the pixels per file
 # (DO_NOT_USE 0.039%, DEAD 0.097%, HOT 0.100%, NONLINEAR 0.105%, NO_LIN_CORR
