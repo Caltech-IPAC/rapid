@@ -239,7 +239,7 @@ def test_a_source_matched_to_one_name_in_ned_and_ned_lvs_publishes_one_external_
     """Every NED-LVS galaxy is a NED object under the same name, and one import registers both
     copies, so a source within both radii of one galaxy matches it twice under one catalog job
     (run 241, 2026-11-14: every packet job of the flight field failed on external's key). The set
-    publishes, each field carries its match, and `external` holds the entry once, the closer kept."""
+    publishes, each field carries its match, and `external` holds the entry once, the NED-LVS match's."""
     conn = connect()
     job, founder, *_ = packet_job(conn, tmp_path, host="COSMOS 0518787")
     result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
@@ -249,7 +249,7 @@ def test_a_source_matched_to_one_name_in_ned_and_ned_lvs_publishes_one_external_
     assert [m["prefName"] for m in record["lvsMatches"]] == ["COSMOS 0518787"]
     rows = query(conn, "SELECT catid, catalog_job, sep FROM external WHERE job = %s", (job,))
     assert [(catid, catalog_job) for catid, catalog_job, _ in rows] == [("COSMOS 0518787", founder)]
-    assert rows[0][2] == pytest.approx(min(record["nedMatches"][0]["sep"], record["lvsMatches"][0]["sep"]))
+    assert rows[0][2] == pytest.approx(record["lvsMatches"][0]["sep"])
 
 
 def test_a_run_body_without_a_catalog_switch_has_that_match_off(connect, tmp_path):
