@@ -610,8 +610,8 @@ REF_MATCH_PARAMS = (
     Param("flags",         "int",              "SExtractor extraction FLAGS bitmask of the reference source "
                                                "(2 = blended, 4 = saturated, ...)",
                         IMPLEMENTED, _REF_SRC),
-    Param("magAuto",       ["null", "float"],  "Kron-like automatic-aperture magnitude MAG_AUTO (instrumental; "
-                                               "nJy calibration pending); null when the measurement failed [mag]",
+    Param("magAuto",       ["null", "float"],  "Kron-like automatic-aperture magnitude MAG_AUTO (AB, on the "
+                                               "reference image's MAGZP); null when the measurement failed [mag]",
                         IMPLEMENTED, _REF_SRC, attr="mag_auto"),
     Param("magErrAuto",    ["null", "float"],  "Uncertainty in magAuto; null with magAuto [mag]",
                         IMPLEMENTED, _REF_SRC, attr="mag_err_auto"),

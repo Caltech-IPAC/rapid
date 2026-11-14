@@ -289,7 +289,7 @@ class RefMatch:
                          # East of North [deg]
     class_star: float    # SExtractor star/galaxy score (1 = point-like)
     flags: int           # SExtractor extraction flags of the catalog source
-    mag_auto: float | None = None       # MAG_AUTO [instrumental mag]
+    mag_auto: float | None = None       # MAG_AUTO [AB mag, the reference's MAGZP]
     mag_err_auto: float | None = None
     elong: float | None = None          # A/B axis ratio
     fwhm: float | None = None           # [arcsec]

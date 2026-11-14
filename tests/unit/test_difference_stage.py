@@ -627,20 +627,23 @@ def test_sfft_and_naive_catalogs_take_their_detection_overrides(tmp_path, files,
     assert option(sfft_runs[1], "-CATALOG_NAME") == "sfftdiffimage_masked_negative.txt"
 
 
+@pytest.mark.parametrize("differencers", [{}, {"zogy": {"run_zogy": False},
+                                               "naive_diffimage": {"naive_diffimage_flag": False}}],
+                         ids=["all", "sfft-only"])
 def test_catalog_magnitudes_are_on_the_science_zero_point_and_the_gain_match_stays_at_zero(
-        tmp_path, files, fakes):
+        tmp_path, files, fakes, differencers):
+    """Every difference catalog, however many differencers run, takes the science ZPTMAG."""
     runner, _ = fakes
-    body = settings()
+    body = settings(**differencers)
     run_difference(tmp_path, files, body=body)
     sex = [c for c in runner.calls if c[0].endswith("sex")]
     by_params = {}
     for call in sex:
         params = Path(call[call.index("-PARAMETERS_NAME") + 1]).name
         by_params.setdefault(params, []).append(float(call[call.index("-MAG_ZEROPOINT") + 1]))
-    # One science catalog, ZOGY, SFFT and naive positive and negative, two gain-match runs.
-    assert by_params == {"rapidSexParamsSciImage.inp": [ZPTMAG],
-                         "rapidSexParamsDiffImage.inp": [ZPTMAG] * 6,
-                         "rapidSexParamsGainMatch.inp": [0.0, 0.0]}
+    assert by_params["rapidSexParamsSciImage.inp"] == [ZPTMAG]
+    assert by_params["rapidSexParamsDiffImage.inp"] and set(by_params["rapidSexParamsDiffImage.inp"]) == {ZPTMAG}
+    assert set(by_params["rapidSexParamsGainMatch.inp"]) == {0.0}
     for table in ("sextractor_sciimage", "sextractor_diffimage", "sextractor_gainmatch"):
         assert body["difference"][table]["sextractor_mag_zeropoint"] == "0.0"
 
