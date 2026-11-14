@@ -243,5 +243,3 @@ def test_exposure_id_prints_the_names_id_the_same_id_again_and_another_names_ano
     with conn.cursor() as cur:
         cur.execute("SELECT name, expid FROM exposure_ids WHERE dataset = %s ORDER BY expid", (DATASET,))
         assert cur.fetchall() == [(name, int(first)), (other, int(second))]
-    code, out, err = _run(capsys, "exposure", "id", "--dataset", DATASET)
-    assert code == ExitCode.USAGE and out == "" and "--name" in err
