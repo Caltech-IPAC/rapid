@@ -47,7 +47,8 @@ official ``exposures`` row's ``program_id``; a row whose exposure has no
 official row yet is not selected until it has one. So references are built
 only from the selected programs' frames and only their images are
 differenced and packeted, while an official reference of the field, built
-from any program, is reused. Objects are matched within the run, as always.
+from any program, is reused. A difference job matches its sources against
+the dataset's objects of every run, whatever program founded them.
 
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported (``failed``, with its scope) and
