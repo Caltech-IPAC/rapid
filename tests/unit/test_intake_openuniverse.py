@@ -117,6 +117,9 @@ def test_a_file_whose_own_filter_or_detector_contradicts_its_name_fails(tmp_path
         convert(tmp_path, **contradiction)
 
 
+EXPID = 5                        # the scope's id for the exposure roman_tds_H158_10032, any integer
+
+
 def fake_connect(psf_filename: str):
     class Cursor:
         def __enter__(self):
@@ -128,6 +131,10 @@ def fake_connect(psf_filename: str):
         def execute(self, statement, params):
             if "FROM surveys" in statement:  # the unknown-program check: every program is known
                 self.row = (1,)
+                return
+            if "FROM exposure_ids" in statement:
+                assert params == ("ou-tds1", "roman_tds_H158_10032")
+                self.row = (EXPID,)
                 return
             assert "FROM psfs" in statement and params[1:] == (2, 8)  # H158, SCA 8
             self.row = (psf_filename,)
@@ -151,7 +158,7 @@ def run_intake(tmp_path: Path, reader: str = "openuniverse") -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir()
     settings = {"intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/", "reader": reader}}
-    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "ou-tds1", "file": STEM},
+    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "ou-tds1", "file": STEM, "expid": EXPID},
                      survey="HLTDS", dataset="ou-tds1", settings=settings,
                      inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
                               "binding": None},
@@ -163,14 +170,14 @@ def run_intake(tmp_path: Path, reader: str = "openuniverse") -> Path:
     return prefix
 
 
-def test_the_stage_reads_the_openuniverse_path_keys_the_rows_by_pointing_and_is_zero_based(tmp_path):
+def test_the_stage_reads_the_openuniverse_path_keys_the_rows_by_the_scopes_id_and_is_zero_based(tmp_path):
     prefix = run_intake(tmp_path)
     manifest = json.loads((prefix / "manifest.json").read_text())
     assert manifest["source"].endswith(f"/H158/10032/{STEM}_simple.asdf")
     (exposure,) = pq.read_table(prefix / "exposures.parquet").to_pylist()
     (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
-    assert (exposure["expid"], exposure["program_id"]) == (10032, -2)
-    assert (l2file["dataset"], l2file["expid"], l2file["sca"], l2file["fid"]) == ("ou-tds1", 10032, 8, 2)
+    assert (exposure["expid"], exposure["program_id"]) == (EXPID, -2)
+    assert (l2file["dataset"], l2file["expid"], l2file["sca"], l2file["fid"]) == ("ou-tds1", EXPID, 8, 2)
     assert exposure["observation"] is None  # the pointing is not a Roman observation number
     with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
         assert hdul["SCI"].header["FILTER"] == "H158"

@@ -11,7 +11,7 @@ the exposure number with RimTimSim's ``program_id``.
 A socsims lite file (``<SOC stem>_cal_lite.fits.gz``): the SOC stem parses
 and names the file; the conversion keeps its DN, its WCS and inverse SIP,
 its own centre, and writes the stem's observation identifiers; under its
-overlay the stage reads it and keys the rows by the SOC ``expid``.
+overlay the stage reads it and keys the rows by the scope's ``expid``.
 """
 
 from __future__ import annotations
@@ -109,6 +109,9 @@ def test_a_file_not_in_dn_without_a_positive_zptmag_or_asked_for_a_dq_mask_is_re
         convert(tmp_path, dq_mask_bits=bits, **cards)
 
 
+EXPID = 9                        # the scope's id for the file's exposure, any integer
+
+
 def fake_connect(psf_filename: str, fid: int = 4, sca: int = 2):
     class Cursor:
         def __enter__(self):
@@ -120,6 +123,9 @@ def fake_connect(psf_filename: str, fid: int = 4, sca: int = 2):
         def execute(self, statement, params):
             if "FROM surveys" in statement:  # the unknown-program check: every program is known
                 self.row = (1,)
+                return
+            if "FROM exposure_ids" in statement:
+                self.row = (EXPID,)
                 return
             assert "FROM psfs" in statement and params[1:] == (fid, sca)  # K213, SCA 2 by default
             self.row = (psf_filename,)
@@ -134,7 +140,7 @@ def fake_connect(psf_filename: str, fid: int = 4, sca: int = 2):
     return lambda: contextlib.nullcontext(Connection())
 
 
-def test_the_stage_under_the_overlay_reads_the_lite_file_and_keys_the_rows_by_exposure(tmp_path):
+def test_the_stage_under_the_overlay_reads_the_lite_file_and_keys_the_rows_by_the_scopes_id(tmp_path):
     source = tmp_path / "source"
     write_lite(source / rts.source_key(STEM))
     yy, xx = np.mgrid[:9, :9]
@@ -147,7 +153,7 @@ def test_the_stage_under_the_overlay_reads_the_lite_file_and_keys_the_rows_by_ex
                            "limmag_clip_sigma": 3.0, "limmag_maxiters": 10, "nominal_zptmag": {},
                            "dq_mask_bits": 0, "rederive_wcs": False, "crpix_shift": [0.0, 0.0],
                            **tomllib.loads(OVERLAY.read_text())["intake"]}}
-    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "rts1", "file": STEM},
+    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "rts1", "file": STEM, "expid": EXPID},
                      survey="GBTDS", dataset="rts1", settings=settings,
                      inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
                               "binding": None},
@@ -160,8 +166,8 @@ def test_the_stage_under_the_overlay_reads_the_lite_file_and_keys_the_rows_by_ex
     assert manifest["source"].endswith(f"/{STEM}.fits.gz")
     (exposure,) = pq.read_table(prefix / "exposures.parquet").to_pylist()
     (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
-    assert (exposure["expid"], exposure["program_id"]) == (411, -3)
-    assert (l2file["expid"], l2file["sca"], l2file["fid"], l2file["zptmag"]) == (411, 2, 4, ZPTMAG)
+    assert (exposure["expid"], exposure["program_id"]) == (EXPID, -3)
+    assert (l2file["expid"], l2file["sca"], l2file["fid"], l2file["zptmag"]) == (EXPID, 2, 4, ZPTMAG)
     with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
         assert hdul["SCI"].header["FILTER"] == "K213"
 
@@ -214,7 +220,7 @@ def test_a_socsims_file_keeps_its_dn_wcs_and_centre_and_writes_the_stems_identif
                                    WCS(lite[1].header).all_pix2world(x, y, 0), atol=1e-12)
 
 
-def test_the_stage_under_the_socsims_overlay_keys_the_rows_by_the_soc_expid(tmp_path):
+def test_the_stage_under_the_socsims_overlay_keys_the_rows_by_the_scopes_id_and_the_stems_identifiers(tmp_path):
     source = tmp_path / "source"
     write_socsims(source / rts.source_key(SS_STEM))
     yy, xx = np.mgrid[:9, :9]
@@ -227,7 +233,7 @@ def test_the_stage_under_the_socsims_overlay_keys_the_rows_by_the_soc_expid(tmp_
                            "limmag_clip_sigma": 3.0, "limmag_maxiters": 10, "nominal_zptmag": {},
                            "dq_mask_bits": 0, "rederive_wcs": False, "crpix_shift": [0.0, 0.0],
                            "program_id": -1, **tomllib.loads(SS_OVERLAY.read_text())["intake"]}}
-    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "ss1", "file": SS_STEM},
+    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "ss1", "file": SS_STEM, "expid": EXPID},
                      survey="GBTDS", dataset="ss1", settings=settings,
                      inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
                               "binding": None},
@@ -240,5 +246,5 @@ def test_the_stage_under_the_socsims_overlay_keys_the_rows_by_the_soc_expid(tmp_
     assert manifest["source"].endswith(f"/{SS_STEM}_cal_lite.fits.gz")
     (exposure,) = pq.read_table(prefix / "exposures.parquet").to_pylist()
     (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
-    assert (exposure["expid"], exposure["program_id"], exposure["visit"]) == (5036101, -1, 61)
-    assert (l2file["expid"], l2file["sca"], l2file["fid"], l2file["zptmag"]) == (5036101, 8, 8, 26.8266)
+    assert (exposure["expid"], exposure["program_id"], exposure["visit"]) == (EXPID, -1, 61)
+    assert (l2file["expid"], l2file["sca"], l2file["fid"], l2file["zptmag"]) == (EXPID, 8, 8, 26.8266)
