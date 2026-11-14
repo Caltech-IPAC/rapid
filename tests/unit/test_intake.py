@@ -143,8 +143,9 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
     model.save(path)
 
 
-def fake_connect(psf_filename: str, surveys: tuple[int, ...] = (-1, -4)):
-    """A connection factory answering the PSF lookup with ``psf_filename`` and the surveys lookup from ``surveys``."""
+def fake_connect(psf_filename: str, surveys: tuple[int, ...] = (-1, -4), exposures=None):
+    """A connection factory answering the PSF lookup with ``psf_filename``, the surveys lookup from
+    ``surveys`` and the official exposure lookup with ``exposures(statement, params)`` (none by default)."""
     class Cursor:
         def __enter__(self):
             return self
@@ -155,6 +156,9 @@ def fake_connect(psf_filename: str, surveys: tuple[int, ...] = (-1, -4)):
         def execute(self, statement, params):
             if "FROM surveys" in statement:
                 self.row = (1,) if params[0] in surveys else None
+                return
+            if "FROM exposures_official" in statement:
+                self.row = exposures(statement, params) if exposures else None
                 return
             assert "FROM psfs" in statement and params[1:] == (8, 8)
             self.row = (psf_filename,)
@@ -183,7 +187,7 @@ def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                expects_exposure: bool = True, dq_mask_bits: int = 0,
                crpix_shift: tuple[float, float] = (0.0, 0.0),
                rederive_wcs: bool = False, program_id: int | str = -1,
-               surveys: tuple[int, ...] = (-1, -4)) -> Path:
+               surveys: tuple[int, ...] = (-1, -4), exposures=None) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
     settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
@@ -199,7 +203,7 @@ def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                      inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
                               "binding": None}, *expects],
                      attempt=1, prefix=prefix.as_uri() + "/",
-                     connect=fake_connect((source / "psf.fits").as_uri(), surveys))
+                     connect=fake_connect((source / "psf.fits").as_uri(), surveys, exposures))
     intake.run(job)
     return prefix
 

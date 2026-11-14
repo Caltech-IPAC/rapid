@@ -41,8 +41,13 @@ id; a SOC exposure has none that fits an ``integer``, so the stage packs
 the identifiers that vary, ``pass * 10**6 + observation * 10**4 + visit *
 10**2 + exposure`` (observation, visit and exposure each below 100), the
 same for every SCA of the exposure as `dev`'s one ``Exposures`` row per
-exposure is. The manifest records the file's provenance: its observation
-identifiers, romancal's version and the Gaia fit's summary.
+exposure is. The packing leaves out program, execution plan and segment,
+so two exposures can share an ``expid``: a file whose program, execution
+plan or segment differ from the dataset's official ``exposures`` row of its
+``expid`` is refused, exit 65, naming both files (Ben, 2026-11-14), until the
+``expid`` is a serial the database hands out. The manifest records the
+file's provenance: its observation identifiers, romancal's version and the
+Gaia fit's summary.
 
 ``[intake] reader`` names the input format. ``soc-l2`` (the default,
 `dev`'s) is the above. ``openuniverse`` reads OpenUniverse 2024's
@@ -112,6 +117,7 @@ import pyarrow.parquet as pq
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.foundation.steps import step
@@ -230,6 +236,8 @@ def run(job: JobContext) -> None:
                 "exptime": float(header["EXPTIME"]),
                 "program_id": program_id(settings["program_id"], header, stem),
                 **exposure_identifiers(header)}
+    if reader == "soc-l2":
+        _check_expid(job, stem, exposure)
     tables = [("l2files", [l2file])]
     if any(i["kind"] == "expects" and i["product"] == "exposures" for i in job.inputs):
         tables.insert(0, ("exposures", [exposure]))
@@ -357,6 +365,35 @@ def _check_key(stem: str, ids: dict, header) -> None:
     named = {k: ids[k] for k in own}
     if own != named:
         raise ValueError(f"{stem}: the file's own identifiers {own} are not its name's {named}")
+
+
+#: The identifiers the ``expid`` packing leaves out, which the dataset's exposure of that ``expid`` must share.
+UNPACKED = ("program_id", "execution_plan", "segment")
+
+
+def _check_expid(job: JobContext, stem: str, exposure: dict) -> None:
+    """The dataset's official ``exposures`` row of this ``expid``, if any, must be this file's exposure.
+
+    Raises
+    ------
+    CommandExit
+        Exit 65 when the row's program, execution plan or segment differ
+        from the file's, naming the file the row came from.
+    """
+    with job.connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT e.program_id, e.execution_plan, e.segment, e.job, l.filename"
+                    " FROM exposures_official e LEFT JOIN l2files l ON l.job = e.job"
+                    " WHERE e.dataset = %s AND e.expid = %s LIMIT 1", (job.dataset, exposure["expid"]))
+        row = cur.fetchone()
+    if row is None:
+        return
+    official = dict(zip(UNPACKED, row[:3]))
+    own = {name: exposure[name] for name in UNPACKED}
+    if official != own:
+        other = PurePosixPath(row[4]).name if row[4] else f"the file of job {row[3]}"
+        raise CommandExit(int(ExitCode.INPUT_REJECTED),
+                          f"{stem}: expid {exposure['expid']} of dataset {job.dataset} is already "
+                          f"{other}'s exposure, {official}; this file's is {own}")
 
 
 def _check_epsf(stem: str, primary, psf: Path) -> None:
