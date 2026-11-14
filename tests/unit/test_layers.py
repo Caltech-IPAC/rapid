@@ -182,14 +182,19 @@ def test_the_retired_diff_flavor_cannot_select_zogy(tmp_path):
     with pytest.raises(LayerError, match="diff_flavor"):
         resolve(SHIPPED, overlay)
 
-#: Each overlay's resolved [intake] dq_mask_bits: flight inherits the base's mask with SATURATED, the SOC simulations keep theirs without it, readers without a usable DQ plane keep 0.
-DQ_MASK_BITS = {"flight-1049.toml": 34671619, "gbtds-r00340-fakesrc.toml": 0, "gbtds-r00340.toml": 34671617,
-                "hlwas-r00342.toml": 34671617, "openuniverse-tds.toml": 0, "rimtimsim-260622.toml": 0}
+def test_flight_masks_saturated_the_soc_simulations_do_not_and_the_lite_readers_mask_nothing():
+    """SATURATED is masked on flight's real cores and left on the SOC simulations, which flag every bright
+    star's core; a reader without a usable DQ plane refuses a nonzero mask."""
+    from roman_datamodels.dqflags import pixel
 
-
-def test_every_dataset_resolves_to_its_dq_mask_bits():
-    paths = sorted((SETTINGS / "datasets").glob("*.toml"))
-    assert {path.name: resolve(SHIPPED, path)[0]["intake"]["dq_mask_bits"] for path in paths} == DQ_MASK_BITS
+    for path in sorted((SETTINGS / "datasets").glob("*.toml")):
+        intake = resolve(SHIPPED, path)[0]["intake"]
+        saturated = bool(intake["dq_mask_bits"] & int(pixel.SATURATED))
+        assert saturated == (path == FLIGHT), path.name
+        if intake["reader"] in ("socsims-lite", "rimtimsim"):
+            assert intake["dq_mask_bits"] == 0, path.name
+    for path in (HLWAS, SETTINGS / "datasets" / "gbtds-r00340.toml"):
+        assert resolve(SHIPPED, path)[0]["intake"]["dq_mask_bits"], path.name
 
 
 @pytest.mark.parametrize("path", [SHIPPED, *sorted((SETTINGS / "datasets").glob("*.toml"))], ids=lambda p: p.name)

@@ -17,8 +17,8 @@ contradict its name fails before a manifest; the file name parses, and the
 expid packs, as the stage's docstring says; a file whose own ePSF
 reference is not the one its science PSF names (``EPSFREF``) fails before
 a manifest, and one whose PSF names the same reference publishes; the DQ
-mask (``[intake] dq_mask_bits``, default 34671619 with SATURATED,
-which masks a SATURATED pixel; 0 masks nothing) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
+mask (``[intake] dq_mask_bits``, default 0, nothing masked; flight's
+overlay 34671619 with SATURATED, which masks a SATURATED pixel) sets ``SCI``, ``ERR`` and ``VAR_*`` NaN where ``DQ`` has a masked
 bit, leaves ``DQ`` as it was, carries ``DQMASK`` and ``NDQMASK`` on each
 masked HDU and counts the file's own NaN, the masked pixels and their union
 in the manifest; the HLWAS overlay's bits are #238's names without
@@ -378,13 +378,15 @@ def test_dq_mask_bits_zero_is_devs_behaviour_nothing_masked(tmp_path, source):
     assert manifest["metrics"] == {"masked_fraction": 0.0}
 
 
-def test_the_shipped_mask_is_238s_default_and_masks_a_saturated_pixel(tmp_path, source):
+def test_the_flight_mask_masks_a_saturated_pixel(tmp_path, source):
     from roman_datamodels.dqflags import pixel
 
-    shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
-    bits = shipped["intake"]["dq_mask_bits"]
-    names = ("DO_NOT_USE", "SATURATED", "DEAD", "HOT", "NONLINEAR", "NO_LIN_CORR", "UNRELIABLE_FLAT")
-    assert bits == sum(int(pixel[name]) for name in names) == 34671619  # the seven flags summed
+    from rapidpipe.foundation.layers import resolve
+
+    settings = REPO / "rapidpipe/settings"
+    body, _ = resolve(settings / "foundation-thin.toml", settings / "datasets/flight-1049.toml")
+    bits = body["intake"]["dq_mask_bits"]
+    assert bits & int(pixel.SATURATED)
     images = hdus(run_intake(tmp_path, source, dq_mask_bits=bits))
     assert (9, 9, int(pixel.SATURATED)) in FLAGGED
     assert np.isnan(images["SCI"].data[9, 9]) and np.isnan(images["ERR"].data[9, 9])

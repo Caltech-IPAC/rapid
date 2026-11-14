@@ -21,11 +21,10 @@ reader = "socsims-lite"
 # sit (-0.028, -0.017) px from their centroids on 1,640 stars of
 # r0034001002001001001_0001_wfi01 (pass 2) and (+0.028, -0.024) px on 996
 # of r0034001005001003061_0001_wfi08 (pass 5), inside the gate's 0.25 px:
-# no crpix_shift either.
+# no crpix_shift either. dq_mask_bits stays 0: the
+# converter dropped the DQ plane, so nothing can be masked.
 # surveys: (-1, 'SOCSIMS GBTDS', 'SIM'), as gbtds-r00340.
 program_id = -1
-# The converter dropped the DQ plane and the reader refuses a nonzero mask.
-dq_mask_bits = 0
 
 [psf.epsf]
 # A lite file names no ePSF reference. These are the references dev's
