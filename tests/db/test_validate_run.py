@@ -44,10 +44,14 @@ def _live_run(conn) -> int:
 
 
 def _sources_set(conn, tmp_path, run: int, rows: list[dict]) -> int:
-    """A published, bound sources set whose manifest declares sources ``empty_ok``."""
+    """A published, bound sources set whose manifest declares sources ``empty_ok``, beside the
+    diffimages row a difference writes (``sources_of`` finds the set's child through it)."""
     key = {"dataset": DATASET, "expid": 1, "sca": 8, "fid": 1}
     job = new_job(conn, run, expects=[{"product": "sources", "key": key, "binding": None}])
-    prefix = write_attempt(tmp_path / f"job-{job}", {"sources": rows})
+    diff = {"pid": 501, **key, "field": 1, "jd": NOV4 + 0.7 + 2400000.5, "infobitssci": 0,
+            "infobitsref": 0, "status": 1, "filename": "d.fits",
+            **{f"{c}{i}": 1.0 for i in range(5) for c in ("ra", "dec")}}
+    prefix = write_attempt(tmp_path / f"job-{job}", {"diffimages": [diff], "sources": rows})
     manifest = local_path(prefix) / "manifest.json"
     manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "empty_ok": ["sources"]}))
     assert publish(conn, job, 1, prefix)["group"] is not None
