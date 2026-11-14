@@ -1172,21 +1172,24 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 container.write(alert)
                 container.flush()  # one record per block: the index's locator is exact
                 order.append((source, aid))
-                # One row per catalogue entry of this source, the closer kept: an LVS galaxy is
-                # a NED object under the same name, and one import job registers both copies, so
-                # a source matched in both would otherwise write `external`'s key twice (run 241).
+                # One row per catalogue entry of this source: an LVS galaxy is a NED object under
+                # the same name, and one import job registers both copies, so a source matched in
+                # both would otherwise write `external`'s key twice (run 241). The NED-LVS row wins:
+                # LVS is a subset of NED, so anything matched there can be looked up in NED, and
+                # LVS carries the more (Emily, 2026-11-14). The kinds are visited in that order of
+                # preference, a later kind replacing an earlier one under the same key.
                 rows: dict[tuple[int, str], dict] = {}
                 for kind, found in (("gaia", gaia_matches), ("ned", ned_matches), ("lvs", lvs_matches),
                                     ("ss", ss_matches)):
                     for m in found or ():
-                        row = {"catid": (str(m.source_id) if kind == "gaia" else m.designation
-                                         if kind == "ss" else m.prefname),
-                               "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
-                               "source_job": read.source_job, "sid": source.sid,
-                               "catalog_job": read.catalogs[kind].job}
-                        seen = rows.setdefault((row["catalog_job"], row["catid"]), row)
-                        if row["sep"] < seen["sep"]:
-                            rows[(row["catalog_job"], row["catid"])] = row
+                        rows[(read.catalogs[kind].job,
+                              str(m.source_id) if kind == "gaia" else m.designation
+                              if kind == "ss" else m.prefname)] = {
+                            "catid": (str(m.source_id) if kind == "gaia" else m.designation
+                                      if kind == "ss" else m.prefname),
+                            "ra": m.ra, "dec": m.dec, "sep": m.sep, "pa": m.pa,
+                            "source_job": read.source_job, "sid": source.sid,
+                            "catalog_job": read.catalogs[kind].job}
                 external.extend(rows.values())
     timing["cutouts_s"] += cutout_s
     timing["assembly_s"] = time.perf_counter() - t0 - cutout_s
