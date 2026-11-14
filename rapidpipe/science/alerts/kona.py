@@ -18,8 +18,9 @@ IAU HG model. The port splits that into the two steps the rebuild runs
   once per dataset at the ``ss/`` root (an import job with the ``ss``
   scope); every later day is found by date.
 - :class:`SsReader` and :func:`predict`, in the packet job: the newest day
-  at or before the trigger's observation, the states moved the remaining
-  hours to the mid-time, the cone check on the trigger chip. The observer
+  at or before the trigger's observation, or the oldest day when every day
+  is later (an exposure taken before the first ingest), the states moved
+  from the day's noon to the mid-time, the cone check on the trigger chip. The observer
   comes from the L2 file's primary header, where the intake writes the
   whole ASDF ``meta`` tree as ``HIERARCH`` cards (:func:`l2_primary_header`
   reads only the header, so a gzipped L2 in S3 costs its first blocks).
@@ -268,11 +269,22 @@ def days_of(store: Store) -> list[str]:
     return sorted(days)
 
 
-def newest_day(days: list[str], mjd: float) -> str | None:
-    """The newest of ``days`` at or before the UT date of ``mjd``, or None."""
+def day_to_read(days: list[str], mjd: float) -> str:
+    """The newest of ``days`` at or before the UT date of ``mjd``, else the oldest.
+
+    A day is the orbit table as fetched that day, propagated to its noon;
+    :func:`predict` moves it to the exposure by n-body, backwards as well
+    as forwards. A day at or before the exposure holds what was known when
+    it was taken, so a rerun reads what the first run read. When every day
+    is later, the oldest is the nearest to that, and moving it back gives
+    the positions a day ingested for the exposure's date would (measured
+    2026-11-14 on the days 20261113 and 20261114, 1.58 million objects:
+    the same to 1e-7 arcsec at 30 days, 5 s of 4 cores up to 10 days, 8 s
+    at 30, 31 s at a year), so no day is ever ingested for the past.
+    """
     wanted = day_of(mjd)
     before = [d for d in days if d <= wanted]
-    return before[-1] if before else None
+    return before[-1] if before else days[0]
 
 
 # ---------------------------------------------------------------------------
@@ -329,11 +341,8 @@ class SsReader:
         self.n_reads = 0
 
     def day_for(self, mjd: float) -> str:
-        """The day to read for an observation at ``mjd``; raises when every day is later."""
-        day = newest_day(self.days, mjd)
-        if day is None:
-            raise ValueError(f"no ss day at or before {day_of(mjd)} (oldest is {self.days[0]})")
-        return day
+        """The day to read for an observation at ``mjd`` (:func:`day_to_read`)."""
+        return day_to_read(self.days, mjd)
 
     def load(self, day: str) -> tuple[list, dict[str, tuple[float, float]], dict]:
         """A day's states, its H and G by designation, and its record."""
@@ -361,5 +370,5 @@ def read_days(location: str) -> list[str]:
 
 
 __all__ = ["CONE_RADIUS_DEG", "DEFAULT_G_PARAM", "Ephemeris", "HG_NAME", "SS_INFO", "SS_RELEASE",
-           "STATES_NAME", "SsReader", "day_of", "days_of", "ephemeris_from_header", "ingest_day",
-           "l2_primary_header", "newest_day", "noon_jd", "observer_state", "predict", "read_days"]
+           "STATES_NAME", "SsReader", "day_of", "day_to_read", "days_of", "ephemeris_from_header", "ingest_day",
+           "l2_primary_header", "noon_jd", "observer_state", "predict", "read_days"]
