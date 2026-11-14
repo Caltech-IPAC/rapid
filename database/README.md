@@ -87,9 +87,7 @@ the pipeline imports.
   fresh `schema.sql`; it fails there. The 2026-11-04 files apply in this
   order, which is not their names' order: `2026-11-04-a-retire-runs-1-68.sql`,
   `2026-11-04-sources-children.sql`, `2026-11-04-xsources.sql`,
-  `2026-11-04-field-children.sql`, `2026-11-04-xobjects.sql`. Of the
-  2026-11-12 files, `2026-11-12-objects-without-survey.sql` applies before
-  `2026-11-12-objects-across-runs.sql`.
+  `2026-11-04-field-children.sql`, `2026-11-04-xobjects.sql`.
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven
   statements: packet history three ways, lineage up and down) and the
