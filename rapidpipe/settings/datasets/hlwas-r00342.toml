@@ -29,3 +29,17 @@ dq_mask_bits = 34671617
 # 001_0001, 2026-10-24; rapid_docs measurements.md, WCS against the stars). The intake's
 # gaia_dx_px / gaia_dy_px read it on every file.
 crpix_shift = [0.12, -0.99]
+
+[difference]
+# The cutover's scope, as the flight and HLWAS overlays share it: SFFT's
+# difference, its xsources and their packets, which is what commissioning
+# publishes. No sources records (the PSF-fit catalogs stay as files), no
+# ZOGY and no naive subtraction, whose products are diagnostics nothing
+# published reads (Ben, 2026-11-14).
+skip_loading_sources_records = true
+
+[difference.zogy]
+run_zogy = false
+
+[difference.naive_diffimage]
+naive_diffimage_flag = false
