@@ -139,7 +139,7 @@ def test_footprints_straddling_ra_zero_match_same_geometry_elsewhere(ra0):
 
 
 def test_settings_carry_the_coverage_keys_with_nframes_the_base():
-    """The settings body carries the coverage keys, and flight-1049 selects by coverage."""
+    """The settings body carries the coverage keys, and flight selects by coverage."""
     selection = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())["reference"]["selection"]
     assert selection["selection_type"] == "nframes"
     assert selection["min_coverage_depth"] >= 1
@@ -148,7 +148,7 @@ def test_settings_carry_the_coverage_keys_with_nframes_the_base():
     assert 0.0 < selection["max_coverage_fraction"] <= 1.0
     assert selection["max_frames"] >= 1
     assert selection["coverage_estimate_tolerance"] == cov.COVERAGE_ESTIMATE_TOLERANCE
-    flight = tomllib.loads((REPO / "rapidpipe/settings/datasets/flight-1049.toml").read_text())["reference"]["selection"]
+    flight = tomllib.loads((REPO / "rapidpipe/settings/datasets/flight.toml").read_text())["reference"]["selection"]
     assert flight["selection_type"] == "coverage"
 
 

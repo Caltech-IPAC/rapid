@@ -156,7 +156,7 @@ def test_the_base_leaves_the_masking_off_and_the_command_unchanged():
 
 
 def test_the_flight_overlay_passes_commissionings_values():
-    cmd = _shipped_command(SETTINGS / "datasets" / "flight-1049.toml")
+    cmd = _shipped_command(SETTINGS / "datasets" / "flight.toml")
     assert cmd[cmd.index("--zeromargin") + 1] == "2"
     assert cmd[cmd.index("--bsmaskisoarea") + 1] == "2000"
     assert cmd[cmd.index("--bsmaskisofactor") + 1] == "2.0"

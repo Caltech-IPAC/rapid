@@ -343,7 +343,7 @@ def test_flight_reads_the_files_program_and_every_simulation_resolves_to_a_negat
     settings = REPO / "rapidpipe/settings"
     for path in sorted((settings / "datasets").glob("*.toml")):
         program = resolve(settings / "foundation-thin.toml", path)[0]["intake"]["program_id"]
-        if path.stem == "flight-1049":
+        if path.stem == "flight":
             assert program == "", path.name
         else:
             assert isinstance(program, int) and program < 0, path.name
@@ -398,7 +398,7 @@ def test_the_flight_mask_masks_a_saturated_pixel(tmp_path, source):
     from rapidpipe.foundation.layers import resolve
 
     settings = REPO / "rapidpipe/settings"
-    body, _ = resolve(settings / "foundation-thin.toml", settings / "datasets/flight-1049.toml")
+    body, _ = resolve(settings / "foundation-thin.toml", settings / "datasets/flight.toml")
     bits = body["intake"]["dq_mask_bits"]
     assert bits & int(pixel.SATURATED)
     images = hdus(run_intake(tmp_path, source, dq_mask_bits=bits))
@@ -594,7 +594,7 @@ def test_without_proper_motion_the_offset_is_the_copys_positions_as_they_are(tmp
 
 def test_the_shipped_setting_reads_the_copy_as_it_is_and_flight_propagates():
     shipped = tomllib.loads((REPO / "rapidpipe/settings/foundation-thin.toml").read_text())
-    flight = tomllib.loads((REPO / "rapidpipe/settings/datasets/flight-1049.toml").read_text())
+    flight = tomllib.loads((REPO / "rapidpipe/settings/datasets/flight.toml").read_text())
     assert shipped["intake"]["gaia_proper_motion"] is False
     assert flight["intake"]["gaia_proper_motion"] is True
 
