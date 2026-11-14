@@ -844,7 +844,7 @@ def sky_row(ra: float, dec: float, mjd: float, job: int, size: float = 0.05) -> 
     field = tessellation_field(ra % 360.0, dec)
     return {"field": field, "mjdobs": mjd, "job": job, "ra0": ra % 360.0, "dec0": dec,
             "overlapfields": overlapping_fields(ra % 360.0, dec, *w.wcs.crpix, -PIX, 0.0, 0.0, PIX, n, n, field=field),
-            "corners": (list(sky.ra.deg), list(sky.dec.deg))}
+            "corners": (list(sky.ra.deg), list(sky.dec.deg)), "program": 342}
 
 
 FIELD = 3034797                               # centred on (150.0293, 2.01472); its tile is 0.088 x 0.075 deg
