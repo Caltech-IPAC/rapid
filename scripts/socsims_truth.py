@@ -11,8 +11,9 @@ within 50 px of the image (``modules/fake_src/rapid_l2_injections.py``,
 ``_evaluate_catalogs_at_mjd``); it kept no record per exposure. This script
 repeats the evaluation, never the rendering, for every lite file of the
 dataset and writes the truth table ``inject_dataset.py`` writes (``src_id,
-ra, dec, x, y, mag_ab, dnps, zp, expid, sca, fid, mjd, dataset``) so
-``completeness.py`` reads it unchanged:
+ra, dec, x, y, mag_ab, dnps, zp, exposure, sca, fid, mjd, dataset``,
+``exposure`` the exposure's name, the SOC stem without its detector and
+filter) so ``completeness.py`` reads it unchanged:
 
 - the file's first 32 KB (one ranged read; both headers, nothing of the
   image) give ``MJD-OBS`` (the start, as `dev` evaluated), ``ZPTMAG``, the
@@ -37,7 +38,7 @@ rewritten.
     python scripts/socsims_truth.py --source-root s3://bucket/g0005-fits-20260821/ \\
         --catalogs s3://bucket/g0005-fits-20260821/catalog/injection_catalogs_20260811/ \\
         --dataset gbtds-r00340-fakesrc --truth DIR/gbtds-r00340-fakesrc.parquet \\
-        [--filters F146] [--scas 1,...,18] [--passes all] [--expids all] [--workers 16]
+        [--filters F146] [--scas 1,...,18] [--passes all] [--exposures all] [--workers 16]
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ from pathlib import Path
 import numpy as np
 
 from database.modules.utils.roman_tessellation_db import RomanTessellationClosedForm
-from rapidpipe.foundation.loop import LITE_SUFFIX, SOCSIMS_LITE, STEM, Selection, list_stems, stem_expid
+from rapidpipe.foundation.loop import LITE_SUFFIX, SOCSIMS_LITE, STEM, Selection, list_stems, stem_ids
 from rapidpipe.products import storage
 from rapidpipe.stages.intake import FIDS
 
@@ -63,7 +64,7 @@ DEV_EDGE = 50.0
 HEAD_BYTES = 32768
 BLOCK = 2880
 END_CARD = b"END" + b" " * 77
-TRUTH_COLUMNS = ("src_id", "ra", "dec", "x", "y", "mag_ab", "dnps", "zp", "expid", "sca", "fid",
+TRUTH_COLUMNS = ("src_id", "ra", "dec", "x", "y", "mag_ab", "dnps", "zp", "exposure", "sca", "fid",
                  "mjd", "dataset")
 FILTER_NAMES = {"f062": "R062", "f087": "Z087", "f106": "Y106", "f129": "J129", "f146": "W146",
                 "f158": "H158", "f184": "F184", "f213": "K213"}
@@ -117,7 +118,7 @@ def image(header, stem: str) -> dict:
     return {"shape": (ny, nx), "mjd": float(header["MJD-OBS"]), "zp": float(header["ZPTMAG"]),
             "to_pixel": lambda ra, dec: wcs.all_world2pix(ra, dec, 0),
             "centre": tuple(float(v) for v in wcs.all_pix2world((nx - 1) / 2.0, (ny - 1) / 2.0, 0)),
-            "expid": stem_expid(stem), "sca": int(m["sca"]), "fid": FIDS[FILTER_NAMES[m["filter"]]]}
+            "exposure": stem_ids(stem)["name"], "sca": int(m["sca"]), "fid": FIDS[FILTER_NAMES[m["filter"]]]}
 
 
 def fields(ra: float, dec: float) -> list[int]:
@@ -144,7 +145,7 @@ def truth_rows(catalogs: dict[int, dict], image: dict, dataset: str) -> list[dic
     for (sid, s), xi, yi, mi in zip([p for p, k in zip(sources, on) if k], x[on], y[on], mag):
         rows.append({"src_id": sid, "ra": s["ra"], "dec": s["dec"], "x": float(xi), "y": float(yi),
                      "mag_ab": float(mi), "dnps": float(10 ** (-0.4 * (mi - image["zp"]))),
-                     "zp": image["zp"], "expid": image["expid"], "sca": image["sca"], "fid": image["fid"],
+                     "zp": image["zp"], "exposure": image["exposure"], "sca": image["sca"], "fid": image["fid"],
                      "mjd": image["mjd"], "dataset": dataset})
     return rows
 
@@ -197,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--filters", default="F146")
     p.add_argument("--scas", default=",".join(str(n) for n in range(1, 19)), help="comma-separated")
     p.add_argument("--passes", default="all")
-    p.add_argument("--expids", default="all")
+    p.add_argument("--exposures", default="all", help="comma-separated prefixes of the exposure's name")
     p.add_argument("--workers", type=int, default=16)
     a = p.parse_args(argv)
     source = a.source_root.rstrip("/") + "/"
@@ -207,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 
     t_start = time.perf_counter()
     client = storage.s3_client()
-    selection = Selection.parse(a.filters, a.scas, "all", a.passes, reader=SOCSIMS_LITE, expids=a.expids)
+    selection = Selection.parse(a.filters, a.scas, "all", a.passes, reader=SOCSIMS_LITE, exposures=a.exposures)
     stems = sorted(s for s in list_stems(client, source, selection) if selection.admits_stem(s))
     catalogs = load_catalogs(client, a.catalogs)
     print(f"selection {selection.summary()}: {len(stems)} files, {len(catalogs)} catalogs", flush=True)
@@ -218,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{stem} {len(got)} sources", flush=True)
     a.truth.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(rows, schema=pa.schema(
-        [(c, pa.string() if c == "dataset" else pa.int64() if c in ("src_id", "expid", "sca", "fid")
+        [(c, pa.string() if c in ("dataset", "exposure") else pa.int64() if c in ("src_id", "sca", "fid")
           else pa.float64()) for c in TRUTH_COLUMNS]))
     pq.write_table(table, a.truth)
     with a.truth.open("rb") as body:

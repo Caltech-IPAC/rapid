@@ -7,7 +7,11 @@ source bright, the rest other; the shift through the corrected WCS moves
 the truth by the translation; an earlier alerted epoch absent from a later
 packet's history is missing when the packet read its source set and late
 when it did not; a source in the reference epochs is binned by its change
-against their mean, one injected after the bound by its own magnitude.
+against their mean, one injected after the bound by its own magnitude; a
+truth written with exposure names is matched to the run's ids through the
+dataset's exposure_ids, and one written with packed ids through the legacy
+mapping, with the same counts; a packed id that names two of the dataset's
+exposures is refused, naming both, and nothing is mapped by guess.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "completeness", Path(__file__).resolve().parents[2] / "scripts" / "completeness.py")
@@ -26,14 +31,23 @@ _SPEC.loader.exec_module(completeness)
 PX = 0.11 / 3600.0       # degrees per pixel
 
 
-def truth_frame(n_epochs=1):
+def truth_frame(n_epochs=1, key="expid"):
+    """Three sources per epoch; the epoch keyed by ``expid`` (the run's id 4001 + e, a truth already mapped)
+    or by ``exposure`` (the name of pass 4 + e, a truth as inject_dataset.py writes it)."""
     rows = []
     for e in range(n_epochs):
         for i, (x, y, mag) in enumerate([(100.0, 100.0, 21.2), (300.0, 200.0, 24.1), (500.0, 900.0, 26.6)]):
             rows.append({"src_id": i, "x": x, "y": y, "ra": 10.0 + x * PX, "dec": y * PX, "mag_ab": mag,
-                         "dnps": 10 ** (-0.4 * (mag - 26.861)), "zp": 26.861, "expid": 4001 + e, "sca": 8,
-                         "mjd": 61592.0 + e})
+                         "dnps": 10 ** (-0.4 * (mag - 26.861)), "zp": 26.861, "sca": 8, "mjd": 61592.0 + e,
+                         **({"expid": 4001 + e} if key == "expid" else {"exposure": NAMES[e]})})
     return pd.DataFrame(rows)
+
+
+#: The names of pass 4 and pass 5, observation 4, visit 1, exposure 1 of r00342, and the run's ids for them.
+NAMES = ["r0034201004001004001_0001", "r0034201005001004001_0001"]
+IDS = {NAMES[0]: 4001, NAMES[1]: 4002}
+#: The ids the packing of the time before the serial gave those two exposures.
+PACKED = {NAMES[0]: 4040101, NAMES[1]: 5040101}
 
 
 def sources_frame():
@@ -161,6 +175,8 @@ def test_load_restricts_the_catalogs_in_sql_and_reads_them_through_a_named_curso
     def rows_for(sql):
         if sql.startswith("SELECT dataset"):
             return ["dataset", "settings"], [{"dataset": "d", "settings": settings}]
+        if "FROM exposure_ids" in sql:
+            return ["name", "expid"], [{"name": n, "expid": e} for n, e in IDS.items()]
         if "sources_of" in sql:
             cols = ["job", "sid", "expid", "sca", "ra", "dec", "fluxfit", "flags", "rb", "in_field"]
             return cols, [(50, i, 4001, 8, 10.0, 0.0, 1.0, 0, 0.5, True) for i in range(5)]
@@ -172,6 +188,7 @@ def test_load_restricts_the_catalogs_in_sql_and_reads_them_through_a_named_curso
 
     conn = _Conn(rows_for)
     data = completeness.load(conn, 187, {4001, 4002})
+    assert data["names"] == IDS                        # the dataset's exposure_ids, for the truth's names
     # the two catalogs went through a named (server-side) cursor, assembled from CHUNK-row fetches
     named = {name: (sql, params) for name, sql, params in conn.log if name}
     assert set(named) == {"completeness_sources", "completeness_packets"}
@@ -188,3 +205,29 @@ def test_load_restricts_the_catalogs_in_sql_and_reads_them_through_a_named_curso
     for name, sql, params in conn.log:
         if name:
             assert "ANY" not in sql and params == (187,)
+
+
+def test_a_truth_with_names_and_one_with_packed_ids_match_the_runs_ids_with_the_same_counts():
+    named = completeness.truth_ids(truth_frame(2, key="exposure"), IDS)
+    assert named["expid"].tolist() == [4001] * 3 + [4002] * 3 and named["exposure"].tolist()[0] == NAMES[0]
+    legacy = truth_frame(2, key="exposure").drop(columns="exposure")
+    legacy["expid"] = [PACKED[n] for n in [NAMES[0]] * 3 + [NAMES[1]] * 3]
+    packed = completeness.truth_ids(legacy, IDS)
+    assert packed["expid"].tolist() == named["expid"].tolist()
+    assert packed["exposure"].tolist() == [str(PACKED[NAMES[0]])] * 3 + [str(PACKED[NAMES[1]])] * 3
+    s = sources_frame()
+    counts = [completeness.join(completeness.match(completeness.corrected_positions(t, (0.0, 0.0)), s, 0.3),
+                                s, packets_frame())[["detected", "alerted"]].sum().tolist()
+              for t in (named.astype({"expid": int}), packed.astype({"expid": int}))]
+    assert counts[0] == counts[1] == [2, 1]
+    # A name the dataset has no id for keeps none: its rows are unprocessed, never matched by guess.
+    stranger = completeness.truth_ids(pd.DataFrame({"exposure": ["r0034201009001004001_0001"], "sca": [8]}), IDS)
+    assert stranger["expid"].isna().all()
+
+
+def test_a_packed_id_that_names_two_exposures_of_the_dataset_is_refused_naming_both():
+    plans = {"r0104301001001001001_0001": 11, "r0104302001001001001_0001": 12, NAMES[0]: 4001}
+    assert completeness.legacy_ids(plans, {4040101}) == {4040101: 4001}      # the clash is not asked for
+    with pytest.raises(ValueError, match="r0104301001001001001_0001, r0104302001001001001_0001"):
+        completeness.legacy_ids(plans, {1010101, 4040101})
+    assert completeness.legacy_ids(plans, {7070707}) == {}                  # no exposure packs to it

@@ -5,11 +5,17 @@ The first stage of a dataset whose L2 inputs are Roman WFI ASDF files (the
 SOC simulations; later MAST's deliveries). Its contract is
 :class:`rapidpipe.foundation.local.JobContext`: ``run(job)`` writes files
 and ``manifest.json`` and returns. The job's scope names one file by its
-stem under the run's ``[intake] source_root``::
+stem under the run's ``[intake] source_root`` and carries the exposure's
+``expid``, the id ``exposure_ids`` holds for the stem's exposure name in
+the dataset (the loop resolves it before it submits; a hand run gets it
+from ``rapidpipe exposure id``)::
 
-    {"dataset": "r00342", "file": "r0034201001001004001_0001_wfi08_f146"}
+    {"dataset": "r00342", "file": "r0034201001001004001_0001_wfi08_f146", "expid": 7}
 
-The stage fetches ``<source_root><file>_cal.asdf`` (anonymously when
+The stage first checks that the scope's ``expid`` is that name's id, and
+exits 65 when it is not (a hand-typed scope naming another exposure's id,
+or a name no id was resolved for): the one way two exposures could still
+meet under one id. It then fetches ``<source_root><file>_cal.asdf`` (anonymously when
 ``unsigned``), converts it with `dev`'s ``build_fits_file``
 (:mod:`rapidpipe.science.intake`), gzips it at ``gzip_level``, measures the
 limiting magnitude with the science PSF of the ``psfs`` set the job names
@@ -34,18 +40,15 @@ are the converted header's (:func:`rapidpipe.science.intake.exposure_identifiers
 carries the gWCS and the whole ``meta`` tree, so its ``_wcs.asdf`` sidecar
 is not read.
 
-The key comes from the file name, ``r<program:5><plan:2><pass:3><segment:3>
-<observation:3><visit:3>_<exposure:4>_wfi<sca:2>_<filter>``, and must agree
-with the file's own ``meta``. The foundation's ``expid`` is the producer's
-id; a SOC exposure has none that fits an ``integer``, so the stage packs
-the identifiers that vary, ``pass * 10**6 + observation * 10**4 + visit *
-10**2 + exposure`` (observation, visit and exposure each below 100), the
-same for every SCA of the exposure as `dev`'s one ``Exposures`` row per
-exposure is. The packing leaves out program, execution plan and segment,
-so two exposures can share an ``expid``: a file whose program, execution
-plan or segment differ from the dataset's official ``exposures`` row of its
-``expid`` is refused, exit 65, naming both files (Ben, 2026-11-14), until the
-``expid`` is a serial the database hands out. The manifest records the
+The file name, ``r<program:5><plan:2><pass:3><segment:3>
+<observation:3><visit:3>_<exposure:4>_wfi<sca:2>_<filter>``, must agree
+with the file's own ``meta``; its SCA and filter are the key's. The key's
+``expid`` is the scope's: an integer the database handed out for the
+exposure's name (the stem up to and including its exposure number, so
+program, plan, pass, segment, observation, visit and exposure,
+:func:`rapidpipe.foundation.loop.stem_ids`), the same for every SCA of the
+exposure as `dev`'s one ``Exposures`` row per exposure is, and carrying no
+meaning (rapid_docs exposure-id; Ben, 2026-11-14). The manifest records the
 file's provenance: its observation identifiers, romancal's version and the
 Gaia fit's summary.
 
@@ -54,16 +57,16 @@ Gaia fit's summary.
 ``<source_root><filter>/<pointing>/<file>_simple.asdf``
 (:mod:`rapidpipe.science.intake_openuniverse`): the stem is
 ``roman_<survey>_<filter>_<pointing>_wfi<sca>``, the file's own filter and
-detector must agree with it, and the ``expid`` is the pointing, the index
-into the survey's observing sequence (one exposure per pointing).
-``rimtimsim`` reads RimTimSim's ``<source_root><stem>.fits.gz``, `dev`'s
-converted ``lite`` files (:mod:`rapidpipe.science.intake_rimtimsim`): the
-stem is ``rimtimsim_WFI_<filter>_SCA<NN>_<exposure>_lite``, the file's own
-filter and SCA must agree with it, and the ``expid`` is the exposure
-number. ``socsims-lite`` reads `dev`'s socsims lite files, the SOC
-simulation as `dev`'s converter wrote it (fake sources and `dev`'s
-TAN-SIP WCS), ``<source_root><stem>_cal_lite.fits.gz`` with the SOC stem,
-by the same module: the key and ``expid`` are the SOC reader's, the
+detector must agree with it, and the exposure's name is the stem up to the
+pointing, the index into the survey's observing sequence (one exposure per
+pointing). ``rimtimsim`` reads RimTimSim's ``<source_root><stem>.fits.gz``,
+`dev`'s converted ``lite`` files (:mod:`rapidpipe.science.intake_rimtimsim`):
+the stem is ``rimtimsim_WFI_<filter>_SCA<NN>_<exposure>_lite``, the file's
+own filter and SCA must agree with it, and the exposure's name is the
+filter and exposure number. ``socsims-lite`` reads `dev`'s socsims lite
+files, the SOC simulation as `dev`'s converter wrote it (fake sources and
+`dev`'s TAN-SIP WCS), ``<source_root><stem>_cal_lite.fits.gz`` with the SOC
+stem, by the same module: the key and the name are the SOC reader's, the
 observation identifiers the stem's.
 
 ``[intake] dq_mask_bits`` is commissioning #238's DQ mask (0, the base,
@@ -119,6 +122,7 @@ from astropy.wcs import WCS
 
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
+from rapidpipe.foundation.loop import stem_ids
 from rapidpipe.foundation.prefix import get
 from rapidpipe.foundation.steps import step
 from rapidpipe.science import intake_openuniverse, intake_rimtimsim
@@ -157,14 +161,6 @@ def parse_stem(stem: str) -> dict[str, int | str]:
     return {**fields, "filter": match["filter"].upper()}
 
 
-def expid(ids: dict) -> int:
-    """The exposure's integer id: pass, observation, visit and exposure packed in decimal digits."""
-    for name in ("observation", "visit", "exposure"):
-        if not 0 <= ids[name] < 100:
-            raise ValueError(f"{name} {ids[name]} does not fit the expid packing (below 100)")
-    return ids["pass"] * 10**6 + ids["observation"] * 10**4 + ids["visit"] * 10**2 + ids["exposure"]
-
-
 def run(job: JobContext) -> None:
     settings = job.settings["intake"]
     stem = job.scope["file"]
@@ -174,6 +170,7 @@ def run(job: JobContext) -> None:
     if reader not in READERS:
         raise ValueError(f"[intake] reader {reader!r} is not one of {sorted(READERS)}")
     ids = READERS[reader]["parse_stem"](stem)
+    expid = _check_expid(job, stem)
     timings: dict[str, float] = {}
     mark = time.monotonic()
 
@@ -229,15 +226,13 @@ def run(job: JobContext) -> None:
         lap("limmag" if gaia is None else "limmag_gaia")
         fits_bytes = fits_path.stat().st_size
 
-    key = {"dataset": job.dataset, "expid": READERS[reader]["expid"](ids), "sca": ids["sca"], "fid": fid}
+    key = {"dataset": job.dataset, "expid": expid, "sca": ids["sca"], "fid": fid}
     l2file = _l2file(job, header, key, fits_name, limmag)
     dateobs = datetime.fromisoformat(header["DATE-OBS"])
-    exposure = {"dataset": job.dataset, "expid": key["expid"], "dateobs": dateobs,
+    exposure = {"dataset": job.dataset, "expid": expid, "dateobs": dateobs,
                 "exptime": float(header["EXPTIME"]),
                 "program_id": program_id(settings["program_id"], header, stem),
                 **exposure_identifiers(header)}
-    if reader == "soc-l2":
-        _check_expid(job, stem, exposure)
     tables = [("l2files", [l2file])]
     if any(i["kind"] == "expects" and i["product"] == "exposures" for i in job.inputs):
         tables.insert(0, ("exposures", [exposure]))
@@ -270,19 +265,19 @@ def run(job: JobContext) -> None:
     log.info("intake %s: %s", stem, timings)
 
 
-#: Each ``[intake] reader``: its stem parser, the file's path under the source root, its
-#: conversion and the exposure's integer id.
+#: Each ``[intake] reader``: its stem parser (the identifiers checked against the file's own), the
+#: file's path under the source root and its conversion. The exposure's name is the loop's
+#: :func:`~rapidpipe.foundation.loop.stem_ids`, one branch per reader, and its id the scope's.
 READERS = {
     "soc-l2": {"parse_stem": parse_stem, "source_key": lambda stem: stem + "_cal.asdf",
-               "convert": asdf_to_fits, "expid": expid},
+               "convert": asdf_to_fits},
     "openuniverse": {"parse_stem": intake_openuniverse.parse_stem,
                      "source_key": intake_openuniverse.source_key,
-                     "convert": intake_openuniverse.simple_model_to_fits,
-                     "expid": lambda ids: ids["pointing"]},
+                     "convert": intake_openuniverse.simple_model_to_fits},
     "rimtimsim": {"parse_stem": intake_rimtimsim.parse_stem, "source_key": intake_rimtimsim.source_key,
-                  "convert": intake_rimtimsim.lite_to_fits, "expid": lambda ids: ids["exposure"]},
+                  "convert": intake_rimtimsim.lite_to_fits},
     "socsims-lite": {"parse_stem": parse_stem, "source_key": intake_rimtimsim.source_key,
-                     "convert": intake_rimtimsim.lite_to_fits, "expid": expid},
+                     "convert": intake_rimtimsim.lite_to_fits},
 }
 
 
@@ -367,33 +362,45 @@ def _check_key(stem: str, ids: dict, header) -> None:
         raise ValueError(f"{stem}: the file's own identifiers {own} are not its name's {named}")
 
 
-#: The identifiers the ``expid`` packing leaves out, which the dataset's exposure of that ``expid`` must share.
-UNPACKED = ("program_id", "execution_plan", "segment")
+def _check_expid(job: JobContext, stem: str) -> int:
+    """The scope's ``expid``, checked to be the id ``exposure_ids`` holds for the stem's exposure name.
 
+    Parameters
+    ----------
+    job : JobContext
+        The intake job: its scope's ``expid`` and ``dataset``, its connection for the read.
+    stem : str
+        The file's stem; its name is :func:`~rapidpipe.foundation.loop.stem_ids`'.
 
-def _check_expid(job: JobContext, stem: str, exposure: dict) -> None:
-    """The dataset's official ``exposures`` row of this ``expid``, if any, must be this file's exposure.
+    Returns
+    -------
+    int
+        The scope's ``expid``.
 
     Raises
     ------
     CommandExit
-        Exit 65 when the row's program, execution plan or segment differ
-        from the file's, naming the file the row came from.
+        Exit 65 when the table holds another id for the name, or none (a
+        hand-typed scope, or a name the loop never resolved), naming the
+        name and both ids; the one way two exposures could still meet
+        under one id.
     """
+    ids = stem_ids(stem)
+    if ids is None:
+        raise ValueError(f"{stem!r} is not a stem any reader names")
+    name, expid = ids["name"], int(job.scope["expid"])
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT e.program_id, e.execution_plan, e.segment, e.job, l.filename"
-                    " FROM exposures_official e LEFT JOIN l2files l ON l.job = e.job"
-                    " WHERE e.dataset = %s AND e.expid = %s LIMIT 1", (job.dataset, exposure["expid"]))
+        cur.execute("SELECT expid FROM exposure_ids WHERE dataset = %s AND name = %s", (job.dataset, name))
         row = cur.fetchone()
-    if row is None:
-        return
-    official = dict(zip(UNPACKED, row[:3]))
-    own = {name: exposure[name] for name in UNPACKED}
-    if official != own:
-        other = PurePosixPath(row[4]).name if row[4] else f"the file of job {row[3]}"
+    held = None if row is None else int(row[0])
+    if held != expid:
+        reason = (f"which is {held}" if held is not None
+                  else "which has none: the loop resolves it before it submits, and a hand run gets it"
+                       " from 'rapidpipe exposure id'")
         raise CommandExit(int(ExitCode.INPUT_REJECTED),
-                          f"{stem}: expid {exposure['expid']} of dataset {job.dataset} is already "
-                          f"{other}'s exposure, {official}; this file's is {own}")
+                          f"{stem}: the scope's expid {expid} is not the id of exposure {name!r} in dataset"
+                          f" {job.dataset}, {reason}")
+    return expid
 
 
 def _check_epsf(stem: str, primary, psf: Path) -> None:

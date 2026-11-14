@@ -6,7 +6,9 @@ reproduces the gWCS at the corners and the centre to within the fit's own
 bound, ``sip_max_pix_error`` (0.1 px: ``to_fits_sip`` raises when a
 fixed-degree fit misses it, and a corner is the domain's edge, where a
 polynomial fit is worst); the ``exposures`` and ``l2files`` rows have
-exactly their schema columns and the key the file name gives, the
+exactly their schema columns and the key the file name and the scope give
+(the SCA and filter the name's, the ``expid`` the scope's, the id the loop
+resolved for the exposure's name), the
 ``exposures`` row the file's Roman observation identifiers and, with
 ``[intake] program_id`` unset (``""``, flight's value), the file's own
 ``PROGRAM``, a set value otherwise (the base's -1), a set value that is not
@@ -14,8 +16,10 @@ negative or a file's ``PROGRAM`` that is not positive refused, a program with no
 written with a warning; the ``exposures`` row is declared only when the
 job expects its key; the
 manifest names the file's provenance; a file whose own identifiers
-contradict its name fails before a manifest; the file name parses, and the
-expid packs, as the stage's docstring says; a file whose own ePSF
+contradict its name fails before a manifest; the file name parses as the
+stage's docstring says; under another one-to-one naming of exposures the
+rows are the same, every ``expid`` the mapping's (the name feeds the check
+and no key); a file whose own ePSF
 reference is not the one its science PSF names (``EPSFREF``) fails before
 a manifest, and one whose PSF names the same reference publishes; the DQ
 mask (``[intake] dq_mask_bits``, default 0, nothing masked; flight's
@@ -54,6 +58,7 @@ import tomllib
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from rapidpipe.foundation import loop
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.stages import intake
 from tests.support.catalogs import write_gaia_store
@@ -75,6 +80,8 @@ DISTORTION = "roman_wfi_distortion_0003.asdf"
 #: Pixels the synthetic file flags, each (y, x, DQ value); (1, 1) is also NaN in the file itself.
 FLAGGED = [(1, 1, 1), (2, 3, 33554432), (5, 7, 2 | 1024), (9, 9, 2), (11, 4, 4)]
 NATIVE_NAN = [(1, 1), (20, 20)]
+#: The id the loop resolved for STEM's exposure in these tests: any integer, it carries no meaning.
+EXPID = 7
 
 
 def schema_columns(table: str) -> set[str]:
@@ -143,9 +150,10 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
     model.save(path)
 
 
-def fake_connect(psf_filename: str, surveys: tuple[int, ...] = (-1, -4), exposures=None):
+def fake_connect(psf_filename: str, surveys: tuple[int, ...] = (-1, -4), exposure_ids=None):
     """A connection factory answering the PSF lookup with ``psf_filename``, the surveys lookup from
-    ``surveys`` and the official exposure lookup with ``exposures(statement, params)`` (none by default)."""
+    ``surveys`` and the exposure-id lookup with ``exposure_ids(dataset, name)``, an id or ``None``
+    (every name :data:`EXPID` by default; ``run_intake`` answers its scope's)."""
     class Cursor:
         def __enter__(self):
             return self
@@ -157,8 +165,9 @@ def fake_connect(psf_filename: str, surveys: tuple[int, ...] = (-1, -4), exposur
             if "FROM surveys" in statement:
                 self.row = (1,) if params[0] in surveys else None
                 return
-            if "FROM exposures_official" in statement:
-                self.row = exposures(statement, params) if exposures else None
+            if "FROM exposure_ids" in statement:
+                held = exposure_ids(*params) if exposure_ids else EXPID
+                self.row = None if held is None else (held,)
                 return
             assert "FROM psfs" in statement and params[1:] == (8, 8)
             self.row = (psf_filename,)
@@ -187,7 +196,7 @@ def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                expects_exposure: bool = True, dq_mask_bits: int = 0,
                crpix_shift: tuple[float, float] = (0.0, 0.0),
                rederive_wcs: bool = False, program_id: int | str = -1,
-               surveys: tuple[int, ...] = (-1, -4), exposures=None) -> Path:
+               surveys: tuple[int, ...] = (-1, -4), expid: int = EXPID, exposure_ids=None) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
     settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
@@ -198,12 +207,13 @@ def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
     if expects_exposure:
         expects.append({"kind": "expects", "product": "exposures", "key": {}, "source_job": None,
                         "binding": None})
-    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "r00342", "file": stem},
+    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "r00342", "file": stem, "expid": expid},
                      survey="HLWAS", dataset="r00342", settings=settings,
                      inputs=[{"kind": "input", "product": "psfs", "key": {}, "source_job": 9,
                               "binding": None}, *expects],
                      attempt=1, prefix=prefix.as_uri() + "/",
-                     connect=fake_connect((source / "psf.fits").as_uri(), surveys, exposures))
+                     connect=fake_connect((source / "psf.fits").as_uri(), surveys,
+                                          exposure_ids or (lambda dataset, name: expid)))
     intake.run(job)
     return prefix
 
@@ -250,13 +260,13 @@ def test_the_sip_header_reproduces_the_gwcs_within_the_fits_own_bound(tmp_path, 
     assert offset_px.max() < SETTINGS["intake"]["sip_max_pix_error"]
 
 
-def test_the_rows_have_their_schema_columns_and_the_key_the_name_gives(tmp_path, source):
-    prefix = run_intake(tmp_path, source)
+def test_the_rows_have_their_schema_columns_and_the_key_the_name_and_the_scope_give(tmp_path, source):
+    prefix = run_intake(tmp_path, source, expid=4321)
     (exposure,) = pq.read_table(prefix / "exposures.parquet").to_pylist()
     (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
     assert set(exposure) == schema_columns("exposures")
     assert set(l2file) == schema_columns("l2files")
-    expid = 1 * 10**6 + 4 * 10**4 + 1 * 10**2 + 1
+    expid = 4321                      # the scope's, the id the loop resolved for r0034201001001004001_0001
     assert (exposure["dataset"], exposure["expid"], exposure["program_id"]) == ("r00342", expid, -1)
     assert {k: exposure[k] for k in ("execution_plan", "pass", "segment", "observation", "visit",
                                      "exposure", "visit_id", "observation_id")} == {
@@ -349,15 +359,30 @@ def test_flight_reads_the_files_program_and_every_simulation_resolves_to_a_negat
             assert isinstance(program, int) and program < 0, path.name
 
 
-def test_the_stem_parses_and_the_expid_packs():
+def test_the_stem_parses():
     ids = intake.parse_stem("r0034201013001014018_0003_wfi18_f213")
     assert ids == {"program": 342, "execution_plan": 1, "pass": 13, "segment": 1, "observation": 14,
                    "visit": 18, "exposure": 3, "sca": 18, "filter": "F213"}
-    assert intake.expid(ids) == 13_141_803
     with pytest.raises(ValueError):
         intake.parse_stem("r00342_0001_wfi08_f146")
-    with pytest.raises(ValueError):
-        intake.expid({**ids, "visit": 100})
+
+
+def test_a_readers_name_function_is_the_only_thing_a_naming_change_touches(tmp_path, source, monkeypatch):
+    """The name feeds the check against exposure_ids and no key: under another one-to-one naming, with the
+    ids keyed by the new names, the rows are the same."""
+    def rows(prefix):
+        return [pq.read_table(prefix / f"{t}.parquet").to_pylist() for t in ("exposures", "l2files")]
+
+    before = rows(run_intake(tmp_path / "before", source, expid=55,
+                             exposure_ids=lambda d, n: 55 if n == "r0034201001001004001_0001" else None))
+    original = loop.stem_ids
+    monkeypatch.setattr(intake, "stem_ids", lambda stem: {**original(stem), "name": "x/" + original(stem)["name"]})
+    after = rows(run_intake(tmp_path / "after", source, expid=55,
+                            exposure_ids=lambda d, n: 55 if n == "x/r0034201001001004001_0001" else None))
+    # The file's URL and the gzip's checksum carry the attempt's prefix and the conversion's time.
+    volatile = ("filename", "checksum")
+    strip = [[{k: v for k, v in row.items() if k not in volatile} for row in table] for table in before]
+    assert [[{k: v for k, v in row.items() if k not in volatile} for row in table] for table in after] == strip
 
 
 def _name_epsf(source: Path, name: str) -> None:

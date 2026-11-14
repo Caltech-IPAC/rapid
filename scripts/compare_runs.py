@@ -6,8 +6,10 @@ Outside the pipeline, like ``inspect_run.py`` and ``completeness.py``, whose
 functions compute every column (no metric is defined here): it reads
 ``job_metrics``, the official difference images and packets and, for an
 injected dataset, the truth, and writes nothing. The epochs are the
-(expid, SCA) both runs have a row in ``diffimages_official`` for; an epoch in
-one run only is named on the ``unshared`` line and never compared.
+(exposure name, SCA) both runs have a row in ``diffimages_official`` for,
+the name from ``exposure_ids`` of each run's dataset, since two datasets
+give one exposure two ids (:func:`by_name`); an epoch in one run only is
+named on the ``unshared`` line and never compared.
 
 The null table, one row per epoch and run, then each run's median row (the
 scorecard's HLWAS null columns): ``n_candidates`` (before the cap),
@@ -74,8 +76,14 @@ SIGNED = {"core", "ring"}
 DRIFT = ["packets", "core", "ring", "detected at the threshold", "false positives", "difference s"]
 
 
+def by_name(rows: list[tuple]) -> tuple[dict, dict]:
+    """One run's official difference images keyed by (exposure name, SCA): its ``(name, sca, job, expid)``
+    rows as ``jobs`` (epoch to job) and ``ids`` (epoch to the run's own expid)."""
+    return {(n, s): j for n, s, j, _ in rows}, {(n, s): e for n, s, _, e in rows}
+
+
 def shared(a: dict, b: dict) -> tuple[list, list, list]:
-    """The epochs of both, of ``a`` only and of ``b`` only, sorted; ``a`` and ``b`` keyed by (expid, SCA)."""
+    """The epochs of both, of ``a`` only and of ``b`` only, sorted; ``a`` and ``b`` keyed by (name, SCA)."""
     return sorted(a.keys() & b.keys()), sorted(a.keys() - b.keys()), sorted(b.keys() - a.keys())
 
 
@@ -141,11 +149,15 @@ def gate_table(drift: dict, spread: dict, judged: int) -> str:
     return "\n".join(lines)
 
 
-def injected_tables(measured: dict) -> str:
-    """Per epoch truth, detected and false positives; each run's mean and highest; detected per bin."""
+def injected_tables(measured: dict, names: dict) -> str:
+    """Per epoch truth, detected and false positives; each run's mean and highest; detected per bin.
+    ``names`` gives each run's (expid, SCA) its (name, SCA), so the two runs' epochs line up."""
     lines = ["| epoch | run | truth | detected | false positives |", "|---|---|---|---|---|"]
-    eps = {run: m["ep"].assign(fp=completeness.false_positives(m["ep"])).set_index(["expid", "sca"])
-           for run, m in measured.items()}
+    eps = {}
+    for run, m in measured.items():
+        ep = m["ep"].assign(fp=completeness.false_positives(m["ep"]))
+        ep["name"] = [names[run][(e, s)][0] for e, s in zip(ep["expid"], ep["sca"])]
+        eps[run] = ep.set_index(["name", "sca"])
     for e in sorted(set().union(*(ep.index for ep in eps.values()))):
         for run, ep in eps.items():
             if e in ep.index:
@@ -185,12 +197,13 @@ def main(argv: list[str] | None = None) -> int:
             p.error(f"{a.spread}: not a drift column: {sorted(unknown)}")
     from rapidpipe.db.connection import connect
 
-    jobs, data, rows = {}, {}, {}
+    jobs, ids, data, rows = {}, {}, {}, {}
     with connect(application_name="compare_runs") as conn:
         for run in (a.run_a, a.run_b):
             with conn.cursor() as cur:
-                cur.execute("SELECT expid, sca, job FROM diffimages_official WHERE run = %s", (run,))
-                jobs[run] = {(e, s): j for e, s, j in cur.fetchall()}
+                cur.execute("SELECT x.name, d.sca, d.job, d.expid FROM diffimages_official d"
+                            " JOIN exposure_ids x ON x.expid = d.expid WHERE d.run = %s", (run,))
+                jobs[run], ids[run] = by_name(cur.fetchall())
                 cur.execute(inspect_run.QUERY, (run,))
                 names = [d[0] for d in cur.description]
                 rows[run] = [dict(zip(names, r)) for r in cur.fetchall()]
@@ -207,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         diff = inspect_run.by_stage(rows[run]).get("difference", {})
         packets = data[run]["packets"].groupby(["expid", "sca"]).size().to_dict()
         table[run] = {e: null_row({**diff.get(jobs[run][e], {}).get("values", {}),
-                                   "packets": packets.get(e, 0)}) for e in epochs}
+                                   "packets": packets.get((ids[run][e], e[1]), 0)}) for e in epochs}
     print("\n" + null_table(table, epochs))
     files = {run: completeness.truth_files(data[run]["intake"]) for run in (a.run_a, a.run_b)}
     measured = {run: None for run in files}
@@ -218,9 +231,10 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     if all(files.values()):
-        measured = {run: completeness.measure(data[run], files[run], epochs=set(epochs), with_history=False)
-                    for run in (a.run_a, a.run_b)}
-        print("\n" + injected_tables(measured))
+        measured = {run: completeness.measure(data[run], files[run], epochs={(ids[run][e], e[1]) for e in epochs},
+                                              with_history=False) for run in (a.run_a, a.run_b)}
+        print("\n" + injected_tables(measured, {run: {(e, s): (n, s) for (n, s), e in ids[run].items()}
+                                                 for run in ids}))
     if spread is None:
         return 0
     drift = {}

@@ -6,7 +6,8 @@ counts above zero inside the frame, at zero-based ``x - 1, y - 1``, with AB
 frame is ``reference`` and one that started before the reference's last
 frame is ``early``, whatever else, the rest ``evaluated``; a packet's class
 takes a transient with counts first, then the bright-footprint flag, then
-a galaxy, then a star, else ``other``.
+a galaxy, then a star, else ``other``; the truth index's pointing is read
+from the stem the intake took the file from, never from the id.
 """
 
 from __future__ import annotations
@@ -56,3 +57,7 @@ def test_a_packets_class_takes_the_transient_then_the_flag_then_galaxy_then_star
                             "flags": [16384, 16384, 0, 0, 0, 0]})
     assert ou.classify(packets, index, 0.165).tolist() == ["transient", "bright", "galaxy", "star", "other",
                                                           "other"]
+
+
+def test_the_pointing_is_the_stems_observing_sequence_row():
+    assert ou.pointing("roman_tds_H158_1012_wfi04") == 1012

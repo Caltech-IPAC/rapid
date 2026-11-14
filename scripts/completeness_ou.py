@@ -2,7 +2,9 @@
 
 The sibling of ``completeness.py`` for an ``[intake] reader = "openuniverse"``
 run, outside the pipeline like it: it reads the database, IRSA's per-image
-truth index for each official difference image's (filter, pointing, SCA)
+truth index for each official difference image's (filter, pointing, SCA),
+the pointing read from the stem its intake job took the file from (the
+``expid`` is a serial that carries no meaning)
 (``Roman_TDS_index_<filter>_<pointing>_<sca>.txt``: one row per object,
 one-based ``x``, ``y``, ``realized_flux`` in counts, ``mag``) and the
 published L2 files' headers and truth tables, and writes nothing but its
@@ -76,6 +78,14 @@ INDEX = ("openuniverse2024/roman/full/RomanTDS/truth/{filter}/{pointing}/"
          "Roman_TDS_index_{filter}_{pointing}_{sca}.txt")
 INDEX_BUCKET = "nasa-irsa-simulations"
 CLASSES = ("transient", "bright", "galaxy", "star", "other")
+
+
+def pointing(stem: str) -> int:
+    """The observing sequence's row the file was simulated for, from the stem the intake read
+    (``roman_tds_<filter>_<pointing>_wfi<sca>``, the loop's reader dispatch)."""
+    from rapidpipe.foundation.loop import stem_ids
+
+    return int(stem_ids(stem)["pointing"])
 
 
 def read_index(text: str) -> pd.DataFrame:
@@ -176,14 +186,17 @@ def main(argv: list[str] | None = None) -> int:
 
     with connect(application_name="completeness-ou") as conn:
         (run,) = q("SELECT dataset, settings FROM runs WHERE id = %s", (a.run,))
-        images = q("SELECT d.expid, d.sca, d.field, d.fid, l.filename, l.mjdobs, f.filter"
+        images = q("SELECT d.expid, d.sca, d.field, d.fid, l.filename, l.mjdobs, f.filter,"
+                   " ij.scope->>'file' AS stem"
                    " FROM diffimages_official d JOIN l2files_official l ON l.dataset = d.dataset"
-                   " AND l.expid = d.expid AND l.sca = d.sca AND l.fid = d.fid"
+                   " AND l.expid = d.expid AND l.sca = d.sca AND l.fid = d.fid JOIN jobs ij ON ij.id = l.job"
                    " JOIN filters f ON f.fid = d.fid WHERE d.run = %s ORDER BY l.mjdobs", (a.run,))
-        frames = q("SELECT DISTINCT r.field, r.fid, l.expid, l.sca, l.mjdobs, f.filter FROM diffimages_official d"
+        frames = q("SELECT DISTINCT r.field, r.fid, l.expid, l.sca, l.mjdobs, f.filter, ij.scope->>'file' AS stem"
+                   " FROM diffimages_official d"
                    " JOIN job_inputs n ON n.job = d.job AND n.kind = 'input' AND n.product = 'refimages'"
                    " JOIN refimages r ON r.job = n.source_job JOIN refimimages i ON i.job = r.job AND i.rfid = r.rfid"
-                   " JOIN l2files l ON l.rid = i.rid JOIN filters f ON f.fid = l.fid WHERE d.run = %s", (a.run,))
+                   " JOIN l2files l ON l.rid = i.rid JOIN jobs ij ON ij.id = l.job JOIN filters f ON f.fid = l.fid"
+                   " WHERE d.run = %s", (a.run,))
         body = run["settings"]["settings"] if "settings" in run["settings"] else run["settings"]
         sources = pd.DataFrame(q(completeness.detections_sql(body), (a.run,)))
         packets = pd.DataFrame(q(
@@ -215,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             wcs = WCS(header)
             starts = {int(i): float(s) for i, s in zip(hdul["TRANSIENTS"].data["id"],
                                                        hdul["TRANSIENTS"].data["start_mjd"])}
-        index = index_of(image["filter"], image["expid"], image["sca"])
+        index = index_of(image["filter"], pointing(image["stem"]), image["sca"])
         ra, dec = wcs.all_pix2world(index["x"].to_numpy() - 1.0, index["y"].to_numpy() - 1.0, 0)
         index = index.assign(ra_c=ra % 360.0, dec_c=dec, expid=image["expid"], sca=image["sca"])
         inj = injected(index, float(header["EXPTIME"]))
@@ -223,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with ThreadPoolExecutor(8) as pool:
         epochs = list(pool.map(epoch, images))
-        reference_rows = list(pool.map(lambda f: index_of(f["filter"], f["expid"], f["sca"]), frames))
+        reference_rows = list(pool.map(lambda f: index_of(f["filter"], pointing(f["stem"]), f["sca"]), frames))
     in_reference = set()
     for t in reference_rows:
         in_reference |= set(t.loc[(t["obj_type"] == "transient") & (t["realized_flux"] > 0), "object_id"])

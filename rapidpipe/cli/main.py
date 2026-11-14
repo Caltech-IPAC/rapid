@@ -35,7 +35,7 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   with Batch each check (``rapidpipe.foundation.loop.wait``), and prints the
   states; exit 0 when every job published, 1 when one failed, 2 when the
   timeout passes first: one blocking waiter for hand-submitted jobs;
-- ``loop --run --filters --scas --pointings [--passes] [--expids] [--programs] --job-definition [--once]``
+- ``loop --run --filters --scas --pointings [--passes] [--exposures] [--programs] --job-definition [--once]``
   carries the selection one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained: exit 0
@@ -60,6 +60,11 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
   counts; a producer error exits non-zero with the set unstamped;
+- ``exposure id --dataset D --name N`` prints the ``expid`` the database
+  holds for the exposure name ``N`` in dataset ``D``, assigning one when it
+  has none (``rapidpipe.foundation.loop.exposure_ids``, the loop's own
+  resolution): a hand-run ``intake``, or an ``import`` of an epoch, takes
+  its scope's ``expid`` from it;
 
 A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
@@ -233,9 +238,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                   "sequence's rows for an OpenUniverse run, or 'all'.")
     loop_parser.add_argument("--passes", default="all",
                              help="Comma-separated survey pass numbers, e.g. 1,2,3,4, or 'all' (default).")
-    loop_parser.add_argument("--expids", default="all",
-                             help="Comma-separated inclusive expid ranges LO-HI (or one ID), with the other "
-                                  "terms; a SOC expid packs pass, observation, visit, exposure; 'all' (default).")
+    loop_parser.add_argument("--exposures", default="all",
+                             help="Comma-separated prefixes of the exposure's name (the stem without its "
+                                  "detector and file-kind suffix: r0034201002 is pass 2 of r00342 whole, "
+                                  "r0034201005001003061 one visit), with the other terms; 'all' (default).")
     loop_parser.add_argument("--programs", default="all",
                              help="Comma-separated program numbers, e.g. 1049,1018 or -2, or 'all' (default): "
                                   "stems by the program intake writes, official L2 rows by their exposure's "
@@ -252,6 +258,21 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--once", action="store_true",
                              help="Run one pass and exit: 0, or 1 when a job of the run failed or was "
                                   "refused its binding; 64 when the first pass admits nothing.")
+
+    exposure_parser = subparsers.add_parser("exposure", help="Resolve an exposure's id.",
+                                            description="Resolve an exposure's id within its dataset.")
+    exposure_parser.set_defaults(group_parser=exposure_parser)
+    exposure_subparsers = exposure_parser.add_subparsers(dest="verb")
+    exposure_id = exposure_subparsers.add_parser(
+        "id", help="Print the expid the dataset holds for an exposure's name, assigning one if none.",
+        description="Print the expid exposure_ids holds for the exposure's name in the dataset, assigning "
+                    "one when it has none: what the loop does for every stem it takes in, for a hand-run "
+                    "intake or an import of an epoch.")
+    exposure_id.add_argument("--dataset", required=True)
+    exposure_id.add_argument("--name", required=True,
+                             help="The producer's name for the exposure: the stem without its detector and "
+                                  "file-kind suffix, e.g. r0034201001001004001_0001 (SOC), "
+                                  "roman_tds_H158_1012 (OpenUniverse), rimtimsim_WFI_F213_000000411.")
 
     return parser
 
@@ -394,7 +415,7 @@ def _loop(args: argparse.Namespace) -> int:
     intake = settings["intake"]
     try:
         selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes,
-                                         intake.get("reader", "soc-l2"), args.expids, args.programs,
+                                         intake.get("reader", "soc-l2"), args.exposures, args.programs,
                                          intake.get("program_id", ""))
     except ValueError as exc:
         raise CommandExit(int(ExitCode.USAGE), str(exc)) from exc
@@ -452,7 +473,7 @@ def _loop(args: argparse.Namespace) -> int:
             raise CommandExit(int(ExitCode.USAGE),
                               f"the first pass found no stem under {intake['source_root']} for filters"
                               f" {args.filters}, SCAs {args.scas}, pointings {args.pointings},"
-                              f" passes {args.passes}, expids {args.expids}, programs {args.programs}")
+                              f" passes {args.passes}, exposures {args.exposures}, programs {args.programs}")
         first = False
         if args.once or summary["drained"]:
             if summary["failed"]:
@@ -492,6 +513,9 @@ def _foundation_command(args: argparse.Namespace) -> int:
         return _publish(args)
     elif args.command == "loop":
         return _loop(args)
+    elif command == ("exposure", "id"):
+        with connect(application_name="rapidpipe-exposure-id") as conn:
+            print(loop.exposure_ids(conn, args.dataset, [args.name])[args.name])
     elif command == ("official", "change"):
         group = _read(args.group, "group")
         if not isinstance(group, list) or not all(isinstance(item, dict) for item in group):
@@ -549,7 +573,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # traceback and exits 75 or 70. SystemExit and KeyboardInterrupt are not
     # Exception subclasses and pass through.
     try:
-        if args.command in ("run", "job", "official", "publish", "loop"):
+        if args.command in ("run", "job", "official", "publish", "loop", "exposure"):
             return _foundation_command(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary
         code = exit_code(exc)
