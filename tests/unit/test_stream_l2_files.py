@@ -5,8 +5,10 @@ element unless a filter is named, with each pass, segment, visit and MJD
 bound given; an exposure is kept only when three or more of its detectors
 name a real guide star, unless ``--unguided``; ``--detector`` keeps one
 SCA; a file already under the source root's prefix is skipped, one under
-another prefix is not, and ``--force`` copies every file; ``--dryrun``
-copies nothing; each file goes to ``<prefix><name>``, which
+another prefix is not; every write is a conditional create
+(``IfNoneMatch="*"``), and a key that appears meanwhile (412) counts as
+present, not failed; ``--dryrun`` copies nothing; each file goes to
+``<prefix><name>``, which
 ``loop.list_stems`` finds on the same root; a failed copy is reported and
 exits 1; a source root without ``s3://``, a bucket or the trailing ``/``,
 and a missing ``MAST_API_TOKEN``, are refused before MAST is asked.
@@ -65,8 +67,9 @@ class FakeMissions:
 
 
 class FakeS3:
-    """A bucket of keys: the paginator, ``upload_fileobj``, and ``list_objects_v2`` with ``StartAfter`` and
-    ``MaxKeys`` as ``loop.list_stems`` calls it."""
+    """A create-once bucket of keys: the paginator, ``put_object`` (412 on an existing key under
+    ``IfNoneMatch="*"``, refused without it), and ``list_objects_v2`` with ``StartAfter`` and ``MaxKeys``
+    as ``loop.list_stems`` calls it."""
 
     def __init__(self, keys=()):
         self.objects = {("bucket", k): b"" for k in keys}
@@ -83,9 +86,15 @@ class FakeS3:
         found = [k for b, k in sorted(self.objects) if b == Bucket and k.startswith(Prefix) and k > StartAfter]
         return {"Contents": [{"Key": k} for k in found[:MaxKeys]]} if found else {}
 
-    def upload_fileobj(self, fileobj, bucket, key):
-        self.objects[(bucket, key)] = fileobj.read()
-        self.uploaded.append(key)
+    def put_object(self, Bucket, Key, Body, **kw):
+        from botocore.exceptions import ClientError
+
+        if kw.get("IfNoneMatch") != "*":
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "PutObject")
+        if (Bucket, Key) in self.objects:
+            raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+        self.objects[(Bucket, Key)] = Body.read()
+        self.uploaded.append(Key)
 
 
 class Reply:
@@ -148,8 +157,8 @@ def test_only_guided_exposures_are_copied_unless_unguided(fakes):
     assert stream.main(["1049", "--source-root", ROOT]) == 0
     assert sorted(client.uploaded) == sorted(f"flight/l2/{r[0]}_cal.asdf" for r in GUIDED)
     client.uploaded.clear()
-    assert stream.main(["1049", "--source-root", ROOT, "--unguided", "--force"]) == 0
-    assert sorted(client.uploaded) == sorted(f"flight/l2/{r[0]}_cal.asdf" for r in GUIDED + UNGUIDED)
+    assert stream.main(["1049", "--source-root", ROOT, "--unguided"]) == 0
+    assert sorted(client.uploaded) == sorted(f"flight/l2/{r[0]}_cal.asdf" for r in UNGUIDED)
 
 
 def test_detector_keeps_one_sca(fakes):
@@ -159,7 +168,7 @@ def test_detector_keeps_one_sca(fakes):
     assert urls[0].endswith(f"/search/roman/api/v0.1/retrieve_product?product_name={stem(1, 1, 2)}_cal.asdf")
 
 
-def test_a_file_under_the_prefix_is_skipped_one_elsewhere_is_not_and_force_copies_all(fakes, capsys):
+def test_a_file_under_the_prefix_is_skipped_and_one_elsewhere_is_not(fakes, capsys):
     client, _ = fakes
     first, second = (f"{r[0]}_cal.asdf" for r in GUIDED[:2])
     client.objects.update({("bucket", "flight/l2/" + first): b"held", ("bucket", "other/" + second): b"held"})
@@ -167,9 +176,16 @@ def test_a_file_under_the_prefix_is_skipped_one_elsewhere_is_not_and_force_copie
     assert "flight/l2/" + first not in client.uploaded and "flight/l2/" + second in client.uploaded
     assert len(client.uploaded) == len(GUIDED) - 1
     assert f"{len(GUIDED)} identified\n{len(GUIDED) - 1} to download" in capsys.readouterr().out
-    client.uploaded.clear()
-    stream.main(["1049", "--source-root", ROOT, "--force"])
-    assert len(client.uploaded) == len(GUIDED)
+
+
+def test_a_key_that_appears_before_its_put_counts_as_present_not_failed(fakes, monkeypatch, capsys):
+    client, _ = fakes
+    name = f"flight/l2/{stem(1, 1, 2)}_cal.asdf"
+    monkeypatch.setattr(stream, "remove_existing", lambda client, bucket, prefix, names: names)
+    client.objects[("bucket", name)] = b"held"
+    assert stream.main(["1049", "--source-root", ROOT, "--detector", "2"]) == 0
+    assert client.uploaded == [] and client.objects[("bucket", name)] == b"held"
+    assert "1 already present" in capsys.readouterr().out
 
 
 def test_dryrun_copies_nothing_and_verbose_names_the_files(fakes, capsys):

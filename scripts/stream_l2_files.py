@@ -5,9 +5,12 @@ Outside the pipeline, before any run: MAST's Roman mission search
 only (no GRISM or PRISM) and guided exposures only unless ``--unguided``, cut
 by the optional filter, detector, pass, segment, visit and MJD terms. Each
 file, ``<fileSetName>_cal.asdf``, is streamed from MAST's presigned URL to
-``<source-root><file>``, the key ``rapidpipe loop`` lists. A file already
-under the source root is skipped unless ``--force``; ``--dryrun`` queries and
-lists but copies nothing. The MAST token is read from ``MAST_API_TOKEN``.
+``<source-root><file>``, the key ``rapidpipe loop`` lists, by one
+conditional PUT (``If-None-Match: *``), the create-once write a sealed
+inputs bucket requires: an object is never overwritten. A file already
+under the source root is skipped, and one that appears there meanwhile (the
+PUT's 412) counts as present, not failed; ``--dryrun`` queries and lists
+but copies nothing. The MAST token is read from ``MAST_API_TOKEN``.
 The source root is the run's ``intake.source_root``, given once in a shell
 variable::
 
@@ -15,8 +18,8 @@ variable::
     python scripts/stream_l2_files.py 1049 --source-root "$SRC"
     rapidpipe run create ... --set "intake.source_root=\\"$SRC\\""
 
-Prints the counts found and to copy, one line per failed file, the elapsed
-time, and exits 1 if any copy failed.
+Prints the counts found and to copy, one line per failed file, the count
+found present at the PUT, the elapsed time, and exits 1 if any copy failed.
 """
 
 from __future__ import annotations
@@ -24,13 +27,16 @@ from __future__ import annotations
 import argparse
 import datetime
 import os
+import shutil
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 
 import numpy as np
 import requests
 from astropy.time import Time
+from botocore.exceptions import ClientError
 from astroquery.mast import MastMissions, conf
 
 from rapidpipe.products import storage
@@ -151,8 +157,13 @@ def download_url(filename: str) -> str:
     return f"{conf.server}/search/roman/api/v0.1/retrieve_product?product_name={quote(filename, safe='')}"
 
 
-def transfer(client, token: str, bucket: str, prefix: str, filename: str) -> str:
-    """Stream one product from its MAST presigned URL to ``<prefix><filename>`` without decoding it.
+def transfer(client, token: str, bucket: str, prefix: str, filename: str) -> bool:
+    """Copy one product from its MAST presigned URL to ``<prefix><filename>`` without decoding it.
+
+    The download is spooled to a temporary file (``TMPDIR``) and written by
+    one ``put_object`` with ``IfNoneMatch="*"``: a multipart upload cannot
+    carry the condition, and a single PUT takes up to 5 GB (an L2 file is
+    about 208 MB).
 
     Parameters
     ----------
@@ -169,17 +180,25 @@ def transfer(client, token: str, bucket: str, prefix: str, filename: str) -> str
 
     Returns
     -------
-    str
-        The file name copied.
+    bool
+        True when copied, False when the key was already there (412).
     """
     # The presigned URL is short-lived, so it is fetched right before use.
     reply = requests.get(download_url(filename), headers={"Authorization": f"token {token}"},
                          allow_redirects=False, timeout=60)
     reply.raise_for_status()
-    with requests.get(reply.headers["Location"], stream=True, timeout=60) as source:
+    with requests.get(reply.headers["Location"], stream=True, timeout=60) as source, \
+            tempfile.TemporaryFile() as spool:
         source.raise_for_status()
-        client.upload_fileobj(source.raw, bucket, prefix + filename)
-    return filename
+        shutil.copyfileobj(source.raw, spool)
+        spool.seek(0)
+        try:
+            client.put_object(Bucket=bucket, Key=prefix + filename, Body=spool, IfNoneMatch="*")
+        except ClientError as err:
+            if err.response.get("Error", {}).get("Code") == "PreconditionFailed":
+                return False
+            raise
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -210,7 +229,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--unguided", action="store_true", help="include unguided exposures")
     p.add_argument("--workers", type=int, default=1, help="number of files to copy in parallel")
     p.add_argument("--verbose", action="store_true", help="with --dryrun, print the name of every file to copy")
-    p.add_argument("--force", action="store_true", help="copy every file, even one already under the source root")
     args = p.parse_args(argv)
     try:
         bucket, prefix = storage.split_source_root(args.source_root)
@@ -226,10 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     filenames = l2_filenames(missions, args)
     print(f"{len(filenames)} identified")
     client = storage.s3_client()
-    if not args.force:
-        filenames = remove_existing(client, bucket, prefix, filenames)
-        print(f"{len(filenames)} to download")
-    failed = []
+    filenames = remove_existing(client, bucket, prefix, filenames)
+    print(f"{len(filenames)} to download")
+    failed, present = [], 0
     if args.dryrun:
         if args.verbose:
             for filename in filenames:
@@ -239,10 +256,12 @@ def main(argv: list[str] | None = None) -> int:
             futures = {pool.submit(transfer, client, token, bucket, prefix, name): name for name in filenames}
             for future in as_completed(futures):
                 try:
-                    future.result()
+                    present += not future.result()
                 except Exception as err:  # noqa: BLE001 - one file's failure is reported, the rest go on
                     failed.append(futures[future])
                     print(f"FAILED {futures[future]}: {err}")
+        if present:
+            print(f"{present} already present")
         if failed:
             print(f"{len(failed)} files failed: {sorted(failed)}")
     elapsed_min = (datetime.datetime.now() - start).total_seconds() / 60
