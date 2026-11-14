@@ -145,7 +145,7 @@ def test_every_dataset_overlay_resolves_and_holds_only_keys_that_differ_from_the
     differing(overlay, base)
 
 
-FLIGHT = SETTINGS / "datasets" / "flight-1049.toml"
+FLIGHT = SETTINGS / "datasets" / "flight.toml"
 FLIGHT_DIFFERENCE = {("sci_image", "repair_extreme_artifact_pixels"): False,
                      ("sfft", "crossconv_flag"): False,
                      ("gainmatch", "magrefthresmin"): 10.0,
@@ -214,11 +214,11 @@ def test_every_nonzero_dq_mask_is_decimal_under_a_comment_that_sums_its_named_fl
 
 
 def test_flight_scales_reference_inputs_by_the_on_orbit_nominal_zptmag_and_the_base_does_not():
-    """Commissioning 687c93b2's table and 8a4a172d's flag: on for flight-1049, off in the base (the sims)."""
+    """Commissioning 687c93b2's table and 8a4a172d's flag: on for flight, off in the base (the sims)."""
     from rapidpipe.products.filters import ROMAN_TO_RAPID_FILTER_NAMES
 
     base, _ = resolve(SHIPPED)
-    flight, _ = resolve(SHIPPED, SETTINGS / "datasets" / "flight-1049.toml")
+    flight, _ = resolve(SHIPPED, SETTINGS / "datasets" / "flight.toml")
     assert base["reference"]["awaicgen"]["use_nominal_zptmag"] is False
     assert flight["reference"]["awaicgen"]["use_nominal_zptmag"] is True
     assert flight["intake"]["nominal_zptmag"] == {

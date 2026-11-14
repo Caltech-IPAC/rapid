@@ -42,7 +42,7 @@ sip_degree = 5
 sip_max_pix_error = 0.1
 gzip_level = 1
 # dev's RAPIDDATASOURCE = SOCSIMS program_id (rapidOpsSurveysInserts.sql).
-# "" reads each file's own PROGRAM (flight-1049's overlay); a set value must
+# "" reads each file's own PROGRAM (flight's overlay); a set value must
 # be negative, a simulation's id, and a file's own PROGRAM positive.
 program_id = -1
 # dev's l2files.limmag, as [import] has it.
@@ -412,7 +412,7 @@ zprefimg_w146 = 26.8630336165
 zprefimg = 17.0
 # Commissioning 8a4a172d: true scales each input frame by its filter's
 # [intake.nominal_zptmag] value instead of its own ZPTMAG; zptmag_rms still
-# reads the header. Off, as commissioning ships it; flight-1049 turns it on.
+# reads the header. Off, as commissioning ships it; flight turns it on.
 use_nominal_zptmag = false
 
 [reference.psfcat]
@@ -711,7 +711,7 @@ sfft_use_segmentation = true
 # NaN fill) and those within this many pixels of one; --bsmaskisoarea also
 # masks catalog sources with ISOAREA_IMAGE >= this, radius max(bsmask
 # radius, isofactor * sqrt(ISOAREA_IMAGE / pi)). Empty, as here, leaves the
-# option off the command, which is then unchanged; flight-1049 sets them
+# option off the command, which is then unchanged; flight sets them
 # (Azalee, 2026-11-10).
 sfft_zero_margin = ""
 sfft_bsmask_isoarea = ""
