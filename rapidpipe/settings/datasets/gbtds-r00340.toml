@@ -13,8 +13,6 @@
 [intake]
 # The SOC simulations sit in a public bucket, read anonymously (as HLWAS).
 unsigned = true
-# surveys: (-1, 'SOCSIMS GBTDS', 'SIM'), one id per simulation (Azalee, 2026-11-05).
-program_id = -1
 # r00340's L2 gWCS is tweakreg's spurious match in a crowded field (54,059
 # "matches", rmse 0.49 px): its stars sit (-28.8, +21.6) px from where the
 # re-derived WCS puts them. Re-derived from the file's own wcsinfo and

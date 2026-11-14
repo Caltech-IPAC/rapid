@@ -23,8 +23,7 @@ reader = "socsims-lite"
 # of r0034001005001003061_0001_wfi08 (pass 5), inside the gate's 0.25 px:
 # no crpix_shift either. dq_mask_bits stays 0: the
 # converter dropped the DQ plane, so nothing can be masked.
-# surveys: (-1, 'SOCSIMS GBTDS', 'SIM'), as gbtds-r00340.
-program_id = -1
+# program_id stays the base's -1 (SOCSIMS), as gbtds-r00340.
 
 [psf.epsf]
 # A lite file names no ePSF reference. These are the references dev's

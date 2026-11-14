@@ -25,7 +25,11 @@ ON CONFLICT (program_id) DO NOTHING;
 -- An earlier title read "Guiging".
 UPDATE surveys SET program_title = 'High-Extinction Guiding Opportunity Activity' WHERE program_id = 1053;
 
--- The HLWAS simulation's exposures written under -1, by its datasets' names (r00342-local, r00342-inj1, ...).
-UPDATE exposures SET program_id = -4 WHERE program_id = -1 AND dataset LIKE 'r00342%';
+-- The HLWAS simulation's exposures written under -1, found by their L2 files' names (r00342...), not by
+-- dataset name: the nightly drift gate runs the HLWAS overlay under datasets nightly-drift-<stamp>.
+UPDATE exposures e SET program_id = -4
+WHERE e.program_id = -1
+  AND EXISTS (SELECT 1 FROM l2files l
+              WHERE l.dataset = e.dataset AND l.expid = e.expid AND l.filename LIKE '%/r00342%');
 
 COMMIT;

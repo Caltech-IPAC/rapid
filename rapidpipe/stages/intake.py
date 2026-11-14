@@ -21,10 +21,12 @@ stage derives the same way, and one ``exposures`` row only when the job
 expects the ``exposures`` key (the loop gives that expectation to one
 SCA of an exposure; a row nothing binds is not written). The row's
 ``program_id`` is the file's own ``PROGRAM`` (``meta.observation.program``)
-when ``[intake] program_id`` is ``""``, the shipped value, so one run can hold
-several flight programs; a dataset whose files carry no program of their own
-(a simulation) sets its fixed negative id there instead. A ``program_id``
-with no ``surveys`` row is written, with a warning. Its
+when ``[intake] program_id`` is ``""``, flight's value, so one run can hold
+several flight programs; a simulation's dataset sets its fixed negative id
+there instead (the base's -1, `dev`'s SOCSIMS). The sign is guarded: a set
+value that is not negative, or a file's ``PROGRAM`` that is not positive,
+fails the job. A ``program_id`` with no ``surveys`` row is written, with a
+warning. Its
 Roman observation identifiers (``execution_plan``, ``pass``, ``segment``,
 ``observation``, ``visit``, ``exposure``, ``visit_id``, ``observation_id``)
 are the converted header's (:func:`rapidpipe.science.intake.exposure_identifiers`,
@@ -312,11 +314,21 @@ def program_id(setting: int | str, header, stem: str) -> int:
     -------
     int
         The program number.
+
+    The sign tells a simulation from flight: a set value must be negative
+    (a simulation's id) and a file's own ``PROGRAM`` positive, else
+    ``ValueError``.
     """
     if setting != "":
+        if int(setting) >= 0:
+            raise ValueError(f"{stem}: [intake] program_id {setting} is not negative; a set value is a "
+                             f"simulation's id, and \"\" reads each file's own PROGRAM")
         return int(setting)
     if header.get("PROGRAM") is None:
         raise ValueError(f"{stem}: [intake] program_id is unset and the file has no PROGRAM")
+    if int(header["PROGRAM"]) <= 0:
+        raise ValueError(f"{stem}: the file's PROGRAM {header['PROGRAM']} is not positive; a simulation's "
+                         f"overlay sets its negative [intake] program_id")
     return int(header["PROGRAM"])
 
 

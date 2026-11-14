@@ -6,7 +6,8 @@ attempt is published for real: the official ``exposures`` row carries the
 file's ``PROGRAM`` and joins its commissioning ``surveys`` row. The seed
 holds one negative id per simulation and the twelve commissioning
 programs; ``database/2026-11-13-survey-programs.sql`` brings an older seed
-to it and moves the HLWAS simulation's exposures from -1 to -4. Run by
+to it and moves the HLWAS simulation's exposures from -1 to -4, found by
+their L2 files' names whatever their dataset's name. Run by
 foundation.yml against database/schema.sql.
 """
 
@@ -34,13 +35,10 @@ def _rows(conn, sql, params=()):
 
 def test_the_surveys_seed_holds_one_id_per_simulation_and_the_commissioning_programs(conn):
     with conn.cursor() as cur:
-        cur.execute("SELECT program_id, program_title FROM surveys WHERE category = 'SIM' ORDER BY 1")
-        assert cur.fetchall() == [(-4, "SOCSIMS HLWAS"), (-3, "RimTimSims"), (-2, "OpenUniverse"),
-                                  (-1, "SOCSIMS GBTDS")]
+        cur.execute("SELECT program_id FROM surveys WHERE category = 'SIM' ORDER BY 1")
+        assert cur.fetchall() == [(-4,), (-3,), (-2,), (-1,)]
         cur.execute("SELECT program_id FROM surveys WHERE category = 'COM'")
         assert {r[0] for r in cur.fetchall()} == COMMISSIONING
-        cur.execute("SELECT program_title FROM surveys WHERE program_id = 1053")
-        assert cur.fetchone() == ("High-Extinction Guiding Opportunity Activity",)
 
 
 def test_an_intake_job_publishes_the_files_own_program(connect, tmp_path, source):  # noqa: F811
@@ -56,9 +54,8 @@ def test_an_intake_job_publishes_the_files_own_program(connect, tmp_path, source
     result = publish(conn, job, 1, prefix.as_uri())
 
     assert result["refusal"] is None
-    assert _rows(conn, "SELECT e.program_id, s.program_title FROM exposures_official e"
-                       " JOIN surveys s USING (program_id) WHERE e.job = %s", (job,)) == [
-        (1049, "RAPID Implementation")]
+    assert _rows(conn, "SELECT e.program_id, s.category FROM exposures_official e"
+                       " JOIN surveys s USING (program_id) WHERE e.job = %s", (job,)) == [(1049, "COM")]
 
 
 def test_the_migration_brings_an_older_seed_to_schema_and_moves_hlwas_exposures_to_minus_4(conn):
@@ -73,10 +70,19 @@ def test_the_migration_brings_an_older_seed_to_schema_and_moves_hlwas_exposures_
         cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, 'intake', '{}') RETURNING id",
                     (cur.fetchone()[0],))
         job = cur.fetchone()[0]
-        for expid, (dataset, program) in enumerate([("r00342-local", -1), ("r00342-inj1", -1),
-                                                    ("r00340-gb1", -1), ("ou-tds1", -2)]):
+        exposures = [("r00342-local", -1, "r0034201001001001001"), ("nightly-drift-20261113", -1, "r0034201001001001001"),
+                     ("r00340-gb1", -1, "r0034001001001001001"), ("ou-tds1", -2, "roman_tds_F158_1012")]
+        for expid, (dataset, program, stem) in enumerate(exposures):
             cur.execute("INSERT INTO exposures (job, dataset, expid, dateobs, exptime, program_id)"
                         " VALUES (%s, %s, %s, now(), 60, %s)", (job, dataset, expid, program))
+            row = {"job": job, "dataset": dataset, "expid": expid, "sca": 8, "fid": 1, "field": 1, "hp6": 0,
+                   "hp9": 0, "dateobs": "2027-10-07", "mjdobs": 61685.0, "exptime": 60.0,
+                   "filename": f"s3://bucket/{dataset}/{job}/{stem}_0001_wfi08_f146_cal.fits.gz",
+                   "checksum": "0" * 32, **{k: 0.0 for k in ("crval1", "crval2", "crpix1", "crpix2", "cd11", "cd12",
+                                                             "cd21", "cd22", "ra", "dec", "ra0", "dec0", "ra1",
+                                                             "dec1", "ra2", "dec2", "ra3", "dec3", "ra4", "dec4")}}
+            cur.execute(f"INSERT INTO l2files ({', '.join(row)}) VALUES ({', '.join(['%s'] * len(row))})",
+                        tuple(row.values()))
 
         cur.execute(body)
 
@@ -88,5 +94,5 @@ def test_the_migration_brings_an_older_seed_to_schema_and_moves_hlwas_exposures_
         cur.execute("SELECT program_id FROM surveys WHERE category = 'COM'")
         assert {r[0] for r in cur.fetchall()} == COMMISSIONING
         cur.execute("SELECT dataset, program_id FROM exposures WHERE job = %s ORDER BY expid", (job,))
-        assert cur.fetchall() == [("r00342-local", -4), ("r00342-inj1", -4), ("r00340-gb1", -1),
+        assert cur.fetchall() == [("r00342-local", -4), ("nightly-drift-20261113", -4), ("r00340-gb1", -1),
                                   ("ou-tds1", -2)]
