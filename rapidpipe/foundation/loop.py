@@ -343,13 +343,6 @@ class Selection:
                 "programs": "all" if self.programs is None else sorted(self.programs)}
 
 
-def stem_expid(stem: str) -> int:
-    """The intake stage's expid packing, ``pass * 10**6 + observation * 10**4 + visit * 10**2 + exposure``."""
-    m = STEM.match(stem)
-    return (int(m["pass"]) * 10**6 + int(m["observation"]) * 10**4 + int(m["visit"]) * 10**2
-            + int(m["exposure"]))
-
-
 def stem_ids(stem: str) -> dict | None:
     """A SOC, OpenUniverse or RimTimSim stem's ``reader``, ``sca``, ``filter`` (the pipeline's name,
     ``F158``), ``name``, ``pointing``, ``pass`` and ``program`` (both ``None`` but for the SOC's);

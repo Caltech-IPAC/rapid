@@ -5,7 +5,7 @@ the light curves are dev's (a sinusoid in magnitude at its phase, a
 gaussian burst of its peak amplitude at its peak time, the static
 magnitude far from it); one row per source of the image's fields that lies
 within dev's 50 px band, at its evaluated magnitude through the file's zero
-point and the stem's keys; a field whose catalog is absent fails the file.
+point and the stem's keys (the exposure's name, the SCA and the fid); a field whose catalog is absent fails the file.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def test_one_row_per_source_within_devs_band_at_its_magnitude():
     header = socsims_truth.headers_from_gz(lite_bytes())[1]
     image = socsims_truth.image(header, STEM)
     assert image["centre"] == pytest.approx((RA0, DEC0), abs=1e-9)
-    assert (image["expid"], image["sca"], image["fid"]) == (5036101, 8, 8)
+    assert (image["exposure"], image["sca"], image["fid"]) == ("r0034001005001003061_0001", 8, 8)
     centre, *neighbours = socsims_truth.fields(RA0, DEC0)
     cosd = np.cos(np.radians(DEC0))
     inside = source("sinusoidal", RA0 + 10 * PX / cosd, DEC0, magnitude=22.0, amplitude=0.0, period=1.0, phase=0.0)

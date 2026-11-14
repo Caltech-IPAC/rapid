@@ -3,7 +3,10 @@
 Contracts: the catalog is the same for a seed and differs for another;
 files before the bound are copied byte for byte and files after it
 injected, under their own names; the truth table has one row per source
-per injected epoch, the same sources in every epoch of a pointing; an
+per injected epoch, keyed by the exposure's name, the same sources in
+every epoch of a pointing; a file's noise seed follows the seed and the
+exposure's name, the same for the 18 SCAs' names and another for another
+exposure; an
 object already under the destination is skipped, never rewritten; the
 dry run writes nothing; the start MJD is the file's own ``start_time``,
 read from its ASDF tree without its blocks.
@@ -105,8 +108,8 @@ def test_truth_one_row_per_source_per_injected_epoch(tmp_path):
     assert len(rows) == 20 * len(injected)
     by_epoch = {}
     for r in rows:
-        by_epoch.setdefault(r["expid"], set()).add((r["src_id"], r["ra"], r["dec"], r["mag_ab"]))
-    assert len(by_epoch) == len(injected)
+        by_epoch.setdefault(r["exposure"], set()).add((r["src_id"], r["ra"], r["dec"], r["mag_ab"]))
+    assert set(by_epoch) == {s[: -len("_wfi08_f146")] for s in injected}        # the exposure's name
     assert len({frozenset(v) for v in by_epoch.values()}) == 1      # the same sources in every epoch
     r = rows[0]
     assert np.isclose(r["dnps"], 10 ** (-0.4 * (r["mag_ab"] - 26.861)))
@@ -118,7 +121,7 @@ def test_existing_object_skipped_not_rewritten(tmp_path):
     assert s3._objects[("inputs", f"r00342-injt/l2/{STEMS[0]}_cal.asdf")] == b"already"
     assert s3._objects[("inputs", f"r00342-injt/l2/{STEMS[4]}_cal.asdf")] == b"already"
     assert sorted(line.split()[1] for line in lines) == ["copied"] * 2 + ["injected"] * 2 + ["skipped"] * 2
-    assert {r["expid"] for r in rows} == {inject_dataset.stem_expid(s) for s in (STEMS[3], STEMS[5])}
+    assert {r["exposure"] for r in rows} == {inject_dataset.stem_ids(s)["name"] for s in (STEMS[3], STEMS[5])}
 
 
 def test_put_once_refuses_an_overwrite():
@@ -167,3 +170,11 @@ def test_start_mjd_from_the_files_own_tree_not_its_blocks(tmp_path):
     assert mjd == start.mjd
     assert len(s3.ranges) > 1                                  # the tree read in pieces
     assert s3.ranges[-1][1] < path.stat().st_size // 100           # the 4 MB block never fetched
+
+
+def test_a_files_noise_seed_follows_the_seed_and_the_exposures_name():
+    same_exposure = STEMS[3].replace("wfi08", "wfi09")
+    assert inject_dataset.file_seed(7, STEMS[3]) == inject_dataset.file_seed(7, STEMS[3])
+    assert inject_dataset.file_seed(7, STEMS[3]) != inject_dataset.file_seed(8, STEMS[3])
+    assert inject_dataset.file_seed(7, STEMS[3]) != inject_dataset.file_seed(7, STEMS[4])
+    assert inject_dataset.file_seed(7, STEMS[3]) != inject_dataset.file_seed(7, same_exposure)   # the SCA too

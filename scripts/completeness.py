@@ -2,12 +2,18 @@
 
 Outside the pipeline, like ``validate_run.py``: it reads the database, the
 truth tables ``inject_dataset.py`` wrote and the packet files, and writes
-nothing but its own tables. The denominator is every truth row (an
-injected source in an injected epoch) of an (expid, SCA) the run has an
-official difference image for; truth epochs without one are reported as
-unprocessed, never counted as missed. For each truth row, the nearest
-official source of the same (expid, SCA) within ``--radius`` arcsec is its
-detection; the detection is **alerted** when ``packets_official`` has a
+nothing but its own tables. A truth row names its epoch by the exposure's
+name (``exposure``, ``inject_dataset.py`` and ``socsims_truth.py`` since the
+serial id) and is matched to the run's ``expid`` through ``exposure_ids`` of
+the run's dataset (:func:`truth_ids`); a truth written before the change
+carries the packed id of that time (``expid``) and is matched through the
+legacy packing of the dataset's exposure names (:func:`legacy_ids`), refused
+when one of its packed ids names two exposures. The denominator is every
+truth row (an injected source in an injected epoch) of an (expid, SCA) the
+run has an official difference image for; truth epochs without one, or whose
+exposure the dataset has no id for, are reported as unprocessed, never
+counted as missed. For each truth row, the nearest official source of the
+same (expid, SCA) within ``--radius`` arcsec is its detection; the detection is **alerted** when ``packets_official`` has a
 row for it (a left join, so a detection without a packet stays detected),
 and **sent** when its packet set carries the topic's acknowledgement
 (``jobs.kafka_published_at``); an alerted set not sent is the quality
@@ -61,11 +67,11 @@ Usage::
     python scripts/completeness.py --run N [--truth F.parquet ...] [--radius 0.3] [--out DIR]
         [--expids E,E,...]
 
-``--expids`` restricts every count to those epochs (truth, sources, packets
-and the per-epoch metrics), so a sample is compared with the same epochs of
-a larger run, never with its whole footprint; the sources and packets are
-restricted in the query itself, so a sample of a 60 M-row run costs the
-sample's memory, not the run's.
+``--expids``, the run's own ids, restricts every count to those epochs
+(truth, sources, packets and the per-epoch metrics), so a sample is compared
+with the same epochs of a larger run, never with its whole footprint; the
+sources and packets are restricted in the query itself, so a sample of a
+60 M-row run costs the sample's memory, not the run's.
 
 Without ``--truth`` it reads every Parquet under the dataset's
 ``catalog/`` prefix, the run's ``[intake] source_root`` with its last
@@ -80,6 +86,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import sys
 import time
 from collections import defaultdict
@@ -91,6 +98,48 @@ import pandas as pd
 
 BRIGHT_FOOTPRINT = 16384
 BIN = 0.5
+#: A SOC exposure name, the digits the packing of the time before the serial read (pass, observation,
+#: visit, exposure); program, plan and segment are the ``\d`` runs it skips.
+SOC_NAME = re.compile(r"r\d{5}\d{2}(?P<pass>\d{3})\d{3}(?P<observation>\d{3})(?P<visit>\d{3})_(?P<exposure>\d{4})$")
+
+
+def legacy_ids(names: dict[str, int], packed: set[int]) -> dict[int, int]:
+    """Each packed id of a truth written before the serial, mapped to the run's id of the one exposure
+    it names: the old packing, ``pass * 10**6 + observation * 10**4 + visit * 10**2 + exposure``, of
+    every SOC exposure name of the dataset (``names``, name to id), kept only to read such a truth.
+
+    A packed id that two of the dataset's exposures pack to (two execution plans, two programs) names
+    neither: ``ValueError``, naming both, and nothing is mapped by guess. One that no exposure packs to
+    is absent, and its truth rows are unprocessed.
+    """
+    by: dict[int, list[str]] = defaultdict(list)
+    for name in names:
+        if (m := SOC_NAME.match(name)) is not None:
+            by[int(m["pass"]) * 10**6 + int(m["observation"]) * 10**4 + int(m["visit"]) * 10**2
+               + int(m["exposure"])].append(name)
+    for packed_id in sorted(packed):
+        if len(by.get(packed_id, ())) > 1:
+            raise ValueError(f"packed expid {packed_id} of the truth names {len(by[packed_id])} exposures of the"
+                             f" dataset, {', '.join(sorted(by[packed_id]))}: a truth written with packed ids"
+                             " cannot say which it meant; write it with exposure names")
+    return {packed_id: names[found[0]] for packed_id, found in by.items() if packed_id in packed}
+
+
+def truth_ids(truth: pd.DataFrame, names: dict[str, int]) -> pd.DataFrame:
+    """The truth with its epochs keyed by the run's ids: ``exposure``, the row's own key as text (the
+    exposure's name, or the packed id of a truth written before the serial), and ``expid``, the run's id
+    for it through ``names`` (``exposure_ids`` of the run's dataset, name to id) or the legacy packing,
+    ``NA`` where the dataset has no exposure for it."""
+    truth = truth.copy()
+    if "exposure" in truth.columns:
+        mapping = {str(name): expid for name, expid in names.items()}
+        truth["exposure"] = truth["exposure"].astype(str)
+    else:
+        packed = truth["expid"].astype(int)
+        mapping = {str(k): v for k, v in legacy_ids(names, set(packed)).items()}
+        truth["exposure"] = packed.astype(str)
+    truth["expid"] = truth["exposure"].map(mapping).astype("Int64")
+    return truth
 
 
 def _terms(x, y):
@@ -319,9 +368,9 @@ CHUNK = 500_000
 
 
 def load(conn, run_id: int, expids: set[int] | None = None) -> dict:
-    """A run's rows this script reads: ``run`` (dataset, settings), ``shift``, ``sources``,
-    ``packets``, ``diffs`` (the (expid, SCA) with an official difference image), the difference
-    jobs' ``metrics`` and the packet jobs' ``read_sets``. ``expids`` restricts the two catalogs
+    """A run's rows this script reads: ``run`` (dataset, settings), ``shift``, ``names`` (the dataset's
+    ``exposure_ids``, name to id), ``sources``, ``packets``, ``diffs`` (the (expid, SCA) with an official
+    difference image), the difference jobs' ``metrics`` and the packet jobs' ``read_sets``. ``expids`` restricts the two catalogs
     in the database (a GBTDS run's 60 M xsources never leave the server for a sample), and each
     arrives through a server-side cursor in :data:`CHUNK`-row frames, never as one list of dicts."""
     import psycopg2.extras
@@ -345,6 +394,8 @@ def load(conn, run_id: int, expids: set[int] | None = None) -> dict:
 
     sample = (sorted(int(e) for e in expids),) if expids is not None else ()
     (run,) = q("SELECT dataset, settings FROM runs WHERE id = %s", (run_id,))
+    names = {r["name"]: r["expid"] for r in q("SELECT name, expid FROM exposure_ids WHERE dataset = %s",
+                                              (run["dataset"],))}
     intake = run["settings"]["settings"]["intake"] if "settings" in run["settings"] else run["settings"]["intake"]
     shift = tuple(float(v) for v in intake.get("crpix_shift", [0.0, 0.0]))
     body = run["settings"]["settings"] if "settings" in run["settings"] else run["settings"]
@@ -376,15 +427,16 @@ def load(conn, run_id: int, expids: set[int] | None = None) -> dict:
         packets = pd.DataFrame(columns=["job", "source_job", "sid", "object_job", "aid", "expid", "sca",
                                         "trigger_mjd", "filename", "byte_offset", "byte_length", "sent"])
     before_mjd = body.get("reference", {}).get("selection", {}).get("before_mjd")
-    return {"run": run, "intake": intake, "shift": shift, "before_mjd": before_mjd, "sources": sources,
-            "packets": packets, "diffs": diffs, "metrics": metrics, "read_sets": read_sets}
+    return {"run": run, "intake": intake, "shift": shift, "before_mjd": before_mjd, "names": names,
+            "sources": sources, "packets": packets, "diffs": diffs, "metrics": metrics, "read_sets": read_sets}
 
 
 def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] | None = None,
             epochs: set[tuple[int, int]] | None = None, with_history: bool = True) -> dict:
     """The truth joined to ``load``'s rows: ``rows`` (one per truth row), ``table`` (per magnitude
     bin), ``per_sca``, ``pur``, ``ep`` (per epoch), ``held_sets``, ``hist``, ``processed`` and
-    ``unprocessed``; every count restricted to ``expids`` and to the (expid, SCA) ``epochs`` when given."""
+    ``unprocessed`` (both by the truth's own epoch key, (exposure, SCA)); every count restricted to
+    ``expids`` and to the (expid, SCA) ``epochs`` when given."""
     from rapidpipe.foundation.prefix import get
 
     def keep(df):
@@ -397,16 +449,19 @@ def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] 
 
     truth = pd.concat([pd.read_parquet(get(f) if f.startswith("s3://") else f) for f in files],
                       ignore_index=True)
-    truth = difference_flux(truth, data.get("before_mjd"))
+    truth = difference_flux(truth_ids(truth, data["names"]), data.get("before_mjd"))
     sources, packets, metrics = data["sources"], data["packets"], data["metrics"]
     diffs = {k for k in data["diffs"] if (expids is None or k[0] in expids) and (epochs is None or k in epochs)}
     truth, sources, packets = keep(truth), keep(sources), keep(packets)
     if len(metrics):
         metrics = keep(metrics)
-    epochs_in_truth = set(zip(truth["expid"], truth["sca"]))
-    processed = epochs_in_truth & diffs
-    unprocessed = sorted(epochs_in_truth - diffs)
-    truth = truth[[k in processed for k in zip(truth["expid"], truth["sca"])]].reset_index(drop=True)
+    # Epochs by the truth's own key: one whose exposure the dataset has no id for is unprocessed too.
+    epochs_in_truth = set(zip(truth["exposure"], truth["sca"]))
+    processed = {(x, s) for x, e, s in zip(truth["exposure"], truth["expid"], truth["sca"])
+                 if pd.notna(e) and (int(e), s) in diffs}
+    unprocessed = sorted(epochs_in_truth - processed)
+    truth = truth[[k in processed for k in zip(truth["exposure"], truth["sca"])]].reset_index(drop=True)
+    truth["expid"] = truth["expid"].astype(int)
     rows = join(match(corrected_positions(truth, data["shift"]), sources, radius), sources, packets)
     rows = rows.merge(sources[["job", "sid", "isdiffpos"]], on=["job", "sid"], how="left")
     signed = rows["fluxfit"].where(rows["isdiffpos"].fillna(True).astype(bool), -rows["fluxfit"])
