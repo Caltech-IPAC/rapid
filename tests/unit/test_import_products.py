@@ -9,7 +9,8 @@ from the image's WCS; the manifest declares every table and the
 provenance line; both signs' PSF-fit catalogs load into ``sources`` and
 both SExtractor catalogs into ``xsources``, with the extra columns `dev`
 wrote into them, as `dev`'s loaders read them; a PSF imports under its declared kind, which `dev`'s
-``PSFKIND`` keyword must not contradict; an import supplies no identity
+``PSFKIND`` keyword must not contradict, on the SCA of its ``SCA`` card, else of its ``DETECTOR``
+card; an import supplies no identity
 column but the source system's ids the plan keeps.
 """
 
@@ -363,6 +364,18 @@ def test_a_psf_whose_keyword_names_the_other_kind_fails_before_a_manifest(
     with pytest.raises(ValueError, match="PSFKIND"):
         run_import(tmp_path, source, {"psf": {"kind": kind, "path": "psf.fits"}}, kind)
     assert not (tmp_path / "outputs" / kind / "manifest.json").exists()
+
+
+# Commissioning's phavg science PSFs carry no SCA card, only DETECTOR ('WFI08').
+@pytest.mark.parametrize("cards, sca", [({"DETECTOR": "WFI05"}, 8), ({"SCA": None, "DETECTOR": "WFI05"}, 5)])
+def test_a_psfs_sca_is_its_sca_card_else_its_detector_card(tmp_path, source, cards, sca):
+    for keyword, value in cards.items():
+        if value is None:
+            fits.delval(source / "psf.fits", keyword)
+        else:
+            fits.setval(source / "psf.fits", keyword, value=value)
+    prefix = run_import(tmp_path, source, {"psf": {"kind": "science", "path": "psf.fits"}}, "psf")
+    assert [p["sca"] for p in read(prefix, "psfs")] == [sca]
 
 
 #: The source system's ids an import keeps in identity columns (plan Part 1:

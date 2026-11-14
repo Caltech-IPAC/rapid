@@ -456,13 +456,21 @@ def _reference(job: JobContext, source: Path, reference: dict) -> dict:
                                "filename": catalog_url, "checksum": catalog_md5}]}
 
 
+def _sca(header: fits.Header) -> int:
+    """The file's ``SCA`` card, else its ``DETECTOR`` (``WFI08`` is 8), the one commissioning's
+    ``phavg`` science PSF files carry (Ben, 2026-11-14)."""
+    if "SCA" in header:
+        return int(header["SCA"])
+    return int(header["DETECTOR"].removeprefix("WFI"))
+
+
 def _psf(job: JobContext, source: Path, psf: dict) -> tuple[dict, str | None]:
     """The ``psfs`` row of the declared kind, and the file's ``PSFKIND`` as it was."""
     kind = psf["kind"]
     path = source / psf["path"]
     with fits.open(path) as hdul:
         header = hdul[0].header
-        sca, fid = int(header["SCA"]), _fid(header["FILTER"])
+        sca, fid = _sca(header), _fid(header["FILTER"])
         keyword = header.get("PSFKIND")
     if keyword is not None and keyword != PSFKIND.get(kind):
         raise ValueError(f"{path.name}: PSFKIND {keyword!r} is not a {kind} PSF ({PSFKIND.get(kind)!r})")
