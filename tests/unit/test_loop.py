@@ -48,16 +48,25 @@ terminated and rerun, one inside it, a prompt one, or one with no median is
 not; a pass reports its submissions by queue.
 OpenUniverse (``[intake] reader = "openuniverse"``): the listing pages only
 the selected filters' prefixes in the RAPID spelling and keeps
-``_simple.asdf`` stems; a pointing is the observing sequence's row, the
-intake's expid, in stems and rows alike; a SOC stem is not admitted, a
-selection with passes is refused; a missing PSF submits one psf job.
+``_simple.asdf`` stems; a pointing is the observing sequence's row, in
+stems and rows alike; a SOC stem is not admitted, a selection with passes
+is refused; a missing PSF submits one psf job.
 RimTimSim (``rimtimsim``): the listing pages the root once and keeps the
-selected filters' lite stems; a pointing is the exposure number, the
-intake's expid, in stems and rows alike; no other reader's stem is
-admitted, a selection with passes is refused.
+selected filters' lite stems; a pointing is the exposure number, in stems
+and rows alike; no other reader's stem is admitted, a selection with
+passes is refused.
 socsims lite (``socsims-lite``): the listing pages the SOC observations and
-keeps ``_cal_lite.fits.gz`` stems. ``--expids``: a stem or row is admitted
-only when its expid is in one of the inclusive ranges, with the other terms.
+keeps ``_cal_lite.fits.gz`` stems.
+The exposure id (rapid_docs exposure-id): the 18 stems of one exposure get
+one scope ``expid``, the id the pass resolved for their one name, and
+exactly one of them the ``exposures`` expectation; two stems that pack to
+one old expid (program 1043's two plans) get two names, two ids and two
+expectations; a reader's name function is the only thing a naming change
+touches, the plan and the selection the same under another one-to-one
+naming; ``--passes``, ``--pointings`` and ``--programs`` select an official
+row by its intake stem, and a row with no stem (an import's) only when no
+pass, pointing or exposure term is set; ``--exposures``: a stem or row is
+admitted when its name starts with any given prefix, and no other.
 Coverage (``[reference.selection] selection_type = "coverage"``): a row under
 a neighbouring tile of the reference's footprint is a candidate, and not
 under ``"nframes"``; candidates are walked by ``mjdobs``, then distance from
@@ -74,6 +83,7 @@ and an official reference built from any program is still used; all by default.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 
 import pytest
@@ -95,7 +105,25 @@ def stem(p: int, v: int, e: int, sca: int = 8, program: int = 342) -> str:
 
 
 def expid(p: int, v: int, e: int) -> int:
-    return p * 10**6 + 4 * 10**4 + v * 100 + e
+    """An id for the exposure of pass ``p``, visit ``v``, exposure ``e``: any integer that tells the tests'
+    exposures apart (the serial carries no meaning, and nothing reads its digits)."""
+    return 1000 * p + 100 * v + e
+
+
+def name(stem: str) -> str:
+    return loop.stem_ids(stem)["name"]
+
+
+def resolved(*stems: str) -> dict[str, int]:
+    """The ids a pass resolved for the stems' exposures (``loop.exposure_ids``): each SOC stem's is
+    :func:`expid` of its pass, visit and exposure; any other reader's is numbered from 9001 in name order."""
+    out = {}
+    for s in stems:
+        if (m := loop.STEM.match(s)) is not None:
+            out[name(s)] = expid(int(m["pass"]), int(m["visit"]), int(m["exposure"]))
+    others = sorted({name(s) for s in stems if loop.STEM.match(s) is None})
+    out.update({n: 9001 + i for i, n in enumerate(others)})
+    return out
 
 
 class Pages:
@@ -132,10 +160,12 @@ def snap(**kw) -> loop.Snapshot:
     return loop.Snapshot(**base)
 
 
-def l2row(field: int, mjd: float, job: int, overlap: tuple[int, ...] = (), program: int | None = 342) -> dict:
-    """An official L2 row centred in ``field`` that overlaps ``overlap`` too, of exposure program ``program``."""
+def l2row(field: int, mjd: float, job: int, overlap: tuple[int, ...] = (), program: int | None = 342,
+          stem: str | None = None) -> dict:
+    """An official L2 row centred in ``field`` that overlaps ``overlap`` too, of exposure program ``program``,
+    its intake job having read ``stem`` (``None``: an imported row)."""
     return {"field": field, "overlapfields": sorted({field, *overlap}), "mjdobs": mjd, "job": job,
-            "program": program}
+            "program": program, "stem": stem}
 
 
 def stages(subs: list[dict], name: str) -> list[dict]:
@@ -165,15 +195,17 @@ def test_listing_requests_only_the_selected_filters_observations():
 
 def test_new_stem_is_submitted_once_and_not_again_while_pending():
     stems = [stem(1, 1, 2), stem(1, 1, 2, sca=9), stem(1, 1, 1)]
-    subs, counts = loop.plan(snap(published_stems={stem(1, 1, 1)}), stems, SEL)
+    subs, counts = loop.plan(snap(published_stems={stem(1, 1, 1)}), stems, SEL, ids=resolved(*stems))
     intake = stages(subs, "intake")
     assert [s["scope"]["file"] for s in intake] == [stem(1, 1, 2)]
+    assert intake[0]["scope"]["expid"] == expid(1, 1, 2)
     assert intake[0]["expects"][1]["key"] == {"dataset": D, "expid": expid(1, 1, 2), "sca": 8, "fid": 8}
     assert counts["new"] == 1
 
     pending = [{"id": 50, "stage": "intake", "state": "running",
-                "scope": {"dataset": D, "file": stem(1, 1, 2)}}]
-    subs, counts = loop.plan(snap(published_stems={stem(1, 1, 1)}, jobs=pending), stems, SEL)
+                "scope": {"dataset": D, "file": stem(1, 1, 2), "expid": expid(1, 1, 2)}}]
+    subs, counts = loop.plan(snap(published_stems={stem(1, 1, 1)}, jobs=pending), stems, SEL,
+                             ids=resolved(*stems))
     assert stages(subs, "intake") == [] and counts["pending"]["intake"] == 1
 
 
@@ -218,7 +250,8 @@ def test_every_official_source_set_gets_one_packet_in_any_order():
 
 def test_an_intake_pending_holds_no_packet():
     k1 = (expid(1, 1, 1), 8, 8)
-    pend = [{"id": 70, "stage": "intake", "state": "running", "scope": {"dataset": D, "file": stem(2, 1, 1)}}]
+    pend = [{"id": 70, "stage": "intake", "state": "running",
+             "scope": {"dataset": D, "file": stem(2, 1, 1), "expid": expid(2, 1, 1)}}]
     subs, _ = loop.plan(snap(l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30}, diffs={k1: 41},
                              sources={k1: 41}, jobs=pend), [], SEL)
     assert [p["scope"]["expid"] for p in stages(subs, "packet")] == [k1[0]]
@@ -253,7 +286,7 @@ def test_a_job_published_with_its_binding_refused_is_reported_failed_and_its_key
 
 def test_drained_pass_exits_zero(monkeypatch, capsys):
     k1 = (expid(1, 1, 1), 8, 8)
-    done = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30},
+    done = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20, stem=stem(1, 1, 1))}, refs={(7, 8): 30},
                 diffs={k1: 41}, sources={k1: 41}, packets={k1: 90})
     monkeypatch.setattr(loop, "snapshot", lambda conn, run: done)
     monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
@@ -280,7 +313,7 @@ def test_drained_pass_exits_zero(monkeypatch, capsys):
 def test_a_first_pass_listing_no_stem_of_the_selection_exits_64_and_a_drained_one_0(
         monkeypatch, capsys, listed, code):
     k1 = (expid(1, 1, 1), 8, 8)
-    done = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30},
+    done = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20, stem=stem(1, 1, 1))}, refs={(7, 8): 30},
                 diffs={k1: 41}, sources={k1: 41}, packets={k1: 90})
     monkeypatch.setattr(loop, "snapshot", lambda conn, run: done)
     monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
@@ -305,7 +338,8 @@ def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_1_once_the_re
     k1, k2 = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
     failed = {"id": 80, "stage": "difference", "state": state, "refusal": refusal,
               "scope": {"expid": k1[0], "sca": 8, "fid": 8}}
-    rows = {"published_stems": {stem(1, 1, 1), stem(2, 1, 1)}, "l2": {k1: l2row(7, 1.0, 20), k2: l2row(7, 1.1, 21)},
+    rows = {"published_stems": {stem(1, 1, 1), stem(2, 1, 1)},
+            "l2": {k1: l2row(7, 1.0, 20, stem=stem(1, 1, 1)), k2: l2row(7, 1.1, 21, stem=stem(2, 1, 1))},
             "refs": {(7, 8): 30}, "diffs": {k2: 42}, "sources": {k2: 42}}
     passes = iter([snap(jobs=[failed], **rows),                                     # k2's packet is due
                    snap(jobs=[failed, {"id": 91, "stage": "packet", "state": "published",
@@ -510,7 +544,7 @@ def test_a_missing_psf_submits_one_psf_job_and_no_intake_of_that_sca():
     sel = loop.Selection.parse("F146", "8,9", "all")
     stems = [stem(1, 1, 1), stem(2, 1, 1), stem(1, 1, 1, sca=9), stem(2, 1, 1, sca=9)]
     psfs = {(8, 9, "science"): (12, 102)}
-    subs, _ = loop.plan(snap(psfs=psfs), stems, sel)            # SCA 8 lacks its science PSF
+    subs, _ = loop.plan(snap(psfs=psfs), stems, sel, ids=resolved(*stems))   # SCA 8 lacks its science PSF
     (psf,) = stages(subs, "psf")
     assert psf["scope"] == {"dataset": D, "file": stem(1, 1, 1)}
     assert [(e["product"], e["key"], e["binding"]) for e in psf["expects"]] == [
@@ -518,13 +552,13 @@ def test_a_missing_psf_submits_one_psf_job_and_no_intake_of_that_sca():
     assert sorted(s["scope"]["file"] for s in stages(subs, "intake")) == [stem(1, 1, 1, sca=9),
                                                                           stem(2, 1, 1, sca=9)]
     # Neither SCA has a PSF: a job each, and no stem of either is admitted.
-    subs, _ = loop.plan(snap(psfs={}), stems, sel)
+    subs, _ = loop.plan(snap(psfs={}), stems, sel, ids=resolved(*stems))
     assert sorted(s["scope"]["file"] for s in stages(subs, "psf")) == [stem(1, 1, 1), stem(1, 1, 1, sca=9)]
     assert stages(subs, "intake") == []
 
 
 def test_an_official_science_psf_admits_intakes_and_submits_no_psf_job():
-    subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1)], SEL)
+    subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1)], SEL, ids=resolved(stem(1, 1, 1), stem(2, 1, 1)))
     assert stages(subs, "psf") == []
     assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(2, 1, 1)]
 
@@ -536,10 +570,10 @@ def test_a_pending_psf_job_submits_nothing_more():
 
 
 def test_an_intake_names_the_datasets_gaia_catalog_once_it_is_official():
-    named, _ = loop.plan(snap(), [stem(1, 1, 1)], SEL)
+    named, _ = loop.plan(snap(), [stem(1, 1, 1)], SEL, ids=resolved(stem(1, 1, 1)))
     assert [i for i in stages(named, "intake")[0]["inputs"] if i["product"] == "catalogs"] == [
         {"product": "catalogs", "key": {"dataset": D, "name": "gaia", "version": "DR3"}, "source_job": 12}]
-    alone, _ = loop.plan(snap(catalogs={}), [stem(1, 1, 1)], SEL)
+    alone, _ = loop.plan(snap(catalogs={}), [stem(1, 1, 1)], SEL, ids=resolved(stem(1, 1, 1)))
     assert [i["product"] for i in stages(alone, "intake")[0]["inputs"]] == ["psfs"]
 
 
@@ -603,21 +637,105 @@ def test_a_pass_submits_at_most_the_cap_in_stage_order_and_defers_the_rest():
     stems = [stem(1, 1, 1), stem(1, 1, 1, sca=9), stem(2, 1, 1)]
     sel = loop.Selection.parse("F146", "8,9", "all")
     psfs = {(8, 8, "science"): (10, 100), (8, 9, "science"): (11, 101)}
-    subs, counts = loop.plan(snap(psfs=psfs), stems, sel, max_submissions=2)
+    subs, counts = loop.plan(snap(psfs=psfs), stems, sel, max_submissions=2, ids=resolved(*stems))
     assert [s["scope"]["file"] for s in subs] == stems[:2] and counts["deferred"] == 1
     assert [e["product"] for e in subs[0]["expects"]] == ["exposures", "l2files"]
-    whole, counts = loop.plan(snap(psfs=psfs), stems, sel)
+    whole, counts = loop.plan(snap(psfs=psfs), stems, sel, ids=resolved(*stems))
     assert len(whole) == 3 and counts["deferred"] == 0
 
 
 def test_passes_select_the_surveys_passes_in_stems_and_rows_and_default_to_all():
     sel = loop.Selection.parse("F146", "8", "all", "1,3")
-    assert [s for s in (stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)) if sel.admits_stem(s)] == [
-        stem(1, 1, 1), stem(3, 1, 1)]
-    assert [p for p in (1, 2, 3) if sel.admits_row(expid(p, 1, 1), 8, 8, {8})] == [1, 3]
-    subs, _ = loop.plan(snap(), [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)], sel)
+    stems = [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)]
+    assert [s for s in stems if sel.admits_stem(s)] == [stem(1, 1, 1), stem(3, 1, 1)]
+    assert [p for p in (1, 2, 3) if sel.admits_row(stem(p, 1, 1), 8, 8, {8})] == [1, 3]
+    subs, _ = loop.plan(snap(), stems, sel, ids=resolved(*stems))
     assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stem(1, 1, 1), stem(3, 1, 1)]
     assert sel.summary()["passes"] == [1, 3] and SEL.passes is None and SEL.summary()["passes"] == "all"
+
+
+def test_passes_pointings_and_programs_select_a_row_by_its_intake_stem_and_a_stemless_row_only_when_none_is_set():
+    """An imported row has no intake stem: it answers no pass, pointing or exposure term."""
+    by_pass = loop.Selection.parse("F146", "8", "all", "2")
+    by_pointing = loop.Selection.parse("F146", "8", "001_0002")
+    by_program = loop.Selection.parse("F146", "8", "all", programs="1049")
+    row = {(expid(2, 1, 2), 8, 8): l2row(7, 1.0, 20, program=1049, stem=stem(2, 1, 2, program=1049)),
+           (expid(3, 1, 1), 8, 8): l2row(7, 2.0, 21, program=1018, stem=stem(3, 1, 1, program=1018)),
+           (expid(9, 9, 9), 8, 8): l2row(7, 3.0, 22, program=1049)}                 # imported: no stem
+    for sel, chosen in ((by_pass, [20]), (by_pointing, [20]), (by_program, [20, 22]), (SEL, [20, 21, 22])):
+        subs, _ = loop.plan(snap(l2=row, refs={(7, 8): 30}), [], sel)
+        assert sorted(d["inputs"][0]["source_job"] for d in stages(subs, "difference")) == chosen, sel
+    assert not by_pass.admits_row(None, 8, 8, {8}) and SEL.admits_row(None, 8, 8, {8})
+    assert not loop.Selection.parse("F146", "8", "all", exposures="r00342").admits_row(None, 8, 8, {8})
+    assert by_program.admits_row(None, 8, 8, {8}, 1049) and not by_program.admits_row(None, 8, 8, {8}, None)
+
+
+def test_the_18_stems_of_one_exposure_get_one_scope_expid_and_exactly_one_exposures_expectation():
+    stems = [stem(1, 1, 1, sca=s) for s in range(1, 19)]
+    sel = loop.Selection.parse("F146", ",".join(str(s) for s in range(1, 19)), "all")
+    psfs = {(8, s, "science"): (10 + s, 100 + s) for s in range(1, 19)}
+    ids = resolved(*stems)
+    assert list(ids) == [name(stems[0])]                                     # one name for the 18
+    subs, _ = loop.plan(snap(psfs=psfs), stems, sel, ids=ids)
+    intakes = stages(subs, "intake")
+    assert len(intakes) == 18 and {s["scope"]["expid"] for s in intakes} == {expid(1, 1, 1)}
+    assert sum(any(e["product"] == "exposures" for e in s["expects"]) for s in intakes) == 1
+    assert {tuple(e["key"]["expid"] for e in s["expects"]) for s in intakes} == {(expid(1, 1, 1),)} | {
+        (expid(1, 1, 1), expid(1, 1, 1))}
+    # The exposure claimed by a pending intake, or held, gets no second expectation.
+    pending = [{"id": 50, "stage": "intake", "state": "running",
+                "scope": {"dataset": D, "file": stems[0], "expid": expid(1, 1, 1)}}]
+    subs, _ = loop.plan(snap(psfs=psfs, jobs=pending), stems, sel, ids=ids)
+    assert not any(e["product"] == "exposures" for s in stages(subs, "intake") for e in s["expects"])
+
+
+def test_two_stems_that_pack_to_one_old_expid_get_two_names_two_ids_and_two_exposures_expectations():
+    """Program 1043's plan 01 and plan 02 of one pass, observation, visit and exposure (MAST, 2026-11-14)."""
+    plan_1, plan_2 = "r0104301001001001001_0001_wfi08_f146", "r0104302001001001001_0001_wfi08_f146"
+    assert name(plan_1) != name(plan_2)
+    ids = {name(plan_1): 501, name(plan_2): 502}
+    subs, _ = loop.plan(snap(), [plan_1, plan_2], SEL, ids=ids)
+    intakes = stages(subs, "intake")
+    assert [s["scope"]["expid"] for s in intakes] == [501, 502]
+    assert [e["key"] for s in intakes for e in s["expects"] if e["product"] == "exposures"] == [
+        {"dataset": D, "expid": 501}, {"dataset": D, "expid": 502}]
+
+
+def test_a_readers_name_function_is_the_only_thing_a_naming_change_touches(monkeypatch):
+    """Under another one-to-one naming (``stem_ids``' name mapped, the ``--exposures`` prefixes with it, every
+    id the mapping's) the plan's submissions and the selection are the same but for the names."""
+    stems = [stem(1, 1, 1), stem(1, 1, 1, sca=9), stem(2, 3, 1), stem(2, 4, 1)]
+    sel = loop.Selection.parse("F146", "8,9", "all", "1,2", exposures="r0034201001,r0034201002001004003")
+    world = dict(psfs={(8, 8, "science"): (10, 100), (8, 9, "science"): (11, 101)}, refs={(7, 8): 30},
+                 l2={(expid(1, 1, 1), 8, 8): l2row(7, 1.0, 20, stem=stem(1, 1, 1)),
+                     (expid(2, 3, 1), 8, 8): l2row(7, 2.0, 21, stem=stem(2, 3, 1)),
+                     (expid(2, 4, 1), 8, 8): l2row(7, 3.0, 22, stem=stem(2, 4, 1))})
+    before = loop.plan(snap(**world), stems, sel, ids=resolved(*stems))
+    stems_before = [sel.admits_stem(s) for s in stems]
+    rows_before = [sel.admits_row(r["stem"], 8, 8, {8}) for r in world["l2"].values()]
+
+    digits = str.maketrans("0123456789", "9876543210")
+    original = loop.stem_ids
+
+    def rename(exposure: str) -> str:
+        return "x/" + exposure.translate(digits)
+
+    def renamed(stem):
+        ids = original(stem)
+        return None if ids is None else {**ids, "name": rename(ids["name"])}
+
+    rekeyed = {rename(n): e for n, e in resolved(*stems).items()}
+    monkeypatch.setattr(loop, "stem_ids", renamed)
+    renamed_sel = dataclasses.replace(sel, exposures=tuple(sorted(rename(p) for p in sel.exposures)))
+    after = loop.plan(snap(**world), stems, renamed_sel, ids=rekeyed)
+    stems_after = [renamed_sel.admits_stem(s) for s in stems]
+    rows_after = [renamed_sel.admits_row(r["stem"], 8, 8, {8}) for r in world["l2"].values()]
+    assert after == before
+    assert {s["scope"]["expid"] for s in stages(after[0], "intake")} == {expid(1, 1, 1), expid(2, 3, 1)}
+    assert [a and rename(a["name"]) for a in stems_before] == [a and a["name"] for a in stems_after]
+    assert [a and {k: v for k, v in a.items() if k != "name"} for a in stems_before] == [
+        a and {k: v for k, v in a.items() if k != "name"} for a in stems_after]
+    assert rows_after == rows_before == [True, True, False]
 
 
 class Polled(Rows):
@@ -687,9 +805,9 @@ ON_SPOT = {"jobQueue": "arn:aws:batch:r:1:job-queue/spot-q"}
 
 def test_a_stages_backlog_goes_to_spot_and_its_last_wave_to_the_prompt_queue():
     stems = [stem(p, 1, 1) for p in range(1, 6)]
-    subs, _ = loop.plan(snap(settings={**SETTINGS, "batch": {"spot": SPOT}}), stems, SEL)
+    subs, _ = loop.plan(snap(settings={**SETTINGS, "batch": {"spot": SPOT}}), stems, SEL, ids=resolved(*stems))
     assert [s.get("queue") for s in stages(subs, "intake")] == ["spot-q", "spot-q", "spot-q", None, None]
-    subs, _ = loop.plan(snap(), stems, SEL)
+    subs, _ = loop.plan(snap(), stems, SEL, ids=resolved(*stems))
     assert not any("queue" in s for s in subs)
 
 
@@ -722,6 +840,7 @@ def test_a_spot_straggler_past_the_factor_is_terminated_and_rerun_and_one_inside
 def test_a_pass_reports_its_submissions_by_queue(monkeypatch):
     one = {"queue": "spot-q", "backlog": 1}
     monkeypatch.setattr(loop, "snapshot", lambda conn, run: snap(settings={**SETTINGS, "batch": {"spot": one}}))
+    monkeypatch.setattr(loop, "exposure_ids", lambda conn, dataset, names: resolved(*(stem(p, 1, 1) for p in (1, 2, 3))))
     ids = iter(range(500, 600))
     summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(p, 1, 1) for p in (1, 2, 3)],
                             lambda item: next(ids), None)
@@ -747,11 +866,13 @@ def test_an_openuniverse_listing_pages_the_selected_filters_and_keeps_simple_ste
 def test_an_openuniverse_pointing_is_the_sequence_row_in_stems_and_rows():
     sel = loop.Selection.parse("F158", "10", "1012,2034", reader=OU)
     stems = [ou(1012), ou(2034), ou(3000), ou(1012, 4), stem(1, 1, 1, sca=10)]
-    subs, counts = loop.plan(snap(fids={"H158": 2}, psfs={(2, 10, "science"): (10, 100)}), stems, sel)
+    ids = resolved(*stems)
+    subs, counts = loop.plan(snap(fids={"H158": 2}, psfs={(2, 10, "science"): (10, 100)}), stems, sel, ids=ids)
     intake = stages(subs, "intake")
     assert [s["scope"]["file"] for s in intake] == [ou(1012), ou(2034)] and counts["admitted"] == 2
-    assert intake[0]["expects"][1]["key"] == {"dataset": D, "expid": 1012, "sca": 10, "fid": 2}
-    assert sel.admits_row(2034, 10, 2, {2}) and not sel.admits_row(3000, 10, 2, {2})
+    assert name(ou(1012)) == "roman_tds_H158_1012" == name(ou(1012, 4))
+    assert intake[0]["expects"][1]["key"] == {"dataset": D, "expid": ids[name(ou(1012))], "sca": 10, "fid": 2}
+    assert sel.admits_row(ou(2034), 10, 2, {2}) and not sel.admits_row(ou(3000), 10, 2, {2})
     assert sel.summary()["pointings"] == [1012, 2034]
 
 
@@ -790,11 +911,13 @@ def test_a_rimtimsim_listing_pages_the_root_and_keeps_the_selected_filters_lite_
 def test_a_rimtimsim_pointing_is_the_exposure_number_in_stems_and_rows():
     sel = loop.Selection.parse("F213", "2", "411,827", reader=RTS)
     stems = [rts(411), rts(827), rts(1243), rts(411, sca=3), ou(411, 2, "K213"), stem(1, 1, 1, sca=2)]
-    subs, counts = loop.plan(snap(fids={"K213": 4}, psfs={(4, 2, "science"): (10, 100)}), stems, sel)
+    ids = resolved(*stems)
+    subs, counts = loop.plan(snap(fids={"K213": 4}, psfs={(4, 2, "science"): (10, 100)}), stems, sel, ids=ids)
     intake = stages(subs, "intake")
     assert [s["scope"]["file"] for s in intake] == [rts(411), rts(827)] and counts["admitted"] == 2
-    assert intake[0]["expects"][1]["key"] == {"dataset": D, "expid": 411, "sca": 2, "fid": 4}
-    assert sel.admits_row(827, 2, 4, {4}) and not sel.admits_row(1243, 2, 4, {4})
+    assert name(rts(411)) == "rimtimsim_WFI_F213_000000411" == name(rts(411, sca=3))
+    assert intake[0]["expects"][1]["key"] == {"dataset": D, "expid": ids[name(rts(411))], "sca": 2, "fid": 4}
+    assert sel.admits_row(rts(827), 2, 4, {4}) and not sel.admits_row(rts(1243), 2, 4, {4})
     with pytest.raises(ValueError, match="no passes"):
         loop.Selection.parse("F213", "2", "all", "1", reader=RTS)
 
@@ -806,16 +929,22 @@ def test_a_socsims_lite_listing_keeps_the_lite_stems_of_the_soc_observations():
     assert loop.list_stems(Pages(keys), "s3://bucket/l2/", sel) == [stem(1, 1, 1), stem(2, 1, 1)]
 
 
-def test_expids_admit_stems_and_rows_inside_any_range_with_the_other_terms():
-    sel = loop.Selection.parse("F146", "8", "all", "1,2", expids=f"1000000-1999999,{expid(2, 3, 1)}")
-    stems = [stem(1, 7, 1), stem(2, 3, 1), stem(2, 4, 1), stem(3, 3, 1)]
+def test_exposures_admit_a_stem_or_row_whose_name_starts_with_a_prefix_and_no_other():
+    """Pass 1 of r00342 whole, and pass 2 observation 4 visit 3: the stretches of the SOC hierarchy the
+    packed ranges were for, now with the program and plan in them."""
+    sel = loop.Selection.parse("F146", "8", "all", "1,2", exposures="r0034201001,r0034201002001004003")
+    stems = [stem(1, 7, 1), stem(2, 3, 1), stem(2, 4, 1), stem(3, 3, 1), stem(2, 3, 1, program=1049)]
     assert [s for s in stems if sel.admits_stem(s)] == [stem(1, 7, 1), stem(2, 3, 1)]
-    assert sel.admits_row(expid(2, 3, 1), 8, 8, {8}) and not sel.admits_row(expid(2, 4, 1), 8, 8, {8})
-    assert not sel.admits_row(expid(1, 7, 1), 9, 8, {8})
-    assert sel.summary()["expids"] == ["1000000-1999999", f"{expid(2, 3, 1)}-{expid(2, 3, 1)}"]
-    assert SEL.summary()["expids"] == "all"
-    with pytest.raises(ValueError, match="low end"):
-        loop.Selection.parse("F146", "8", "all", expids="5-4")
+    assert sel.admits_row(stem(2, 3, 1), 8, 8, {8}) and not sel.admits_row(stem(2, 4, 1), 8, 8, {8})
+    assert not sel.admits_row(stem(1, 7, 1), 9, 8, {8})                      # with the other terms
+    assert not sel.admits_row(stem(2, 3, 1, program=1049), 8, 8, {8})        # the program is in the name
+    assert sel.summary()["exposures"] == ["r0034201001", "r0034201002001004003"]
+    assert SEL.summary()["exposures"] == "all"
+    whole = loop.Selection.parse("F146", "8,9", "all", exposures="r0034201001001004001_0001")
+    assert whole.admits_stem(stem(1, 1, 1)) and whole.admits_stem(stem(1, 1, 1, sca=9))
+    assert not whole.admits_stem(stem(1, 1, 2))
+    with pytest.raises(ValueError, match="prefix"):
+        loop.Selection.parse("F146", "8", "all", exposures=" , ")
 
 
 # Coverage selection (``[reference.selection] selection_type = "coverage"``): frames placed on the
@@ -919,11 +1048,11 @@ def test_programs_admit_stems_by_their_program_and_rows_by_their_exposures_progr
     sel = loop.Selection.parse("F146", "8", "all", programs="1049,1018")
     stems = [stem(1, 1, 1, program=1049), stem(1, 2, 1, program=1083), stem(1, 3, 1, program=1018)]
     assert [s for s in stems if sel.admits_stem(s)] == [stems[0], stems[2]]
-    assert sel.admits_row(expid(1, 1, 1), 8, 8, {8}, 1049) and not sel.admits_row(expid(1, 1, 1), 8, 8, {8}, 1083)
-    assert not sel.admits_row(expid(1, 1, 1), 8, 8, {8}, None)      # no official exposures row yet
-    assert not sel.admits_row(expid(1, 1, 1), 9, 8, {8}, 1049)      # with the other terms
+    assert sel.admits_row(stems[0], 8, 8, {8}, 1049) and not sel.admits_row(stems[0], 8, 8, {8}, 1083)
+    assert not sel.admits_row(stems[0], 8, 8, {8}, None)            # no official exposures row yet
+    assert not sel.admits_row(stems[0], 9, 8, {8}, 1049)            # with the other terms
     assert sel.summary()["programs"] == [1018, 1049] and SEL.programs is None
-    assert SEL.summary()["programs"] == "all" and SEL.admits_row(expid(1, 1, 1), 8, 8, {8}, None)
+    assert SEL.summary()["programs"] == "all" and SEL.admits_row(stems[0], 8, 8, {8}, None)
     with pytest.raises(ValueError):
         loop.Selection.parse("F146", "8", "all", programs="1049,x")
 
@@ -948,7 +1077,7 @@ def test_a_program_selection_plans_nothing_from_an_unselected_programs_rows():
           later_mine: l2row(7, 2.0, 22, program=1049), later_theirs: l2row(7, 2.1, 23, program=1018),
           orphan: l2row(7, 2.2, 24, program=None)}
     stems = [stem(3, 1, 1, program=1049), stem(3, 2, 1, program=1018)]
-    subs, counts = loop.plan(snap(l2=l2), stems, sel)
+    subs, counts = loop.plan(snap(l2=l2), stems, sel, ids=resolved(*stems))
     assert [s["scope"]["file"] for s in stages(subs, "intake")] == [stems[0]] and counts["admitted"] == 1
     refs = stages(subs, "reference")
     assert len(refs) == 1 and [i["key"]["expid"] for i in refs[0]["inputs"]] == [mine[0], later_mine[0]]
