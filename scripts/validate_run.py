@@ -9,11 +9,12 @@ jobs of ``--run``:
 
 - ``lineage``: every row of the run's jobs, every ``input`` row they
   recorded (those a stage recorded at its read included) and every binding naming them resolves to
-  a published job's row of its key, but a binding of a published job whose
-  manifest lists its product in ``empty_ok`` and that holds no rows of it (a
-  set declared empty, as ``[difference] skip_loading_sources_records``
-  writes), which is counted by product and not resolved; every ``expects``
-  binding names its product and key.
+  a published job's row of its key, but an input row or binding of a
+  published job whose manifest lists its product in ``empty_ok`` and that
+  holds no rows of it (a set declared empty, as ``[difference]
+  skip_loading_sources_records`` writes), which is counted by product, input
+  rows and bindings apart, and not resolved; every ``expects`` binding names
+  its product and key.
 - ``tables``: the run has a published job; every published job's declared
   Parquet outputs hold as many rows as its table rows, match their manifest
   checksums, and no table holds rows of the job that it did not declare.
@@ -220,17 +221,22 @@ def check_lineage(run: int) -> bool:
                      {"run": run})
             if r["n"]:
                 bad.append(f"{table}.{col}: {r['n']} rows of the run naming an unpublished job")
-    n_inputs = 0
+    n_inputs, inputs_declared = 0, Counter()
     for product in KEYS:
-        rows = q(f"""SELECT i.job, i.kind, i.key, i.source_job FROM job_inputs i JOIN jobs rj ON rj.id = i.job
-                     WHERE rj.run = %s AND i.kind = 'input' AND i.product = %s
+        rows = q(f"""SELECT i.job, i.kind, i.key, i.source_job,
+                       coalesce(sj.state = 'published' AND sj.manifest -> 'empty_ok' ? %(product)s, false)
                        AND NOT EXISTS (SELECT 1 FROM {rows_of(product, 'ARRAY[i.source_job]')} t
-                                       JOIN jobs sj ON sj.id = t.job
-                                       AND sj.state = 'published'
+                                       WHERE t.job = i.source_job) AS declared_empty
+                     FROM job_inputs i JOIN jobs rj ON rj.id = i.job LEFT JOIN jobs sj ON sj.id = i.source_job
+                     WHERE rj.run = %(run)s AND i.kind = 'input' AND i.product = %(product)s
+                       AND NOT EXISTS (SELECT 1 FROM {rows_of(product, 'ARRAY[i.source_job]')} t
+                                       JOIN jobs pj ON pj.id = t.job
+                                       AND pj.state = 'published'
                                        WHERE t.job = i.source_job AND i.key = {keyed(product)})""",
-                 (run, product))
+                 {"run": run, "product": product})
+        inputs_declared[product] += sum(r["declared_empty"] for r in rows)
         bad += [f"job {r['job']} {r['kind']} {product} {r['key']} from job {r['source_job']}:"
-                " no published row" for r in rows]
+                " no published row" for r in rows if not r["declared_empty"]]
         (r,) = q("SELECT count(*) n FROM job_inputs i JOIN jobs rj ON rj.id = i.job WHERE rj.run = %s"
                  " AND i.kind = 'input' AND i.product = %s", (run, product))
         n_inputs += r["n"]
@@ -266,9 +272,11 @@ def check_lineage(run: int) -> bool:
     if r["n"]:
         bad.append(f"{r['n']} bindings of an unknown product")
     empty = ", ".join(f"{n} {p}" for p, n in sorted(declared.items()) if n) or "none"
-    return report("lineage", bad, f"0 orphans: {n_inputs} input rows and"
+    inputs_empty = ", ".join(f"{n} {p}" for p, n in sorted(inputs_declared.items()) if n) or "none"
+    return report("lineage", bad, f"0 orphans: {n_inputs - sum(inputs_declared.values())} input rows and"
                   f" {n_bindings - sum(declared.values())} bindings resolve to published rows;"
-                  f" bindings declared empty (empty_ok, no rows), not resolved: {empty}", t0)
+                  f" bindings declared empty (empty_ok, no rows), not resolved: {empty};"
+                  f" input rows declared empty, not resolved: {inputs_empty}", t0)
 
 
 def job_table_failures(j: dict) -> tuple[list[str], int, int]:
