@@ -28,8 +28,15 @@ it are found by date at match time, so a new day needs no registration;
 the check is that at least one day with its record is there, and the
 manifest records how many and the oldest and newest.
 ``epochs`` holds at most one exposure, because a source set's job binds
-one key of ``sources`` (``schema.sql``). The ids are the source system's
-and are kept as they are in the id columns.
+one key of ``sources`` (``schema.sql``). ``rid``, ``pid`` and ``rfid`` are
+the source system's and are kept as they are in the id columns. An epoch's
+``expid`` is the destination dataset's: the id ``rapidpipe exposure id
+--dataset D --name N`` gives for the L2 file's exposure name (`dev`'s
+converted L2 file keeps the SOC file's stem, so the name is that stem
+without its detector and ``_cal``, the ``soc-l2`` reader's,
+:func:`rapidpipe.foundation.loop.stem_ids`), never `dev`'s own serial, so
+an imported and a pipeline exposure of one name in one dataset share one
+id (rapid_docs exposure-id).
 
 ``gaia``, ``ned`` and ``lvs`` each register a catalog copy (rapid_docs
 ``decision-gaia-mirror`` and ``decision-catalog-matches``: the layouts

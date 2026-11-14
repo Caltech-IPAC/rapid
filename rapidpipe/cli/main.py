@@ -60,6 +60,11 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
   counts; a producer error exits non-zero with the set unstamped;
+- ``exposure id --dataset D --name N`` prints the ``expid`` the database
+  holds for the exposure name ``N`` in dataset ``D``, assigning one when it
+  has none (``rapidpipe.foundation.loop.exposure_ids``, the loop's own
+  resolution): a hand-run ``intake``, or an ``import`` of an epoch, takes
+  its scope's ``expid`` from it;
 
 A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
@@ -253,6 +258,21 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--once", action="store_true",
                              help="Run one pass and exit: 0, or 1 when a job of the run failed or was "
                                   "refused its binding; 64 when the first pass admits nothing.")
+
+    exposure_parser = subparsers.add_parser("exposure", help="Resolve an exposure's id.",
+                                            description="Resolve an exposure's id within its dataset.")
+    exposure_parser.set_defaults(group_parser=exposure_parser)
+    exposure_subparsers = exposure_parser.add_subparsers(dest="verb")
+    exposure_id = exposure_subparsers.add_parser(
+        "id", help="Print the expid the dataset holds for an exposure's name, assigning one if none.",
+        description="Print the expid exposure_ids holds for the exposure's name in the dataset, assigning "
+                    "one when it has none: what the loop does for every stem it takes in, for a hand-run "
+                    "intake or an import of an epoch.")
+    exposure_id.add_argument("--dataset", required=True)
+    exposure_id.add_argument("--name", required=True,
+                             help="The producer's name for the exposure: the stem without its detector and "
+                                  "file-kind suffix, e.g. r0034201001001004001_0001 (SOC), "
+                                  "roman_tds_H158_1012 (OpenUniverse), rimtimsim_WFI_F213_000000411.")
 
     return parser
 
@@ -493,6 +513,9 @@ def _foundation_command(args: argparse.Namespace) -> int:
         return _publish(args)
     elif args.command == "loop":
         return _loop(args)
+    elif command == ("exposure", "id"):
+        with connect(application_name="rapidpipe-exposure-id") as conn:
+            print(loop.exposure_ids(conn, args.dataset, [args.name])[args.name])
     elif command == ("official", "change"):
         group = _read(args.group, "group")
         if not isinstance(group, list) or not all(isinstance(item, dict) for item in group):
@@ -550,7 +573,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # traceback and exits 75 or 70. SystemExit and KeyboardInterrupt are not
     # Exception subclasses and pass through.
     try:
-        if args.command in ("run", "job", "official", "publish", "loop"):
+        if args.command in ("run", "job", "official", "publish", "loop", "exposure"):
             return _foundation_command(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary
         code = exit_code(exc)

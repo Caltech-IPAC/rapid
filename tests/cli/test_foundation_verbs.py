@@ -1,5 +1,7 @@
 """The foundation verbs: each one's exit code and output on one success
-and one refusal, against the foundation database (``database/schema.sql``).
+and one refusal, against the foundation database (``database/schema.sql``);
+``exposure id``, the id a dataset holds for an exposure's name, the same
+id again and another name's another.
 
 Each verb is run in-process through ``rapidpipe.cli.main.main``, which
 connects from the ``PG*`` environment like any invocation; a refusal is a
@@ -228,3 +230,18 @@ def test_job_submit_with_job_submits_a_new_attempt_of_the_existing_job(capsys, c
     with conn.cursor() as cur:
         cur.execute("SELECT count(*), max(batch_job_id) FROM jobs")
         assert cur.fetchone() == (1, "batch-1")
+
+
+def test_exposure_id_prints_the_names_id_the_same_id_again_and_another_names_another(capsys, conn):
+    name, other = "r0034201001001004001_0001", "r0034201001001004001_0002"
+    code, first, err = _run(capsys, "exposure", "id", "--dataset", DATASET, "--name", name)
+    assert (code, err) == (ExitCode.SUCCESS, "") and first.strip().isdigit()
+    code, again, err = _run(capsys, "exposure", "id", "--dataset", DATASET, "--name", name)
+    assert (code, again, err) == (ExitCode.SUCCESS, first, "")
+    code, second, err = _run(capsys, "exposure", "id", "--dataset", DATASET, "--name", other)
+    assert (code, err) == (ExitCode.SUCCESS, "") and second != first
+    with conn.cursor() as cur:
+        cur.execute("SELECT name, expid FROM exposure_ids WHERE dataset = %s ORDER BY expid", (DATASET,))
+        assert cur.fetchall() == [(name, int(first)), (other, int(second))]
+    code, out, err = _run(capsys, "exposure", "id", "--dataset", DATASET)
+    assert code == ExitCode.USAGE and out == "" and "--name" in err
