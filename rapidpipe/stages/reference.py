@@ -41,17 +41,18 @@ Under ``[selection] selection_type = "coverage"``
 coverage of the reference, and ``min_frames`` is not used: the stage
 estimates the named frames' coverage from their ``l2files`` corners (step
 ``coverage_estimate``), coadds those that meet the reference (a frame that
-misses it is skipped), and measures the fraction of the coverage map's
-pixels at ``min_coverage_depth`` or deeper (step ``verify``). An estimate
-below ``min_coverage_fraction`` less ``coverage_estimate_tolerance``, or a
-measured fraction below ``min_coverage_fraction``, declines the reference:
-the stage ends normally, writes no table and says why in the manifest's
-``declined``, and the publisher marks the job ``declined`` (nothing
-loaded, nothing bound). A reference that passes carries ``COVFRAC``,
-``COVDEPTH`` and ``COVTARG`` in its header and ``covfrac`` and
-``covdepth`` on its row; the manifest's ``reference.coverage`` names the
-selected and skipped ``rid``\\ s, the estimate and the measured fraction,
-declined or not.
+misses it is skipped) in the loop's order (``mjdobs``, then distance from
+the reference's centre, then L2 key: ``coverage.candidate_order``), and
+measures the fraction of the coverage map's pixels at
+``min_coverage_depth`` or deeper (step ``verify``). An estimate below
+``min_coverage_fraction`` less ``coverage_estimate_tolerance``, or a
+measured fraction below ``min_coverage_fraction``, fails the job before a
+manifest, exit 65 with the fraction as its reason. A reference that passes
+carries ``COVFRAC``, ``COVDEPTH`` and ``COVTARG`` in its header; the
+manifest's ``reference.coverage`` names the selected and skipped
+``rid``\\ s, the estimate and the measured fraction. A run's body from
+before ``selection_type`` existed lacks it and reads ``"nframes"``; the
+coverage keys are read only under ``"coverage"``.
 
 Outputs under ``job.path``: ``ref/`` holds the mosaic, its coverage and
 uncertainty maps (awaicgen's names, beside one another, as the import
@@ -131,7 +132,6 @@ REFIMAGES_SCHEMA = pa.schema([
     ("rfid", pa.int32()), ("dataset", pa.string()), ("field", pa.int32()), ("fid", pa.int16()),
     ("filename", pa.string()), ("checksum", pa.string()), ("status", pa.int16()),
     ("infobits", pa.int32()), ("nframes", pa.int16()), ("cov5percent", pa.float32()),
-    ("covfrac", pa.float32()), ("covdepth", pa.float32()),
 ])
 REFIMIMAGES_SCHEMA = pa.schema([("rfid", pa.int32()), ("rid", pa.int32())])
 REFIMCATALOGS_SCHEMA = pa.schema([
@@ -199,11 +199,11 @@ class _Checked:
     infobits: dict[str, Any]
     use_nominal_zptmag: bool
     selection_type: str
-    min_coverage_depth: float
-    min_coverage_fraction: float
-    max_coverage_depth: float
-    max_coverage_fraction: float
-    coverage_estimate_tolerance: float
+    min_coverage_depth: float | None = None          # the coverage keys: set only under "coverage"
+    min_coverage_fraction: float | None = None
+    max_coverage_depth: float | None = None
+    max_coverage_fraction: float | None = None
+    coverage_estimate_tolerance: float | None = None
 
 
 def check_settings(settings: dict[str, Any]) -> _Checked:
@@ -221,19 +221,24 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
     if max_frames < min_frames:
         raise ValueError(f"[reference.selection] max_frames ({max_frames}) is less than "
                          f"min_frames ({min_frames})")
-    selection_type = settings["selection"]["selection_type"]
+    # A run's body from before the coverage selection lacks its keys: "nframes", as the loop reads it.
+    selection_type = settings["selection"].get("selection_type", "nframes")
     if selection_type not in coverage.SELECTION_TYPES:
         raise ValueError(f"[reference.selection] selection_type must be one of {coverage.SELECTION_TYPES}, "
                          f"got {selection_type!r}")
-    depths = {k: _number(settings, "selection", k) for k in ("min_coverage_depth", "max_coverage_depth")}
-    fractions = {k: _number(settings, "selection", k) for k in ("min_coverage_fraction", "max_coverage_fraction")}
-    tolerance = _number(settings, "selection", "coverage_estimate_tolerance")
-    if any(v < 1 for v in depths.values()) or depths["max_coverage_depth"] < depths["min_coverage_depth"]:
-        raise ValueError(f"[reference.selection] coverage depths must be at least 1 with max_coverage_depth "
-                         f"no less than min_coverage_depth, got {depths}")
-    if any(not 0.0 < v <= 1.0 for v in fractions.values()) or tolerance < 0.0:
-        raise ValueError(f"[reference.selection] coverage fractions must be in (0, 1] and "
-                         f"coverage_estimate_tolerance not negative, got {fractions}, {tolerance}")
+    covering = {}
+    if selection_type == "coverage":
+        depths = {k: _number(settings, "selection", k) for k in ("min_coverage_depth", "max_coverage_depth")}
+        fractions = {k: _number(settings, "selection", k)
+                     for k in ("min_coverage_fraction", "max_coverage_fraction")}
+        tolerance = _number(settings, "selection", "coverage_estimate_tolerance")
+        if any(v < 1 for v in depths.values()) or depths["max_coverage_depth"] < depths["min_coverage_depth"]:
+            raise ValueError(f"[reference.selection] coverage depths must be at least 1 with max_coverage_depth "
+                             f"no less than min_coverage_depth, got {depths}")
+        if any(not 0.0 < v <= 1.0 for v in fractions.values()) or tolerance < 0.0:
+            raise ValueError(f"[reference.selection] coverage fractions must be in (0, 1] and "
+                             f"coverage_estimate_tolerance not negative, got {fractions}, {tolerance}")
+        covering = {**depths, **fractions, "coverage_estimate_tolerance": tolerance}
     ra_center = _optional_degrees(settings, "ra_center")
     dec_center = _optional_degrees(settings, "dec_center")
     if (ra_center is None) != (dec_center is None):
@@ -279,7 +284,7 @@ def check_settings(settings: dict[str, Any]) -> _Checked:
         seed=seed if seed >= 0 else None,
         infobits=infobits.check_params(settings["infobits"]),
         use_nominal_zptmag=use_nominal_zptmag,
-        selection_type=selection_type, **depths, **fractions, coverage_estimate_tolerance=tolerance)
+        selection_type=selection_type, **covering)
 
 
 # ----------------------------------------------------------------------
@@ -362,12 +367,14 @@ def read_frames(rows: list[tuple[int, str]], unit_filter: str,
     return frames[:checked.max_frames], [f.rid for f in frames[checked.max_frames:]]
 
 
-def _corners(job: JobContext, rids: list[int]) -> dict[int, tuple[list[float], list[float]]]:
-    """Each named L2 row's four corners, ``rid`` to ``([ra1..ra4], [dec1..dec4])``."""
+def _footprints(job: JobContext, rids: list[int]) -> dict[int, dict[str, Any]]:
+    """Each named L2 row's four corners (``([ra1..ra4], [dec1..dec4])``), centre, ``mjdobs`` and key, by ``rid``."""
     with job.connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT rid, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4 FROM l2files WHERE rid = ANY(%s)",
-                    (list(rids),))
-        found = {int(r[0]): ([float(r[i]) for i in (1, 3, 5, 7)], [float(r[i]) for i in (2, 4, 6, 8)])
+        cur.execute("SELECT rid, ra1, dec1, ra2, dec2, ra3, dec3, ra4, dec4, ra0, dec0, mjdobs, expid, sca, fid"
+                    " FROM l2files WHERE rid = ANY(%s)", (list(rids),))
+        found = {int(r[0]): {"corners": ([float(r[i]) for i in (1, 3, 5, 7)], [float(r[i]) for i in (2, 4, 6, 8)]),
+                             "ra0": float(r[9]), "dec0": float(r[10]), "mjdobs": float(r[11]),
+                             "key": (int(r[12]), int(r[13]), int(r[14]))}
                  for r in cur.fetchall()}
         conn.commit()
     return found
@@ -391,16 +398,20 @@ def estimate_coverage(job: JobContext, frames: list[Frame], checked: _Checked,
     Returns
     -------
     covering : list of Frame
-        The frames whose footprint meets the reference, in their order.
+        The frames whose footprint meets the reference, in the loop's candidate order
+        (``coverage.candidate_order``), so the coadd's order does not follow ``rid``.
     record : dict
         ``selected`` and ``skipped`` ``rid``\\ s, ``estimate`` (the fraction at
         ``min_coverage_depth``), ``decision`` (build, verify or reject), ``min_coverage_depth``,
         ``min_coverage_fraction`` and ``tolerance``.
     """
-    corners = _corners(job, [f.rid for f in frames])
-    missing = [f.rid for f in frames if f.rid not in corners]
+    rows = _footprints(job, [f.rid for f in frames])
+    missing = [f.rid for f in frames if f.rid not in rows]
     if missing:
         raise _rejected(f"job {job.job}: no l2files corners for rids {missing}")
+    frames = sorted(frames, key=lambda f: coverage.candidate_order(
+        rows[f.rid]["mjdobs"], rows[f.rid]["ra0"], rows[f.rid]["dec0"], rows[f.rid]["key"], (ra_center, dec_center)))
+    corners = {rid: row["corners"] for rid, row in rows.items()}
     w = coverage.make_refimage_wcs(ra_center, dec_center, checked.naxis1, checked.naxis2, checked.cdelt1,
                                    abs(checked.cdelt1), checked.rotation)
     covering, depth = coverage.footprint_depth(w, checked.naxis1, checked.naxis2, [corners[f.rid] for f in frames])
@@ -414,12 +425,6 @@ def estimate_coverage(job: JobContext, frames: list[Frame], checked: _Checked,
                   "min_coverage_depth": checked.min_coverage_depth,
                   "min_coverage_fraction": checked.min_coverage_fraction,
                   "tolerance": checked.coverage_estimate_tolerance}
-
-
-def _decline(job: JobContext, reason: str, record: dict[str, Any], **fields: Any) -> None:
-    """End the job with nothing to publish: the manifest's ``declined`` is the reason, its outputs none."""
-    logger.info("reference: declined, %s", reason)
-    job.write_manifest([], declined=reason, reference={"coverage": record, **fields})
 
 
 # ----------------------------------------------------------------------
@@ -488,9 +493,7 @@ def run(job: JobContext) -> None:
                     covered["estimate"], checked.min_coverage_depth, len(coadded), len(covered["skipped"]),
                     covered["decision"])
         if covered["decision"] == "reject":
-            _decline(job, f"estimated coverage {covered['estimate']:.4f} < {checked.min_coverage_fraction}",
-                     covered, not_coadded=not_coadded)
-            return
+            raise _rejected(f"estimated coverage {covered['estimate']:.4f} < {checked.min_coverage_fraction}")
     awaicgen_dict = awaicgen.awaicgen_dict_for_mosaic(
         settings["awaicgen"], naxis1=checked.naxis1, naxis2=checked.naxis2,
         cdelt1=checked.cdelt1, rotation=checked.rotation,
@@ -545,9 +548,7 @@ def run(job: JobContext) -> None:
         logger.info("reference: measured coverage %.4f at depth %s (minimum %s)", covered["measured"],
                     checked.min_coverage_depth, checked.min_coverage_fraction)
         if covered["measured"] < checked.min_coverage_fraction:
-            _decline(job, f"measured coverage {covered['measured']:.4f} < {checked.min_coverage_fraction}",
-                     covered, not_coadded=not_coadded)
-            return
+            raise _rejected(f"measured coverage {covered['measured']:.4f} < {checked.min_coverage_fraction}")
 
     with step("measure"):
         measurements = measure.measure_mosaic(
@@ -607,10 +608,7 @@ def run(job: JobContext) -> None:
             "fid": [int(job.scope["fid"])], "filename": [url(names["image"])],
             "checksum": [_md5_of_file(o(names["image"]))], "status": [grade.status],
             "infobits": [grade.infobits], "nframes": [len(prepared)],
-            "cov5percent": [measurements.cov5percent],
-            "covfrac": [covered["measured"] if covered is not None else None],
-            "covdepth": [checked.min_coverage_depth if covered is not None else None]},
-            schema=REFIMAGES_SCHEMA),
+            "cov5percent": [measurements.cov5percent]}, schema=REFIMAGES_SCHEMA),
         "refimimages": pa.table({"rfid": [rfid] * len(coadded), "rid": [f.rid for f in coadded]},
                                 schema=REFIMIMAGES_SCHEMA),
         "refimcatalogs": pa.table({

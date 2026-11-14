@@ -5,9 +5,10 @@ Contract: under a live run, a reference job whose inputs are two published
 to the job's expected key; the official views show the row, its two
 ``refimimages`` members (the named L2 rows) and its mosaic catalog, all
 under the one ``rfid`` the database drew. Under ``selection_type =
-"coverage"`` the published row carries ``covfrac`` and ``covdepth``, and a
-coadd whose coverage map is short of the minimum declines: the job exits 0,
-its row ``declined`` with the reason, no ``refimages`` row and no binding.
+"coverage"`` a coadd that covers the minimum publishes and binds, its
+stored manifest recording the measured fraction, and one whose coverage
+map is short of it fails: exit 65, the row ``failed`` with the fraction as
+its reason, no ``refimages`` row and no binding.
 """
 
 from __future__ import annotations
@@ -77,8 +78,8 @@ def test_job_local_publishes_a_bound_reference_from_two_named_l2_rows(connect, t
                  (rfid,)) == [(1,)]
 
 
-def test_job_local_under_coverage_publishes_covfrac_or_declines_with_nothing_published(connect, tmp_path,
-                                                                                         monkeypatch, capsys):
+def test_job_local_under_coverage_publishes_a_covered_reference_and_fails_a_short_one_with_exit_65(
+        connect, tmp_path, monkeypatch, capsys):
     conn = connect()
     paths = write_frames(tmp_path / "l2")[:2]
     monkeypatch.setattr(reference, "toolkit", fakereftools.fake_toolkit)
@@ -105,16 +106,19 @@ def test_job_local_under_coverage_publishes_covfrac_or_declines_with_nothing_pub
                          "--scope", json.dumps({"field": RTID, "fid": FID, "sca": SCA}),
                          "--inputs", json.dumps(inputs),
                          "--expects", json.dumps([{"product": "refimages", "key": key, "binding": None}])])
-        outcomes[minimum] = (code, json.loads(capsys.readouterr().out))
+        capsys.readouterr()
+        ((job,),) = query(conn, "SELECT id FROM jobs WHERE run = %s AND stage = 'reference'", (run,))
+        outcomes[minimum] = (code, job)
 
-    code, result = outcomes[0.3]
-    assert code == 0 and result["published"] and result["group"] is not None
-    ((covfrac, covdepth),) = query(conn, "SELECT covfrac, covdepth FROM refimages WHERE job = %s", (result["job"],))
-    assert 0.3 <= covfrac < 1.0 and covdepth == 1.0
+    code, job = outcomes[0.3]
+    assert code == 0
+    ((state, measured),) = query(conn, "SELECT state, manifest -> 'reference' -> 'coverage' ->> 'measured'"
+                                       " FROM jobs WHERE id = %s", (job,))
+    assert state == "published" and 0.3 <= float(measured) < 1.0
+    assert query(conn, "SELECT count(*) FROM official WHERE job = %s AND closed_at IS NULL", (job,)) == [(1,)]
 
-    code, result = outcomes[0.95]
-    assert code == 0 and not result["published"] and result["declined"].startswith("measured coverage ")
-    assert query(conn, "SELECT state, refusal, published_attempt FROM jobs WHERE id = %s", (result["job"],)) == [
-        ("declined", result["declined"], None)]
-    assert query(conn, "SELECT count(*) FROM refimages WHERE job = %s", (result["job"],)) == [(0,)]
-    assert query(conn, "SELECT count(*) FROM official WHERE job = %s", (result["job"],)) == [(0,)]
+    code, job = outcomes[0.95]
+    ((state, exit_code, refusal),) = query(conn, "SELECT state, exit_code, refusal FROM jobs WHERE id = %s", (job,))
+    assert (code, state, exit_code) == (65, "failed", 65) and "measured coverage " in refusal
+    assert query(conn, "SELECT count(*) FROM refimages WHERE job = %s", (job,)) == [(0,)]
+    assert query(conn, "SELECT count(*) FROM official WHERE job = %s", (job,)) == [(0,)]

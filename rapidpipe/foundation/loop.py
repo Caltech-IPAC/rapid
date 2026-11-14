@@ -49,8 +49,7 @@ only from the selected programs' frames and only their images are
 differenced and packeted, while an official reference of the field, built
 from any program, is reused. Objects are matched within the run, as always.
 
-"Pending" is a job of the run in state ``launched`` or ``running``; a
-``declined`` job is neither pending nor failed (below). A job
+"Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported (``failed``, with its scope) and
 not resubmitted, and the work that does not depend on it goes on, so a
 selection drains around it: its key counts as taken until a person reruns it (``job run --job <id>``, or
@@ -133,12 +132,8 @@ One pass, in order:
   ``min_coverage_fraction`` less ``coverage_estimate_tolerance`` gets no job
   and is reported under ``held`` ("estimated coverage X < Z"), with or
   without the bound, every pass, so it is planned once enough frames arrive.
-- A reference job that ``declined`` (its coverage map short of the
-  minimum: nothing published, ``rapidpipe.foundation.publish``) is neither
-  pending nor failed: its field is reported under ``held`` with the reason
-  while the frames it would name are the declined job's, and planned again
-  once they differ (a new frame selected), so the same coadd is never
-  rebuilt.
+  A reference job whose coadd measures short of ``min_coverage_fraction``
+  fails (exit 65, the measured fraction its reason), as any failed job.
 - With ``[reference.selection] before_mjd`` set, the reference's epochs are
   bounded: it names only those rows with ``mjdobs < before_mjd``, and
   waits until the selection's intake has drained (no
@@ -441,7 +436,6 @@ class Snapshot:
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
     packets: dict[tuple[int, int, int], int]                     # key -> packet set job
     catalogs: dict[str, dict]                                    # name -> the dataset's {"key", "job"}
-    declined: dict[int, frozenset] = dataclasses.field(default_factory=dict)  # declined reference job -> its L2 keys
 
 
 def _rows(cur, sql: str, params=()) -> list[dict]:
@@ -476,11 +470,6 @@ def snapshot(conn, run: int) -> Snapshot:
                                   " l.ra0, l.dec0, l.ra1, l.dec1, l.ra2, l.dec2, l.ra3, l.dec3, l.ra4, l.dec4,"
                                   " e.program_id FROM l2files_official l LEFT JOIN exposures_official e"
                                   " ON e.dataset = l.dataset AND e.expid = l.expid WHERE l.dataset = %s", (d,))}
-        declined = defaultdict(set)
-        for r in _rows(cur, "SELECT i.job, i.key FROM job_inputs i JOIN jobs j ON j.id = i.job"
-                            " WHERE j.run = %s AND j.stage = 'reference' AND j.state = 'declined'"
-                            " AND i.kind = 'input' AND i.product = 'l2files'", (run,)):
-            declined[r["job"]].add(_l2key(r["key"]))
     conn.commit()
     by = defaultdict(list)
     for b in bound:
@@ -502,7 +491,7 @@ def snapshot(conn, run: int) -> Snapshot:
         diffs={_l2key(b["key"]): b["job"] for b in by["diffimages"]},
         sources={_l2key(b["key"]): b["job"] for b in by["sources"]},
         packets={_l2key(b["key"]): b["job"] for b in by["packets"]},
-        catalogs=catalogs, declined={job: frozenset(keys) for job, keys in declined.items()})
+        catalogs=catalogs)
 
 
 #: The Batch job name's suffix of the loop's one automatic rerun of a job (``launch.submit``'s
@@ -558,7 +547,7 @@ def reconcile(conn, run: int, client: Any, spot: dict | None = None,
     started = time.monotonic()
     with conn.cursor() as cur:
         cur.execute("SELECT id, stage, state, batch_job_id, refusal FROM jobs WHERE run = %s"
-                    " AND state NOT IN ('published', 'declined') ORDER BY id", (run,))
+                    " AND state <> 'published' ORDER BY id", (run,))
         rows = [r for r in cur.fetchall() if r[3]]
     conn.commit()
     ids = [r[3] for r in rows]
@@ -805,11 +794,6 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         raise ValueError(f"[reference.selection] selection_type {mode!r} is not one of {coverage.SELECTION_TYPES}")
     min_frames = int(chosen["min_frames"])
     held_refs = {(int(j["scope"]["field"]), int(j["scope"]["fid"])) for j in taken["reference"]}
-    declined = defaultdict(list)                # (field, fid) -> its declined jobs' (L2 keys, job, reason)
-    for j in run_jobs["reference"]:
-        if j["state"] == "declined":
-            declined[int(j["scope"]["field"]), int(j["scope"]["fid"])].append(
-                (snap.declined.get(j["id"], frozenset()), j["id"], j.get("refusal")))
     scope_sca = {}                              # (field, fid) -> the first SCA of the rows it serves
     for (_, sca, fid), row in after.items():
         scope_sca[row["field"], fid] = min(sca, scope_sca.get((row["field"], fid), sca))
@@ -838,12 +822,6 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
                 held.append({"field": field, "fid": fid, "reason": held_why[field, fid]})
                 continue
             if mode == "nframes" and len(rows) < min_frames:
-                continue
-            same = [(job, why) for keys, job, why in declined[field, fid]
-                    if keys == {(e, s, fid) for e, s, _ in rows}]
-            if same:
-                held.append({"field": field, "fid": fid,
-                             "reason": f"job {same[-1][0]} declined these frames: {same[-1][1]}"})
                 continue
             held_refs.add((field, fid))
             out.append({"stage": "reference", "scope": {"field": field, "fid": fid, "sca": scope_sca[field, fid]},
@@ -955,13 +933,13 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
 
 
 #: The job states ``job wait`` waits for.
-ENDED = ("published", "failed", "declined")
+ENDED = ("published", "failed")
 
 
 def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: float,
          interval: float = 30.0, sleep: Callable[[float], None] = time.sleep,
          clock: Callable[[], float] = time.monotonic) -> dict:
-    """Block until every job of ``jobs`` is ``published``, ``failed`` or ``declined``, or ``timeout`` seconds pass.
+    """Block until every job of ``jobs`` is ``published`` or ``failed``, or ``timeout`` seconds pass.
 
     Each check first reconciles the jobs' runs with Batch (``batch``, a Batch
     client, or ``None`` for local jobs), so a container that died without its
@@ -982,7 +960,7 @@ def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: 
                 raise NotFound(f"no job {', '.join(map(str, missing))}")
             retrying = set()
             if batch is not None:
-                for run in sorted({run for run, state in rows.values() if state not in ("published", "declined")}):
+                for run in sorted({run for run, state in rows.values() if state != "published"}):
                     retrying |= set(reconcile(conn, run, batch)["retrying"])
                 with conn.cursor() as cur:
                     cur.execute("SELECT id, run, state FROM jobs WHERE id = ANY(%s)", (list(jobs),))

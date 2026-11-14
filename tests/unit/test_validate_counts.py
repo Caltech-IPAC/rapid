@@ -1,7 +1,6 @@
 """scripts/validate_run.py's counts and tables checks: what makes a run not clean.
 
-Contracts: a run with a failed job, or with no jobs, fails ``counts``, and a
-declined job does not; a run
+Contracts: a run with a failed job, or with no jobs, fails ``counts``; a run
 with no published job fails ``tables``; with ``--scas``, a pending job whose scope names another SCA (its
 ``sca``, or its SOC stem's ``wfiNN``) is a second loop's and not counted; a
 job naming no SCA (a field's) is always counted; without ``--scas`` every
@@ -56,10 +55,8 @@ def fake_q(jobs: list[dict]):
 DONE = {"stage": "psf", "state": "published", "scope": {"sca": 8}}
 
 
-@pytest.mark.parametrize("jobs, clean", [([DONE], True), ([DONE, {**DONE, "state": "failed"}], False), ([], False),
-                                         ([DONE, {"stage": "reference", "state": "declined", "scope": {"field": 7}}],
-                                          True)],
-                         ids=["published", "failed", "no-jobs", "declined"])
+@pytest.mark.parametrize("jobs, clean", [([DONE], True), ([DONE, {**DONE, "state": "failed"}], False), ([], False)],
+                         ids=["published", "failed", "no-jobs"])
 def test_counts_fails_a_run_with_a_failed_job_or_no_jobs(monkeypatch, jobs, clean):
     monkeypatch.setattr(validate_run, "q", fake_q(jobs))
     assert validate_run.check_counts(1) is clean

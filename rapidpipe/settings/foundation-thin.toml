@@ -337,8 +337,8 @@ max_frames = 25
 # miss it and stops once max_coverage_fraction of its pixels reach
 # max_coverage_depth or at max_frames; it holds the field when the estimated
 # fraction at min_coverage_depth is below min_coverage_fraction less
-# coverage_estimate_tolerance, and the stage declines a coadd whose coverage
-# map is below min_coverage_fraction (rapidpipe.products.coverage). min_frames
+# coverage_estimate_tolerance, and the stage fails a coadd whose coverage
+# map is below min_coverage_fraction, exit 65 (rapidpipe.products.coverage). min_frames
 # is not used under "coverage", and "nframes" ignores the coverage keys
 # (Azalee, 2026-11-10).
 selection_type = "nframes"
