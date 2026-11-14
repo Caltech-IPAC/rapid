@@ -32,7 +32,11 @@ later; the read role `rapid_read` selects every table and view, and the
 same by default (that half added in part 6 step 1). SMDC is a prototype
 (Ben, 2026-10-21; rapid_docs `decisions.md`): no backup before the
 replace, no pooler fence; the rollback is the previous schema in git. The
-statements are Current procedure's bring-up.
+statements are Current procedure's bring-up. Done a second time on
+2026-11-14 at `3f504508` (part 13's cutover-db-window-2 row), this time
+as `postgres` on the database host after a dump of every row to the
+backups bucket, with the identity counters of `runs` and `jobs` restarted
+above their old maxima.
 
 ## Part 2: the inputs
 
@@ -321,6 +325,7 @@ regression), run 158 (FAIL on the consumer only: the gate holds all but one of i
 | finder-3x3-accept | `[difference.psfcat_diffimage] min_separation` 1.0 → 1.5 and the commented `[reference.psfcat]` twin (PR 605, `b59eda3f`): the PSF-fit finder's local maximum is the 3x3 box again on photutils 3.1.1 (3.1.0's #2493 made 1.0 the 4-neighbour plus). Accepted by Ben 2026-11-12 19:38 UTC against 3.0.0's rows on job 109322 (11,930 / 16,547 against 11,930 / 16,506, photutils 3.1's masked-pixel and off-image-centroid changes; rapid_docs `decisions.md`). `rapid-rebuild:132` registered 2026-11-12 19:53 UTC from `b59eda3f` (holding PR 600, so also the drift gate's registration) on the newest base `base-43152702795-1` (`1e5a0b6d`), `sha256:712d8574…`. Run 237, run 187's SCA 3 sample at `:132`, loop exit 0, 110 of 110 differences and packet sets, 0 failed, 56 m 12 s. Against run 235 (`:131`, base `576304f3`) on 110 equal-reference differences: scored +0.005 %, negative scored +0.19 %, sources −0.09 %, negative sources −0.59 %, packets 220,000 and held sets 109 both unmoved; the Throughput bar fails on the base, not the setting: `rb` over 1e-6 on 2,488,689 of 2,537,235 xsources (same rows and positions, max 0.95) and S/N > 20 sources +3.8 %. Base `576304f3` stays pinned for later items until Ben rules | 237 | PR 605, this PR; rapid_docs 219 (findings page, The finder's 3x3 box on the newer base; decisions.md) |
 | base-rb-record | the newer base's `rb` move accepted without a bisect (Ben, 2026-11-12 21:37 UTC; rapid_docs `decision-base-1e5a0b6d-rb`): from `rapid-rebuild:132` the image builds on base `1e5a0b6d` (photutils 3.1.1) and the pin on `576304f3` is lifted. On run 237 against run 235 `rb` differs by more than 1e-6 on 2,488,689 of 2,537,235 xsources at identical rows and positions (max 0.95), S/N > 20 sources +3.8 %, scored +0.005 %, packets and held sets equal; the cause is the re-locked base, the package unverified. A later item's like-for-like reference is a run on the same base, run 237 the first. Docs only: no code, no image, no run | 237 | this PR; rapid_docs 220 (decisions.md, the findings page's outcome) |
 | ports-hlwas-regression | The ports-only tip `497691b7` (draft PR 620's 19 port picks and the cutover's scope cut) on HLWAS's injected drift epoch 4040101 (r00342-inj1, pointing 001_0001, SCA 8, F146), against the nightly drift runs 238 (`rapid-rebuild:132`, `b59eda3f`, base `1e5a0b6d`) and 239 (`rapid-rebuild:133`, `745d3d81`, base `dab32480`). Run 240 under dataset `ports-hlwas-regression-1` was made in the nightly's shape at `rapid-rebuild:134` (`sha256:fd062fec…`, base `dab32480`), and every Batch job ran at that digest. Its psf, four intake, reference and difference jobs published and 0 failed. The loop exited 64 at packet planning: "the run has no official catalogs binding named ss for the packet stage, and [packet] ss_match is on". That is run 239's cause too, read in its night's log: since `076c41d3` the base ships `ss_match = true` and the nightly imports only Gaia, so the nightly has made no packet job since that commit (it predates the ports). `check_run.sh` returned FAIL: validate 5/6 (lineage: binding 67794's empty `sources` set "has no published row"), reader 0/0, consumer 0/0 ("no stamped packet set"). Drift columns as 238 / 239 / 240 against `drift-spread.toml`: packets 380 / 0 / 0, RED, emptied by the `ss` cause; core −0.003865 / −0.003865 / −0.003909, green, moved −0.000044 (612); ring −0.003673 / −0.003673 / −0.003628, RED as before, moved +0.000045 (612); detected at the threshold 156 / 156 / 156, green, unmoved; false positives 191 / 0 / 0, RED, emptied by the `ss` cause; difference 137.9 / 136.8 / 106.5 s, green, moved −30.3 s (the scope cut: no ZOGY 13.2 s, ZOGY catalogs 12.1 s or naive 3.0 s). Recovery (`completeness.py`): 193 of 200 detected on all three runs, every AB bin equal, 13 of 20 at 26.5. Alerted and sent were 189 on 238 and 0 on 239 and 240 (the `ss` cause). Kept 508 → 505, S/N > 20 180 → 184 and xsources 502 → 486 (612: its 2 px bright-source mask fix moves the masks of the base's OpenUniverse SFFT block, bsmask 50 / 100, which HLWAS runs). 592's AB magnitudes moved nothing measured: SFFT's gain-match and mask catalogs keep `[sextractor_gainmatch]`'s zero point 0. Under `skip_loading_sources_records = true`, 0 `sources` rows and 0 memberships were loaded (239: 776 and 393). That fails `validate_run.py`'s lineage check and leaves its catalog check checking 0 rows; the drift gate, `compare_runs.py` and `completeness.py` read the xsources and job metrics and lost nothing. The scripts are identical between `745d3d81` and `497691b7` (`stream_l2_files.py` added), and they read run 238 as the nightly's own table did. For Ben to accept; not merged until `cutover-db-window` | 238, 239, 240 | this PR; draft rapid 620 |
+| cutover-db-window-2 | SMDC's `public` recreated from the merged `schema.sql` (the integration branch: rapid 620 rebase-merged at `b0d9bae1`, `rebuild` `745d3d81` → `4b7055c9`; 621 squash-merged, → `3f504508`; rapid_docs 222 → `main` `423615d0`, all by attempt 1 at 10:53 to 11:00 UTC) in one transaction as `postgres` by `podman exec` on rapid-db (11:26:12 to 11:26:49 UTC, psql 0, last tag COMMIT): `DROP SCHEMA public CASCADE` dropped 4,460 objects (16,534 relations and 63 functions) in 4.7 s, `CREATE SCHEMA`, `schema.sql` (sha256 `ceba164a…`, q3c 2.0.5), the eleven grants above, `runs.id` and `jobs.id` restarted at 244 and 131,976 above the old maxima 243 and 131,975, and the assertion on the other schemas (ops 14 relations, 0 functions, 6 types, 19 constraints; pgbouncer 0, 1, 0, 0; no other) held. Every row went first to `s3://<the backups bucket>/archive/pre-cutover-public/20261114T104606Z/` (`pg_dump` custom format, 4,138,330,252 bytes, sha256 `bc7d3f3f…`, the 4,383 children's data excluded by name, listed back: 4,411 tables, 28 with data, runs 243, jobs 131,975 rows). Attempt 1's transaction (11:01 UTC) had run every granted statement clean and rolled back whole on its own diagnostic `SELECT` before `COMMIT` (`seqstart`, not a column of `pg_sequences`); this run is the same file less that line and the one after `COMMIT`. After the commit a `pg_dump --schema-only -n public` of the live database equals one of `schema.sql`, the grants and the restarts applied by the same route to an empty database in the same image, but for the dump's random `\restrict` token and the order of two entries inside one default-privileges ACL; 26 tables, 18 views, 29 functions, 9 sequences, 37 q3c members; `rapid_rebuild_pipeline` and `rapid_read` pass every privilege read and the pipeline's own login reads `runs` (0 rows) through the pooler. Then `rebuild-3f504508…-dab32480` (`sha256:1efd8acf…`) built on base `dab32480`, `rapid-rebuild:136` registered, production promoted to that digest (`rapid-rebuild-production:94`, `ProductionReleaseIdentity rebuild-3f504508…`, from `rebuild-745d3d81…` / `sha256:e535708c…`), and one program 1049 intake job (F062 SCA 11 expid 1010101, `flight.toml`) published under dataset `window-smoke`, run 244, job 131977, its `exposures` row `program_id` 1049. The nightly drift's comparator (runs 238 and 239) went with the drop; its window stays disabled until a new baseline. Evidence under run 244's `qa/cutover-db-window-2/` | 244 | this PR; rapid 620, 621; rapid_docs 222 |
 
 ## Current procedure
 
@@ -394,8 +399,19 @@ precision,integer)', 'EXECUTE')` and `has_function_privilege(...,
 the child tables of `sources` and `xsources`, and of `objects`,
 `memberships`, `packets` and `forced`, as the schema's owner; `SELECT
 q3c_version()` answers; `rp run show 1` exits 64, "run 1 does not exist"
-(connected, empty). A fresh `schema.sql` takes no dated file
-(`database/README.md`). A schema change to SMDC's existing database is
+(connected, empty). On a database that holds rows (2026-11-14): first
+`pg_dump` of `public` in custom format to the backups bucket's `archive/`,
+the children's data excluded by their exact names from `pg_inherits`,
+listed back with `pg_restore -l`; the transaction runs as `postgres` by
+`podman exec -i rapid-postgres psql -X -f -` on the database host with
+`lock_timeout` set, restarts the identity columns of `runs` and `jobs`
+above the old maxima so no new run writes into an old run's output
+prefix, and asserts the object counts of `ops` and `pgbouncer` before
+`COMMIT`; nothing of the operator's own sits between `BEGIN` and `COMMIT`
+but what has already run clean once. The result is checked against a
+`pg_dump --schema-only` of the same statements applied to an empty
+database in the same image, made before the act. A fresh `schema.sql`
+takes no dated file (`database/README.md`). A schema change to SMDC's existing database is
 one dated file, one granted statement as `postgres` on the database host
 (`podman exec -i rapid-postgres psql -U postgres -d rapid -X -v
 ON_ERROR_STOP=1`), applied once and recorded in its step.
@@ -595,6 +611,11 @@ run 71's source root.
 Carried from part 13's results (through PR 471), with the earlier parts'
 items no later part closed; each names where its numbers are.
 
+- **The nightly drift has no baseline**: its comparator runs 238 and
+  239 went with `public` on 2026-11-14 (cutover-db-window-2), and
+  `rapid-op-nightly-drift` stays disabled (Ben, 2026-11-14 07:29 UTC)
+  until a run at the tip stands as the new one (nightly-drift-gate,
+  rapid_docs' drift page).
 - **SFFT, the default since sfft-default**: under the OpenUniverse
   block it trails ZOGY on HLWAS only at AB 26 and 26.5 at half the false
   positives (runs 145, 146). OpenUniverse, GBTDS, flight and RimTimSim
@@ -681,9 +702,6 @@ items no later part closed; each names where its numbers are.
   read by nothing (PR 446).
 - **Every `import` manifest's provenance** is the constant "imported from
   IMSS socsimsdb 20260821 run", even for archive Gaia boxes (PR 449).
-- **`sources_official` on SMDC** lacks the three pixel columns: the
-  view's `t.*` was expanded at creation, and re-creating it needs a `DROP
-  VIEW` grant (dev-columns).
 - **The publisher binds an expected key no loaded row holds** (caught
   afterwards by `validate_run.py`'s lineage check), and no setting turns
   the packet job's Kafka send off (mig-quickstart).
