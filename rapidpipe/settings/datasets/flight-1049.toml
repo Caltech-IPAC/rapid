@@ -87,6 +87,14 @@ use_nominal_zptmag = true
 # ZOGY and no naive subtraction, whose products are diagnostics nothing
 # published reads (Ben, 2026-11-14).
 skip_loading_sources_records = true
+# With ZOGY off and crossconv_flag false below, no published image or
+# catalog reads the reference PSF: what is left is the quality metrics'
+# star list, and under "measured" a field of fewer than 10 measurable
+# reference stars fails its difference (exit 65). "science" measures
+# nothing and takes those stars from the reference mosaic's catalog, as
+# the GBTDS overlays do, until a precomputed reference PSF (port 7A) lands
+# (Ben, 2026-11-14).
+reference_psf = "science"
 
 [difference.zogy]
 run_zogy = false
