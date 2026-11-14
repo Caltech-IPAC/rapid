@@ -353,6 +353,51 @@ def stem_ids(stem: str) -> dict | None:
     return None
 
 
+def exposure_ids(conn, dataset: str, names: Iterable[str]) -> dict[str, int]:
+    """The ``exposure_ids`` id of each name in ``dataset``, assigned where the table holds none.
+
+    One operation of two SQL commands under ``READ COMMITTED``, committed
+    before it returns: ``INSERT ... ON CONFLICT (dataset, name) DO NOTHING``
+    for every name, then a ``SELECT`` of the names' rows. Two resolutions of
+    one name at once agree: the second's insert waits on the first's
+    uncommitted row and then does nothing, and its select, a new snapshot,
+    reads the row the first committed. Never one statement that inserts and
+    returns: a conflicting row not yet visible to that statement's snapshot
+    returns nothing. The pass calls this before it plans, so every intake it
+    submits carries an id the intake's own check, on another connection,
+    will find.
+
+    Parameters
+    ----------
+    conn
+        A connection; the transaction is committed, or rolled back and the error raised.
+    dataset : str
+        The dataset the names belong to.
+    names : iterable of str
+        The producer's names (:func:`stem_ids`); duplicates are resolved once.
+
+    Returns
+    -------
+    dict
+        Name to ``expid``, every name present.
+    """
+    wanted = sorted(set(names))
+    if not wanted:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO exposure_ids (dataset, name) SELECT %s, unnest(%s::text[])"
+                        " ON CONFLICT (dataset, name) DO NOTHING", (dataset, wanted))
+            cur.execute("SELECT name, expid FROM exposure_ids WHERE dataset = %s AND name = ANY(%s)",
+                        (dataset, wanted))
+            found = {name: int(expid) for name, expid in cur.fetchall()}
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return found
+
+
 def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]:
     """Every ``_cal.asdf`` stem (``_cal_lite.fits.gz``, :data:`SOCSIMS_LITE`) under ``source_root`` (``s3://bucket/prefix/``) in an observation of a
     selected filter.

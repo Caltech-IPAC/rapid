@@ -21,6 +21,11 @@
 --   psfs                               dataset, fid, sca, kind
 --   catalogs                           dataset, name, version
 --
+-- An `expid` is the integer `exposure_ids` handed out for the producer's
+-- own name for the exposure within its dataset (rapid_docs exposure-id,
+-- Ben's ruling of 2026-11-14); it carries no meaning, and the name beside it
+-- says which exposure it is.
+--
 -- A set (a reference image, a source set, a packet set) is identified by its
 -- job: its child rows (refimimages, refimcatalogs, sources, objects,
 -- memberships, packets, forced, external) carry the set's job and their own
@@ -203,6 +208,26 @@ CREATE TABLE job_inputs (
 CREATE INDEX job_inputs_job_idx ON job_inputs (job, kind);
 CREATE INDEX job_inputs_source_job_idx ON job_inputs (source_job);
 
+-- The exposure ids: the producer's own name for an exposure, unique within a
+-- dataset, and the integer the database handed out for it (rapid_docs
+-- exposure-id). Bookkeeping, as jobs and official are, not a product: no job
+-- writes it and nothing binds it. The loop resolves the names of the stems it
+-- is about to take in before it plans (rapidpipe.foundation.loop.exposure_ids:
+-- INSERT ... ON CONFLICT DO NOTHING, then SELECT, committed before any intake
+-- is submitted) and puts the id in each intake's scope; the intake checks its
+-- scope's id against this table; `rapidpipe exposure id` resolves one by hand.
+-- Rows are never changed or deleted, so a name keeps its id across passes,
+-- reruns and runs of its dataset; one identity serves every dataset, so no two
+-- exposures anywhere share an expid, and the same exposure taken into two
+-- datasets has two.
+CREATE TABLE exposure_ids (
+    expid integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    dataset text NOT NULL,
+    name text NOT NULL,                              -- the producer's name for the exposure (loop.stem_ids)
+    created timestamp with time zone DEFAULT now() NOT NULL,
+    UNIQUE (dataset, name)
+);
+
 --------------------------------------------------------------------------------
 -- Scientific tables: every row names its job
 --------------------------------------------------------------------------------
@@ -210,7 +235,7 @@ CREATE INDEX job_inputs_source_job_idx ON job_inputs (source_job);
 CREATE TABLE exposures (
     job bigint NOT NULL REFERENCES jobs (id),
     dataset text NOT NULL,
-    expid integer NOT NULL,                          -- the exposure's scientific id, from its producer
+    expid integer NOT NULL,                          -- exposure_ids' id for the producer's name of the exposure
     dateobs timestamp without time zone NOT NULL,    -- DATE-OBS
     exptime real NOT NULL,                           -- EXPTIME
     program_id integer,                              -- the file's PROGRAM, or the dataset's [intake] program_id

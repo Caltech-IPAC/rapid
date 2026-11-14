@@ -18,7 +18,7 @@ from psycopg2 import errors
 
 SCHEMA = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
 
-BOOKKEEPING = ("runs", "jobs", "job_inputs", "official")
+BOOKKEEPING = ("runs", "jobs", "job_inputs", "official", "exposure_ids")
 STATIC = ("filters", "scas", "surveys", "fields")
 PRODUCT_TABLES = (
     "exposures", "l2files", "refimages", "refimimages", "refimcatalogs",
