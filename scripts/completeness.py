@@ -142,6 +142,13 @@ def truth_ids(truth: pd.DataFrame, names: dict[str, int]) -> pd.DataFrame:
     return truth
 
 
+def read_truth(files, names: dict[str, int]) -> pd.DataFrame:
+    """The truth files as one frame keyed by the run's ids (:func:`truth_ids`), each file keyed on its
+    own before they are joined, so a file written with packed ids keeps them beside one written with
+    exposure names."""
+    return pd.concat([truth_ids(pd.read_parquet(f), names) for f in files], ignore_index=True)
+
+
 def _terms(x, y):
     return np.column_stack([np.ones_like(x), x, y, x * x, x * y, y * y])
 
@@ -447,9 +454,8 @@ def measure(data: dict, files: list[str], radius: float = 0.3, expids: set[int] 
             k &= pd.Series([e in epochs for e in zip(df["expid"], df["sca"])], index=df.index, dtype=bool)
         return df[k]
 
-    truth = pd.concat([pd.read_parquet(get(f) if f.startswith("s3://") else f) for f in files],
-                      ignore_index=True)
-    truth = difference_flux(truth_ids(truth, data["names"]), data.get("before_mjd"))
+    truth = read_truth([get(f) if f.startswith("s3://") else f for f in files], data["names"])
+    truth = difference_flux(truth, data.get("before_mjd"))
     sources, packets, metrics = data["sources"], data["packets"], data["metrics"]
     diffs = {k for k in data["diffs"] if (expids is None or k[0] in expids) and (epochs is None or k in epochs)}
     truth, sources, packets = keep(truth), keep(sources), keep(packets)

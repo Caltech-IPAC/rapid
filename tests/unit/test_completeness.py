@@ -10,7 +10,8 @@ when it did not; a source in the reference epochs is binned by its change
 against their mean, one injected after the bound by its own magnitude; a
 truth written with exposure names is matched to the run's ids through the
 dataset's exposure_ids, and one written with packed ids through the legacy
-mapping, with the same counts; a packed id that names two of the dataset's
+mapping, with the same counts; a file of each kind read together each keeps
+its ids; a packed id that names two of the dataset's
 exposures is refused, naming both, and nothing is mapped by guess.
 """
 
@@ -223,6 +224,15 @@ def test_a_truth_with_names_and_one_with_packed_ids_match_the_runs_ids_with_the_
     # A name the dataset has no id for keeps none: its rows are unprocessed, never matched by guess.
     stranger = completeness.truth_ids(pd.DataFrame({"exposure": ["r0034201009001004001_0001"], "sca": [8]}), IDS)
     assert stranger["expid"].isna().all()
+
+
+def test_a_packed_id_file_read_beside_a_named_file_keeps_its_ids(tmp_path):
+    named = truth_frame(2, key="exposure")
+    legacy = named[named["exposure"] == NAMES[0]].drop(columns="exposure").assign(expid=PACKED[NAMES[0]])
+    legacy.to_parquet(tmp_path / "legacy.parquet")
+    named[named["exposure"] == NAMES[1]].to_parquet(tmp_path / "named.parquet")
+    truth = completeness.read_truth([tmp_path / "legacy.parquet", tmp_path / "named.parquet"], IDS)
+    assert truth["expid"].tolist() == [4001] * 3 + [4002] * 3
 
 
 def test_a_packed_id_that_names_two_exposures_of_the_dataset_is_refused_naming_both():
