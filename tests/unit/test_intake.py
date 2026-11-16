@@ -33,7 +33,11 @@ the shift at the centre; the GBTDS overlay turns it on and HLWAS's does not;
 ``[intake] gaia_proper_motion`` on, a Gaia star that moved by its proper
 motion from the copy's ``ref_epoch`` to the frame's mid-exposure reads
 offset zero, and off (the shipped value; flight's overlay turns it on) the
-offset is the copy's positions' as they are.
+offset is the copy's positions' as they are; ``[intake] gw_ghost`` (empty
+in the base) sets its SCA's box NaN in ``SCI``, ``ERR`` and ``VAR_*`` over the
+file's guide window rows plus the box's row offsets, leaves ``DQ`` as it was,
+writes ``NGWGHOST`` and counts the box in the manifest, and flight's box is
+WFI12's ghost, columns 2645 to 2668 and window rows plus 0 to 2.
 """
 
 from __future__ import annotations
@@ -68,13 +72,15 @@ EPSF = "roman_wfi_epsf_0276.asdf"
 SETTINGS = {"intake": {"source_root": None, "unsigned": False, "reader": "soc-l2", "sip_degree": 5,
                        "sip_max_pix_error": 0.1, "gzip_level": 1, "program_id": -1,
                        "limmag_nsigma": 5.0, "limmag_clip_sigma": 3.0, "limmag_maxiters": 10,
-                       "nominal_zptmag": {"F146": 27.5}, "dq_mask_bits": 0,
+                       "nominal_zptmag": {"F146": 27.5}, "dq_mask_bits": 0, "gw_ghost": [],
                        "crpix_shift": [0.0, 0.0], "rederive_wcs": False},
             "psf": {"crds_server": "https://crds.invalid"}}
 DISTORTION = "roman_wfi_distortion_0003.asdf"
 #: Pixels the synthetic file flags, each (y, x, DQ value); (1, 1) is also NaN in the file itself.
 FLAGGED = [(1, 1, 1), (2, 3, 33554432), (5, 7, 2 | 1024), (9, 9, 2), (11, 4, 4)]
 NATIVE_NAN = [(1, 1), (20, 20)]
+#: The file's guide window rows, detector pixels with the 4-px reference border: science rows 10 to 13.
+WINDOW_ROWS = (14, 17)
 
 
 def schema_columns(table: str) -> set[str]:
@@ -139,6 +145,7 @@ def write_asdf(path: Path, stem: str = STEM) -> None:
     meta.calibration_software_version = "0.23.0"
     meta.ref_file.epsf = f"crds://{EPSF}"
     meta.ref_file.distortion = f"crds://{DISTORTION}"
+    meta.guide_star.window_ystart, meta.guide_star.window_ystop = WINDOW_ROWS
     path.parent.mkdir(parents=True, exist_ok=True)
     model.save(path)
 
@@ -187,11 +194,12 @@ def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                expects_exposure: bool = True, dq_mask_bits: int = 0,
                crpix_shift: tuple[float, float] = (0.0, 0.0),
                rederive_wcs: bool = False, program_id: int | str = -1,
-               surveys: tuple[int, ...] = (-1, -4), exposures=None) -> Path:
+               surveys: tuple[int, ...] = (-1, -4), exposures=None, gw_ghost=()) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
     settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
                                        "dq_mask_bits": dq_mask_bits, "crpix_shift": list(crpix_shift),
+                                       "gw_ghost": list(gw_ghost),
                                        "rederive_wcs": rederive_wcs, "program_id": program_id}}
     expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
                 "binding": None}]
@@ -428,6 +436,38 @@ def test_the_mask_sets_sci_err_and_var_nan_keeps_dq_and_counts_the_union(tmp_pat
     assert manifest["dq"] == {"mask_bits": bits, "masked": 3, "nan_input": 2,
                               "nan_output": len(union)}
     assert manifest["metrics"]["masked_fraction"] == pytest.approx(3 / N**2)
+
+
+def test_the_flight_ghost_box_is_wfi12s_fixed_columns_over_the_window_rows():
+    from rapidpipe.foundation.layers import resolve
+    from rapidpipe.science.intake import gw_ghost_pixels
+
+    settings = REPO / "rapidpipe/settings"
+    base, _ = resolve(settings / "foundation-thin.toml")
+    assert base["intake"]["gw_ghost"] == []
+    body, _ = resolve(settings / "foundation-thin.toml", settings / "datasets/flight.toml")
+    ghosts = body["intake"]["gw_ghost"]
+    # r0104901001001002002_0003_wfi12_f158: window rows 1804 to 1819, the ghost at science rows 1801 to 1816
+    box = gw_ghost_pixels((4088, 4088), 12, 1804, 1819, ghosts)
+    rows, cols = np.nonzero(box.any(axis=1))[0], np.nonzero(box.any(axis=0))[0]
+    assert (rows.min(), rows.max(), cols.min(), cols.max()) == (1800, 1817, 2645, 2668)
+    assert box.sum() == 18 * 24
+    assert gw_ghost_pixels((4088, 4088), 7, 1804, 1819, ghosts) is None
+
+
+def test_the_ghost_box_is_nan_in_sci_err_and_var_keeps_dq_and_is_counted(tmp_path, source):
+    ghost = {"sca": 8, "columns": [30, 33], "rows": [0, 2]}
+    prefix = run_intake(tmp_path, source, gw_ghost=[ghost])
+    images = hdus(prefix)
+    box = np.zeros((N, N), dtype=bool)
+    box[10:16, 30:34] = True  # science rows 10 to 13 of the window, plus 0 to 2
+    for name in ("SCI", "ERR", "VAR_POISSON"):
+        assert np.isnan(images[name].data[box]).all() and images[name].header["NGWGHOST"] == 24, name
+    assert {tuple(p) for p in np.argwhere(np.isnan(images["SCI"].data))} == \
+        {tuple(p) for p in np.argwhere(box)} | set(NATIVE_NAN)
+    assert "NGWGHOST" not in images["DQ"].header and not images["DQ"].data[box].any()
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["dq"]["gw_ghost"] == 24 and manifest["dq"]["nan_output"] == 24 + len(NATIVE_NAN)
 
 
 def test_dq_flag_names_decodes_the_mask_in_bit_order():

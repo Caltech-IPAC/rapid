@@ -42,6 +42,18 @@ program_id = ""
 # 72 (WARM), so no value here masks them.
 # DO_NOT_USE 1 + SATURATED 2 + DEAD 1024 + HOT 2048 + NONLINEAR 65536 + NO_LIN_CORR 1048576 + UNRELIABLE_FLAT 33554432
 dq_mask_bits = 34671619
+# WFI12's guide-window ghost, a known effect the L2 DQ does not flag yet: a
+# box of near-zero signal (about half its pixels JUMP_DET) at fixed columns
+# 2647 to 2667, 2646 in part, in the guide window's rows moved up one row,
+# wherever the window sits. In all 96 WFI12 cal files of programs 1043
+# (2026-09-20 to 10-03) and 1049 (2026-10-24), windows at x 968 to 3671 and
+# y 196 to 3781, the box reads 0.02 of the background (at most 0.22) with
+# 37% to 64% of its pixels JUMP_DET, and the strips one pixel outside it are
+# clean but column 2646 (half the files) and 2645 (2 files, mildly). No
+# other SCA of program 1049's 288 files of 2026-10-24 shows one. The box is padded one pixel each way: columns 2645
+# to 2668, window rows plus 0 to 2. To be dropped once the L2 DQ flags the
+# ghost (Jacob, 2026-11-16).
+gw_ghost = [{sca = 12, columns = [2645, 2668], rows = [0, 2]}]
 # The sky moves: the intake's gaia_dx_px / gaia_dy_px carry Gaia DR3's stars
 # by their proper motions to each frame's mid-exposure (runbook part 13 step
 # gaia-pm). Without it run 118's intake read the field's proper motion,

@@ -21,6 +21,10 @@ the one addition: where ``DQ & dq_mask_bits`` is nonzero the pixel is NaN
 in ``SCI``, ``ERR`` and every ``VAR_*`` array, each of those HDUs carries
 ``DQMASK`` (the bits) and ``NDQMASK`` (the pixels), and ``DQ`` is written
 unchanged; ``dq_mask_bits = 0`` is `dev`'s conversion, nothing masked.
+A guide-window ghost box (:func:`gw_ghost_pixels`, rebuild-only: a
+detector's fixed columns over the rows of the exposure's own guide window,
+which the L2 DQ does not flag) is set NaN the same way, its pixel count in
+``NGWGHOST``; an empty ``gw_ghost`` masks none.
 
 The second is the GBTDS WCS fix (:func:`rederive_wcs`, STScI's
 ``roman_notebooks`` ``ccs_simulations/fix_gbtds_wcs.py``): given a
@@ -44,7 +48,7 @@ import shutil
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 from astropy.io import fits
@@ -66,6 +70,10 @@ DQ_NODE_NAME = "dq"
 
 #: The nodes set NaN where the DQ mask is set (#238's ``dq_masked_node_names``).
 DQ_MASKED_NODE_NAMES = ("data", "err", "var_poisson", "var_rnoise", "var_flat")
+
+#: Reference pixels on each side of the 4096-px detector the L2 science array leaves out:
+#: ``meta.guide_star.window_*`` count them, the array's rows do not.
+REFERENCE_PIXEL_BORDER = 4
 
 #: The exponent of EXPTIME converting each node from DN/s to DN; unlisted nodes are unscaled.
 EXPTIME_SCALING_EXPONENT = {"data": 1, "err": 1, "var_poisson": 2, "var_rnoise": 2, "var_flat": 2}
@@ -410,6 +418,46 @@ def find_dq_masked_pixels(dq, mask_bits: int) -> np.ndarray:
     return (dq.astype(np.uint32, copy=False) & np.uint32(mask_bits)) != 0
 
 
+def gw_ghost_pixels(shape: tuple[int, int], sca: int, window_ystart, window_ystop,
+                    ghosts: Sequence[Mapping[str, Any]]) -> np.ndarray | None:
+    """True on the guide-window ghost box of ``sca``; None when ``ghosts`` names no box for it.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        The science array's shape (rows, columns).
+    sca : int
+        The file's SCA number.
+    window_ystart, window_ystop : int or None
+        The exposure's guide window rows, ``meta.guide_star.window_ystart`` and
+        ``window_ystop``, in detector pixels that count the reference-pixel border.
+    ghosts : sequence of mapping
+        ``[intake] gw_ghost``: per SCA, ``columns = [first, last]`` (science pixels,
+        inclusive) and ``rows = [start, stop]``, the offsets added to the window's first
+        and last rows in science pixels, padding included.
+
+    Returns
+    -------
+    numpy.ndarray of bool or None
+        The box, clipped to the array, or None for an SCA with no box. A box for this SCA
+        on a file without a guide window is a ``ConversionError``.
+    """
+    boxes = [g for g in ghosts if int(g["sca"]) == sca]
+    if not boxes:
+        return None
+    if len(boxes) > 1:
+        raise ConversionError(f"[intake] gw_ghost names SCA {sca} {len(boxes)} times")
+    if window_ystart is None or window_ystop is None:
+        raise ConversionError(f"[intake] gw_ghost has a box for SCA {sca} but the file has no "
+                              "guide window (meta.guide_star.window_ystart/ystop)")
+    (x0, x1), (dy0, dy1) = boxes[0]["columns"], boxes[0]["rows"]
+    y0 = int(window_ystart) - REFERENCE_PIXEL_BORDER + int(dy0)
+    y1 = int(window_ystop) - REFERENCE_PIXEL_BORDER + int(dy1)
+    mask = np.zeros(shape, dtype=bool)
+    mask[max(y0, 0):max(y1 + 1, 0), max(int(x0), 0):max(int(x1) + 1, 0)] = True
+    return mask
+
+
 def dq_flag_names(mask_bits: int) -> str:
     """The roman_datamodels pixel flags a DQ mask holds, joined by ``+``, for the log.
 
@@ -432,11 +480,12 @@ def dq_flag_names(mask_bits: int) -> str:
 
 def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, exptime,
                     sip_degree: int, dq_masked: np.ndarray | None = None,
-                    dq_mask_bits: int = 0) -> fits.ImageHDU:
+                    dq_mask_bits: int = 0, gw_ghost: np.ndarray | None = None) -> fits.ImageHDU:
     """One ASDF array as an image HDU in DN, with the science WCS when laid out like the science image.
 
     With ``dq_masked``, a node of :data:`DQ_MASKED_NODE_NAMES` is NaN there
-    and its header records ``DQMASK`` and ``NDQMASK``.
+    and its header records ``DQMASK`` and ``NDQMASK``; with ``gw_ghost``, NaN
+    there too and ``NGWGHOST`` records its pixels.
     """
     extname = "SCI" if node_name == SCIENCE_NODE_NAME else node_name.upper()
     exponent = EXPTIME_SCALING_EXPONENT.get(node_name, 0)
@@ -448,6 +497,9 @@ def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, ex
     masked = dq_masked is not None and node_name in DQ_MASKED_NODE_NAMES
     if masked:
         data[dq_masked] = np.nan
+    ghosted = gw_ghost is not None and node_name in DQ_MASKED_NODE_NAMES
+    if ghosted:
+        data[gw_ghost] = np.nan
     if array.shape == science_shape:
         hdr = build_science_header(primary_hdr, wcs_header, array.shape, extname, sip_degree)
     else:
@@ -466,6 +518,8 @@ def build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, ex
     if masked:
         hdr["DQMASK"] = (dq_mask_bits, "DQ bits set to NaN here")
         hdr["NDQMASK"] = (int(np.count_nonzero(dq_masked)), "number of pixels set to NaN by DQMASK")
+    if ghosted:
+        hdr["NGWGHOST"] = (int(np.count_nonzero(gw_ghost)), "pixels NaN on the guide-window ghost")
     return fits.ImageHDU(data=data, header=hdr, name=extname)
 
 
@@ -482,13 +536,16 @@ def build_table_hdu(node_name, table):
 
 def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_error: float,
                     nominal_zptmag: Mapping[str, float], swname: str, swvers: str,
-                    created: str, dq_mask_bits: int = 0) -> dict[str, Any]:
+                    created: str, dq_mask_bits: int = 0,
+                    gw_ghost: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """Write the FITS file of an open data model one HDU at a time.
 
     Returns ``hdus`` (the EXTNAMEs), ``dq_masked`` (pixels the DQ mask set
-    NaN, None when nothing was masked) and ``sci_nan_input`` (the science
-    image's own NaN pixels before the mask). The HDUs go to
-    ``<fits_path>.partial``, moved into place only after the last.
+    NaN, None when nothing was masked), ``gw_ghost`` (pixels of the file's
+    guide-window ghost box, :func:`gw_ghost_pixels`, None when ``gw_ghost``
+    names no box for its SCA) and ``sci_nan_input`` (the science image's own
+    NaN pixels before either). The HDUs go to ``<fits_path>.partial``, moved
+    into place only after the last.
     """
     import asdf
 
@@ -513,6 +570,14 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
         dq_masked = find_dq_masked_pixels(dict(image_nodes)[DQ_NODE_NAME], dq_mask_bits)
         log.info("DQ mask %d (%s): %d pixels (%.3f%%) set to NaN", dq_mask_bits,
                  dq_flag_names(dq_mask_bits), np.count_nonzero(dq_masked), 100.0 * np.mean(dq_masked))
+    ghost = None
+    if gw_ghost:
+        window = dm.meta.guide_star
+        sca = int(str(dm.meta.instrument.detector).upper().removeprefix("WFI"))
+        ghost = gw_ghost_pixels(science_shape, sca, getattr(window, "window_ystart", None),
+                                getattr(window, "window_ystop", None), gw_ghost)
+        if ghost is not None:
+            log.info("guide-window ghost: %d pixels set to NaN", np.count_nonzero(ghost))
 
     partial = Path(str(fits_path) + ".partial")
     partial.unlink(missing_ok=True)
@@ -522,7 +587,7 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
         extnames.append("PRIMARY")
         for node_name, array in image_nodes:
             hdu = build_image_hdu(node_name, array, primary_hdr, wcs_header, science_shape, exptime,
-                                  sip_degree, dq_masked, dq_mask_bits)
+                                  sip_degree, dq_masked, dq_mask_bits, ghost)
             fits.append(partial, hdu.data, hdu.header, checksum=True)
             extnames.append(hdu.name)
             del hdu  # one array in memory at a time
@@ -540,6 +605,7 @@ def build_fits_file(dm, asdf_path, fits_path, *, sip_degree: int, sip_max_pix_er
     log.info("wrote %s with %d HDUs: %s", fits_path, len(extnames), ",".join(extnames))
     return {"hdus": extnames,
             "dq_masked": None if dq_masked is None else int(np.count_nonzero(dq_masked)),
+            "gw_ghost": None if ghost is None else int(np.count_nonzero(ghost)),
             "sci_nan_input": sci_nan_input}
 
 

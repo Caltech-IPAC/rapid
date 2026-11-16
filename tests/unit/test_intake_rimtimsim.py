@@ -145,7 +145,7 @@ def test_the_stage_under_the_overlay_reads_the_lite_file_and_keys_the_rows_by_ex
     settings = {"intake": {"source_root": source.as_uri() + "/", "unsigned": False, "sip_degree": 5,
                            "sip_max_pix_error": 0.1, "gzip_level": 1, "limmag_nsigma": 5.0,
                            "limmag_clip_sigma": 3.0, "limmag_maxiters": 10, "nominal_zptmag": {},
-                           "dq_mask_bits": 0, "rederive_wcs": False, "crpix_shift": [0.0, 0.0],
+                           "dq_mask_bits": 0, "gw_ghost": [], "rederive_wcs": False, "crpix_shift": [0.0, 0.0],
                            **tomllib.loads(OVERLAY.read_text())["intake"]}}
     job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "rts1", "file": STEM},
                      survey="GBTDS", dataset="rts1", settings=settings,
@@ -225,7 +225,7 @@ def test_the_stage_under_the_socsims_overlay_keys_the_rows_by_the_soc_expid(tmp_
     settings = {"intake": {"source_root": source.as_uri() + "/", "unsigned": False, "sip_degree": 5,
                            "sip_max_pix_error": 0.1, "gzip_level": 1, "limmag_nsigma": 5.0,
                            "limmag_clip_sigma": 3.0, "limmag_maxiters": 10, "nominal_zptmag": {},
-                           "dq_mask_bits": 0, "rederive_wcs": False, "crpix_shift": [0.0, 0.0],
+                           "dq_mask_bits": 0, "gw_ghost": [], "rederive_wcs": False, "crpix_shift": [0.0, 0.0],
                            "program_id": -1, **tomllib.loads(SS_OVERLAY.read_text())["intake"]}}
     job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "ss1", "file": SS_STEM},
                      survey="GBTDS", dataset="ss1", settings=settings,

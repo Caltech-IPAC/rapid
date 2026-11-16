@@ -74,6 +74,18 @@ own NaN (``nan_input``), the masked pixels (``masked``) and the NaN written
 (``nan_output``, their union); ``metrics.masked_fraction`` is ``masked``
 over the image's pixels.
 
+``[intake] gw_ghost`` (rebuild-only; empty, the base, masks nothing) lists
+guide-window ghost boxes the L2 DQ does not flag, one per SCA: fixed
+columns over the rows of the exposure's own guide window
+(``meta.guide_star.window_ystart``/``window_ystop``) plus row offsets
+(:func:`rapidpipe.science.intake.gw_ghost_pixels`). The conversion sets
+the box NaN in ``SCI``, ``ERR`` and ``VAR_*`` as the DQ mask does, leaves
+``DQ`` as it was and writes ``NGWGHOST``; the manifest's ``dq.gw_ghost``
+counts the box's pixels (0 for an SCA with no box). Only ``soc-l2`` files
+carry a guide window; another reader with a box is refused, and a file of
+a boxed SCA without a window fails. Flight's overlay boxes WFI12's known
+ghost until the L2 DQ flags it.
+
 ``[intake] crpix_shift`` is a translation of the WCS, ``[dx, dy]`` pixels
 added to ``CRPIX1`` and ``CRPIX2`` of every HDU that carries them, before
 anything reads the header (``[0, 0]``, `dev`'s behaviour, moves nothing): a
@@ -173,6 +185,11 @@ def run(job: JobContext) -> None:
     reader = settings["reader"]
     if reader not in READERS:
         raise ValueError(f"[intake] reader {reader!r} is not one of {sorted(READERS)}")
+    gw_ghost = list(settings["gw_ghost"])
+    if gw_ghost and reader != "soc-l2":
+        raise ValueError(f"[intake] gw_ghost needs a guide window, which only soc-l2 files carry, "
+                         f"not {reader!r}'s")
+    ghost_setting = {"gw_ghost": gw_ghost} if gw_ghost else {}
     ids = READERS[reader]["parse_stem"](stem)
     timings: dict[str, float] = {}
     mark = time.monotonic()
@@ -203,7 +220,7 @@ def run(job: JobContext) -> None:
                 nominal_zptmag=settings["nominal_zptmag"], swname="rapidpipe intake",
                 swvers=f"job {job.job}",  # the job names its run, the run its revision
                 created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                dq_mask_bits=int(settings["dq_mask_bits"]))
+                dq_mask_bits=int(settings["dq_mask_bits"]), **ghost_setting)
         lap("convert")
         shift = [float(v) for v in settings["crpix_shift"]]
         if any(shift):
@@ -251,6 +268,8 @@ def run(job: JobContext) -> None:
     masked = conversion["dq_masked"] or 0
     dq = {"mask_bits": int(settings["dq_mask_bits"]), "masked": masked,
           "nan_input": conversion["sci_nan_input"], "nan_output": nan_output}
+    if gw_ghost:
+        dq["gw_ghost"] = conversion["gw_ghost"] or 0
     metrics = {"masked_fraction": masked / n_pixels}
     wcs = {"rederived": distortion is not None}
     if distortion is not None:

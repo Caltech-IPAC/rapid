@@ -56,6 +56,13 @@ limmag_maxiters = 10
 # roman_datamodels pixel flags: DO_NOT_USE 1, SATURATED 2, DEAD 1024,
 # HOT 2048, NONLINEAR 65536, NO_LIN_CORR 1048576, UNRELIABLE_FLAT 33554432.
 dq_mask_bits = 0
+# New, not dev's: guide-window ghost boxes the L2 DQ does not flag, set NaN
+# as the DQ mask sets its pixels. One inline table per SCA: `sca`,
+# `columns = [first, last]` (science pixels, 0-based, inclusive) and
+# `rows = [start, stop]`, added to the exposure's guide window rows
+# (meta.guide_star.window_ystart/ystop less the 4 reference pixels), padding
+# included. Only soc-l2 files carry a window. [] is dev's behaviour: none.
+gw_ghost = []
 # New, not dev's: pixels [dx, dy] added to CRPIX1 and CRPIX2 at intake, a
 # dataset's measured WCS translation (measured minus predicted star
 # position). [0.0, 0.0] is dev's behaviour: the file's WCS unchanged.
