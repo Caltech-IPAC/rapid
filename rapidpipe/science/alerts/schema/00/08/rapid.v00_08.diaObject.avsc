@@ -94,6 +94,24 @@
             "doc": "Start of validity interval for this object summary (UTC scale) [MJD]"
         },
         {
+            "name": "photoZ",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Photometric redshift of the object or its host (stub)"
+        },
+        {
+            "name": "photoZErr",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Uncertainty of photoZ (stub)"
+        },
+        {
             "name": "F062PsfFluxMean",
             "type": [
                 "null",

@@ -556,6 +556,12 @@ DIA_OBJECT_PARAMS = (
     Param("validityStartMjd",  "double",    "Start of validity interval for this object summary (UTC scale) [MJD]",
                         IMPLEMENTED, "triggering source mjdobs", attr="validity_mjd"),
 
+    # --- Photometric redshift (stubs, 2026-11-16) -------------------------------
+    Param("photoZ",        ["null", "float"],  "Photometric redshift of the object or its host (stub)",
+                        STUB, "not yet computed; a host's catalog redshift ships in nedMatches/lvsMatches"),
+    Param("photoZErr",     ["null", "float"],  "Uncertainty of photoZ (stub)",
+                        STUB, "not yet computed"),
+
     # --- Per-filter flux statistics over the detections up to the trigger ----
 ) + _per_filter_flux_params()
 
