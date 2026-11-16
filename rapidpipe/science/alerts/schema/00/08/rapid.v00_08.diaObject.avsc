@@ -94,24 +94,6 @@
             "doc": "Start of validity interval for this object summary (UTC scale) [MJD]"
         },
         {
-            "name": "firstRefMjd",
-            "type": [
-                "null",
-                "double"
-            ],
-            "default": null,
-            "doc": "MJD of earliest exposure in the reference image (UTC scale) [MJD] (stub)"
-        },
-        {
-            "name": "lastRefMjd",
-            "type": [
-                "null",
-                "double"
-            ],
-            "default": null,
-            "doc": "MJD of latest exposure in the reference image (UTC scale) [MJD] (stub)"
-        },
-        {
             "name": "F062PsfFluxMean",
             "type": [
                 "null",
