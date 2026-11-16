@@ -475,6 +475,33 @@
             "doc": "Suspected solar system object: a known SS object is predicted within SS_CANDIDATE_SEP_ARCSEC of this source (see ssMatches); null if association was not run for this detection"
         },
         {
+            "name": "firstRefMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "MJD of the earliest exposure coadded into the reference image this detection was made against (UTC scale) [MJD] (stub)"
+        },
+        {
+            "name": "lastRefMjd",
+            "type": [
+                "null",
+                "double"
+            ],
+            "default": null,
+            "doc": "MJD of the latest exposure coadded into the reference image this detection was made against (UTC scale) [MJD] (stub)"
+        },
+        {
+            "name": "refMayContainObject",
+            "type": [
+                "null",
+                "boolean"
+            ],
+            "default": null,
+            "doc": "true if the object was first detected at or before lastRefMjd, so its light may be in the template; a date comparison, not a measurement (stub)"
+        },
+        {
             "name": "field",
             "type": "int",
             "doc": "Roman field identifier"

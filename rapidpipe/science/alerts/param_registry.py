@@ -362,6 +362,19 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "computed: KONA predictions within providers.SS_CANDIDATE_SEP_ARCSEC",
                     attr="is_ss_candidate"), #TODO: tune the separation cut
 
+    # --- The reference this detection was made against (stubs; moved from diaObject,
+    # which is filter-independent while a reference is per field and filter, 2026-11-16) ---
+    Param("firstRefMjd",   ["null", "double"],  "MJD of the earliest exposure coadded into the reference image this "
+                                                "detection was made against (UTC scale) [MJD] (stub)",
+                    STUB, "refimimages of the refimages row the difference job named, joined to l2files.mjdobs"),
+    Param("lastRefMjd",    ["null", "double"],  "MJD of the latest exposure coadded into the reference image this "
+                                                "detection was made against (UTC scale) [MJD] (stub)",
+                    STUB, "refimimages of the refimages row the difference job named, joined to l2files.mjdobs"),
+    Param("refMayContainObject", ["null", "boolean"], "true if the object was first detected at or before lastRefMjd, "
+                                                      "so its light may be in the template; a date comparison, not a "
+                                                      "measurement (stub)",
+                    STUB, "computed at assembly from the object's detections and lastRefMjd"),
+
     # --- Roman-specific identifiers & tiling ------------------------------------
     Param("field",         "int",              "Roman field identifier",
                     IMPLEMENTED, "sources.field"),
@@ -542,10 +555,6 @@ DIA_OBJECT_PARAMS = (
                         IMPLEMENTED, "computed from source history", attr="last_mjd"),
     Param("validityStartMjd",  "double",    "Start of validity interval for this object summary (UTC scale) [MJD]",
                         IMPLEMENTED, "triggering source mjdobs", attr="validity_mjd"),
-    Param("firstRefMjd", ["null", "double"], "MJD of earliest exposure in the reference image (UTC scale) [MJD] (stub)",
-                        STUB, "reference-image metadata (not tracked)"),
-    Param("lastRefMjd", ["null", "double"], "MJD of latest exposure in the reference image (UTC scale) [MJD] (stub)",
-                        STUB, "reference-image metadata (not tracked)"),
 
     # --- Per-filter flux statistics over the detections up to the trigger ----
 ) + _per_filter_flux_params()
