@@ -62,6 +62,7 @@ from urllib.parse import unquote, urlparse
 import pyarrow as pa
 import pyarrow.parquet as pq
 from astropy.io import fits
+from astropy.time import Time
 
 from rapidpipe.science.catalogs.store import Store
 
@@ -87,6 +88,9 @@ SS_RELEASE = "rolling"      # the ``catalogs`` row's version: one registration, 
 
 #: The ``HIERARCH`` cards the intake writes from the ASDF ``meta`` tree, as this module reads them.
 MID_TIME_CARD = "meta exposure mid_time"
+#: Flight L2 files carry no mid_time; the mid-point is then the mean of these two.
+START_TIME_CARD = "meta exposure start_time"
+END_TIME_CARD = "meta exposure end_time"
 EPHEMERIS_CARDS = {"time": "meta ephemeris time", "frame": "meta ephemeris ephemeris_reference_frame",
                    "x": "meta ephemeris spatial_x", "y": "meta ephemeris spatial_y",
                    "z": "meta ephemeris spatial_z", "vx": "meta ephemeris velocity_x",
@@ -130,12 +134,23 @@ class Ephemeris:
 
 
 def ephemeris_from_header(header: fits.Header) -> Ephemeris:
-    """The :class:`Ephemeris` of an L2 primary header; ``ValueError`` names a missing card."""
-    missing = [c for c in (MID_TIME_CARD, *EPHEMERIS_CARDS.values()) if c not in header]
+    """The :class:`Ephemeris` of an L2 primary header; ``ValueError`` names a missing card.
+
+    The mid-time is the header's ``mid_time`` (the simulations write it),
+    else the mean of ``start_time`` and ``end_time`` (flight files carry
+    only those two).
+    """
+    flight = MID_TIME_CARD not in header and START_TIME_CARD in header and END_TIME_CARD in header
+    missing = [c for c in (*(() if flight else (MID_TIME_CARD,)), *EPHEMERIS_CARDS.values()) if c not in header]
     if missing:
         raise ValueError(f"the L2 header has no {', '.join(missing)}: no observatory ephemeris")
+    if flight:
+        start, end = (Time(str(header[c]).rstrip("Z"), format="isot", scale="utc") for c in (START_TIME_CARD, END_TIME_CARD))
+        mid_time = (start + (end - start) / 2).isot
+    else:
+        mid_time = str(header[MID_TIME_CARD])
     get = {k: header[c] for k, c in EPHEMERIS_CARDS.items()}
-    return Ephemeris(mid_time=str(header[MID_TIME_CARD]), time=float(get["time"]), frame=str(get["frame"]),
+    return Ephemeris(mid_time=mid_time, time=float(get["time"]), frame=str(get["frame"]),
                      position=(float(get["x"]), float(get["y"]), float(get["z"])),
                      velocity=(float(get["vx"]), float(get["vy"]), float(get["vz"])))
 

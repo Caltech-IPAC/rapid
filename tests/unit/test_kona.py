@@ -53,6 +53,16 @@ def test_the_ephemeris_is_read_from_the_hierarch_cards_and_a_missing_one_is_name
         kona.ephemeris_from_header(l2_header(short))
 
 
+def test_a_flight_header_without_mid_time_takes_the_mean_of_start_and_end():
+    """Flight L2 files carry start_time and end_time and no mid_time; a header with neither names mid_time."""
+    cards = {k: v for k, v in EPHEMERIS.items() if k != "meta exposure mid_time"}
+    flight = dict(cards, **{"meta exposure start_time": "2026-10-24T10:56:43.838",
+                            "meta exposure end_time": "2026-10-24T10:57:47.086"})
+    assert kona.ephemeris_from_header(l2_header(flight)).mid_time == "2026-10-24T10:57:15.462"
+    with pytest.raises(ValueError, match="meta exposure mid_time"):
+        kona.ephemeris_from_header(l2_header(cards))
+
+
 def test_the_primary_header_is_read_from_a_plain_or_gzipped_file_without_the_data(tmp_path):
     """Only the header's blocks are read: a gzipped L2 streams up to its END card."""
     hdus = fits.HDUList([fits.PrimaryHDU(header=l2_header()),
