@@ -183,7 +183,7 @@ from rapidpipe.science.alerts.crossmatch import (
     GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, NED_CONE_SLACK_ARCSEC, SS_CANDIDATE_SEP_ARCSEC,
     build_gaiacat, build_lvscat, build_nedcat, epoch_offset_years, load_refcat, match_gaiacat,
     match_lvscat, match_nedcat, match_refcat, match_ss_predictions)
-from rapidpipe.science.alerts.kona import ephemeris_from_header, l2_primary_header, predict
+from rapidpipe.science.alerts.kona import ephemeris_from_header, l2_primary_header, noon_jd, predict
 from rapidpipe.science.catalogs.readers import CATALOG_KINDS, catalog_reader, cone_of_corners
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES, extract_stamp, load_fits_image
 from rapidpipe.science.alerts.records import Cutouts, ForcedPhot, ObjectRecord, Source
@@ -934,11 +934,13 @@ def _ss_matches(reader: Any, ra0: float, dec0: float, mjd: float,
                 trigger: "tuple[WindowImage, list[Source]] | None", settings: dict) -> tuple[list, dict]:
     """The solar-system matches of every trigger (`dev`'s KONA in the packet job) and the read's record.
 
-    The ``ss`` day at or before the trigger's observation is loaded, its
-    states moved to the exposure mid-time from the L2 primary header's
-    ephemeris, the chip's cone checked, and each trigger associated
-    (:func:`associate_ss`, which marks ``isSSCandidate``). The record
-    names the day, its epoch and object count, the cone and the number
+    The ``ss`` day at or before the trigger's observation is loaded (the
+    oldest day when every day is later), its states moved to the exposure
+    mid-time from the L2 primary header's ephemeris, the chip's cone
+    checked, and each trigger associated (:func:`associate_ss`, which
+    marks ``isSSCandidate``). The record names the day, its epoch and
+    object count, the days from the day's noon to the observation
+    (negative when the day is the later), the cone and the number
     predicted in it.
     """
     if trigger is None:
@@ -957,7 +959,7 @@ def _ss_matches(reader: Any, ra0: float, dec0: float, mjd: float,
         source.is_ss_candidate = bool(found and found[0].sep <= SS_CANDIDATE_SEP_ARCSEC)
         matches.append(found)
     record = {"release": day, "epoch_jd": info.get("epoch_jd"), "n_objects": info.get("n_objects"),
-              "mid_time": eph.mid_time, "n_in_cone": len(predictions),
+              "gap_days": round(mjd + 2400000.5 - noon_jd(day), 3), "mid_time": eph.mid_time, "n_in_cone": len(predictions),
               "cone": {"ra": ra0, "dec": dec0, "radius_arcsec": float(settings["ss_cone_radius_deg"]) * 3600.0}}
     return matches, record
 

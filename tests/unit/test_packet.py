@@ -257,7 +257,7 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert b["diaSource"]["isSSCandidate"] is False
     ss = summary["catalogs"]["ss"]
     assert (ss["release"], ss["n_objects"], ss["n_in_cone"]) == (SS_DAY, 3, 2)
-    assert ss["mid_time"].startswith("2027-10-08T00:00:00")
+    assert ss["mid_time"].startswith("2027-10-08T00:00:00") and ss["gap_days"] == 0.5   # the day's noon to the trigger
     external = pq.read_table(out / "external.parquet").to_pylist()
     assert [(e["sid"], e["catid"], e["catalog_job"]) for e in external] == [
         (1, "42", 3), (1, "HOST-A", 4), (1, "LVS-A", 4), (1, "2024 AB", 6), (2, "HOST-A", 4), (2, "2024 AB", 6)]

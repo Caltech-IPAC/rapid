@@ -88,9 +88,10 @@ def test_days_and_epochs():
     assert kona.day_of(61685.5) == "20271007" and kona.day_of(61685.0) == "20271007"
     assert kona.noon_jd("20271007") == pytest.approx(2400000.5 + 61685.5)
     days = ["20271001", "20271005", "20271007"]
-    assert kona.newest_day(days, 61685.9) == "20271007"             # the day itself
-    assert kona.newest_day(days, 61684.2) == "20271005"             # a gap: the newest before
-    assert kona.newest_day(days, 61670.0) is None                  # before every day
+    assert kona.day_to_read(days, 61685.9) == "20271007"            # the day itself
+    assert kona.day_to_read(days, 61684.2) == "20271005"            # a gap: the newest before
+    assert kona.day_to_read(days, 61700.0) == "20271007"            # after every day: the newest
+    assert kona.day_to_read(days, 61670.0) == "20271001"            # before every day: the oldest
 
 
 def test_predict_gives_the_objects_in_the_cone_with_their_hg_magnitude():
@@ -111,8 +112,7 @@ def test_the_reader_lists_the_days_picks_one_by_date_and_loads_its_files(tmp_pat
     reader = kona.SsReader(root.as_uri())
     assert reader.days == ["20271005", "20271007"] and reader.release == "rolling"
     assert reader.day_for(61685.9) == "20271007" and reader.day_for(61684.0) == "20271005"
-    with pytest.raises(ValueError, match="no ss day at or before 20270901"):
-        reader.day_for(61649.0)
+    assert reader.day_for(61649.0) == "20271005"                    # 20270901, before every day: the oldest
     states, hg, record = reader.load("20271007")
     assert [s.desig for s in states] == ["433", "2024 AB"] and hg["2024 AB"][0] == 18.0
     assert math.isnan(hg["433"][1]) and record["epoch_jd"] == 2461685.5 and reader.n_reads == 1

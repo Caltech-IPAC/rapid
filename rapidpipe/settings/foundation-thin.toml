@@ -163,7 +163,8 @@ ned_match = true
 lvs_match = true
 # The solar-system match (dev's KONA, rapidpipe.science.alerts.kona): the
 # "ss" catalog is the daily propagated MPC orbits under one registered root,
-# the day at or before the trigger read; the trigger chip's cone of
+# the day at or before the trigger read, or the oldest day for an exposure
+# taken before the first; the trigger chip's cone of
 # ss_cone_radius_deg (dev's 0.15) about its footprint centre, matches within
 # ss_radius_arcsec (dev's stamp inscribed circle), at most ss_max_matches.
 ss_match = true
