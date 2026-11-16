@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeAlias
 
-VERSION = "00.07"
+VERSION = "00.08"
 
 # Keep for type checking and function hints
 AvroType: TypeAlias = str | list["AvroType"] | dict[str, Any]
@@ -531,16 +531,17 @@ DIA_OBJECT_PARAMS = (
                         IMPLEMENTED, "astroobjectsmeta_<field>.stdevdec (null until statistics run)", attr="stdevdec"),
 
     # --- Source history ----------------------------------------------------
-    Param("nDiaSources",   "int",              "Total number of associated DIASources",
+    Param("nDiaSources",   "int",              "Total number of associated DIASources, over the whole history",
                         IMPLEMENTED, "astroobjectsmeta_<field>.nsources, else merges_<field> count", attr="nsources"),
+    Param("nDiaCoverage",  ["null", "int"],    "Number of L2 images whose footprint held the object position, "
+                                               "over the whole history",
+                        IMPLEMENTED, "the packet stage's count over the dataset's official l2files", attr="ncoverage"),
     Param("firstDiaSourceMjd", ["null", "double"], "MJD of earliest associated diaSource (UTC scale) [MJD]",
                         IMPLEMENTED, "computed from source history", attr="first_mjd"),
     Param("lastDiaSourceMjd",  ["null", "double"], "MJD of latest associated diaSource (UTC scale) [MJD]",
                         IMPLEMENTED, "computed from source history", attr="last_mjd"),
     Param("validityStartMjd",  "double",    "Start of validity interval for this object summary (UTC scale) [MJD]",
                         IMPLEMENTED, "triggering source mjdobs", attr="validity_mjd"),
-    Param("ncovhist",      ["null", "int"],    "Number of times the object position fell on an observed image (stub)",
-                        STUB, "coverage history (not computed)"),
     Param("firstRefMjd", ["null", "double"], "MJD of earliest exposure in the reference image (UTC scale) [MJD] (stub)",
                         STUB, "reference-image metadata (not tracked)"),
     Param("lastRefMjd", ["null", "double"], "MJD of latest exposure in the reference image (UTC scale) [MJD] (stub)",

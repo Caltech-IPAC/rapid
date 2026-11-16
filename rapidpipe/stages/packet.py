@@ -78,6 +78,12 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   ``nDiaSources`` is the count as of the trigger, the members with
   ``mjdobs <= trigger``, the trigger counted. The schema's doc string is
   `dev`'s ("Total number"), kept verbatim with the 00.07 files.
+  ``nDiaCoverage`` (00.08, for 00.07's ``ncovhist`` stub; ZTF's
+  ``ncovhist``) is the read's count of the dataset's official L2 files
+  whose footprint holds the object's founding position, over the whole
+  history as ``nDiaSources`` is (:data:`COVERAGE_SQL`,
+  :func:`coverage_counts`): how often the position was observed against
+  how often it was detected. The forced list stays the 30-day window.
 - ``prvDiaForcedSources``: `dev`'s forced photometry
   (:mod:`rapidpipe.science.alerts.forced`) at the object's founding
   position on every window image whose footprint holds it, both the
@@ -394,6 +400,18 @@ WINDOW_SQL = (
     " AND o.product = 'diffimages' AND o.job = d.job))"
     " ORDER BY l.mjdobs, d.expid, d.sca, d.fid")
 
+#: The dataset's official L2 files that may hold the triggers' objects, over the whole history
+#: (ZTF's ``ncovhist``, the alert's ``nDiaCoverage``): those listing an object's field among the
+#: fields they overlap, by the GIN index; :func:`coverage` counts those whose footprint holds each
+#: object. The L2 record, not the difference images: whether the sky was observed there, not
+#: whether the pipeline differenced it.
+COVERAGE_SQL = (
+    "SELECT l.ra1, l.dec1, l.ra2, l.dec2, l.ra3, l.dec3, l.ra4, l.dec4 FROM l2files l"
+    " WHERE l.dataset = %(dataset)s"
+    " AND (l.overlapfields && %(fields)s::integer[] OR l.field = ANY(%(fields)s::integer[]))"
+    " AND EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
+    " AND o.product = 'l2files' AND o.job = l.job)")
+
 #: Official packet sets' forced rows on the window's images, from the triggers' objects' fields'
 #: children of ``forced`` (a forced row is filed under its object's field), each with its set's key,
 #: the key of its open binding. The images and the binding are filtered inside each child's query
@@ -463,6 +481,7 @@ class Read:
     images: list[WindowImage]
     trigger_image: WindowImage
     reuse: dict[int, dict]                       # forced_id -> predecessor row
+    coverage: dict[int, int]                     # aid -> official L2 files whose footprint holds it
     catalogs: dict[str, CatalogInput]            # by name, the ones the job names
     refcat_path: Path | None
     reads: list[dict] = dataclasses.field(default_factory=list)  # what was read at execution
@@ -601,6 +620,8 @@ def _read(job: JobContext) -> Read:
         fields = sorted({field_of[a] for a in aids})
         cur.execute(catalog.sql(ORIGINS_SQL), (fields, [object_job[a] for a in aids], aids))
         origin = {r["aid"]: (r["ra0"], r["dec0"]) for r in cur.fetchall()}
+        cur.execute(COVERAGE_SQL, {"dataset": key["dataset"], "fields": fields})
+        coverage = dict(zip(aids, coverage_counts(cur.fetchall(), [origin[a] for a in aids])))
 
         members: dict[int, list[tuple[int, Source]]] = {}
         objects: dict[int, tuple[float, float, Sums]] = {
@@ -712,7 +733,7 @@ def _read(job: JobContext) -> Read:
                 field_of=field_of,
                 flags_zero=len(alertable), triggers=triggers, capped=capped,
                 aid_of=aid_of, objects=objects, members=members, images=images,
-                trigger_image=trigger_image[0], reuse=reuse,
+                trigger_image=trigger_image[0], reuse=reuse, coverage=coverage,
                 catalogs={name: _open_catalog(name, catalog_job, location)
                           for name, (catalog_job, location) in locations.items()},
                 refcat_path=get(ref["filename"]), reads=reads)
@@ -798,6 +819,26 @@ def covering(candidates: list[dict], positions: list[tuple[float, float]], own: 
     holds = (fp.contains_positions(corners, [p[0] for p in positions], [p[1] for p in positions])
              if positions and len(candidates) else np.zeros((len(candidates), 0), dtype=bool))
     return [d for d, row in zip(candidates, holds) if d["job"] == own or row.any()]
+
+
+def coverage_counts(candidates: list[dict], positions: list[tuple[float, float]],
+                    chunk: int = 4096) -> list[int]:
+    """How many of ``candidates`` (rows with the eight corner columns) hold each of ``positions``.
+
+    The footprint test is :func:`covering`'s, exact on the sphere, run
+    ``chunk`` images at a time so a long history (GBTDS: tens of
+    thousands of L2 files over a field) never holds one images-by-objects
+    matrix at once.
+    """
+    counts = np.zeros(len(positions), dtype=int)
+    if not positions:
+        return []
+    ra, dec = [p[0] for p in positions], [p[1] for p in positions]
+    for start in range(0, len(candidates), chunk):
+        corners = np.array([[d[c] for c in ("ra1", "dec1", "ra2", "dec2", "ra3", "dec3", "ra4", "dec4")]
+                            for d in candidates[start:start + chunk]], dtype=float).reshape(-1, 8)
+        counts += fp.contains_positions(corners, ra, dec).sum(axis=0)
+    return [int(n) for n in counts]
 
 
 def _separation(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
@@ -1155,7 +1196,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 stats = {k: None if math.isnan(v) else v for k, v in sums.statistics().items()}
                 obj = ObjectRecord(aid=aid, ra0=ra0, dec0=dec0, nsources=count,
                                    stdevra=stats["stdevra"], stdevdec=stats["stdevdec"],
-                                   meanra=stats["meanra"], meandec=stats["meandec"])
+                                   meanra=stats["meanra"], meandec=stats["meandec"],
+                                   ncoverage=read.coverage.get(aid))
                 c0 = time.perf_counter()
                 with step("cutouts"):
                     cutouts = Cutouts(**{kind: extract_stamp(pixels, source.xfit + 1.0, source.yfit + 1.0,

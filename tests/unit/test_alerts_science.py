@@ -52,9 +52,9 @@ def _object_row(object_id, sid, **overrides):
 
 def test_packaged_schema_matches_the_registry():
     assert assemble.schema_problems() == []
-    assert assemble.SCHEMA_VERSION == VERSION == "00.07"
+    assert assemble.SCHEMA_VERSION == VERSION == "00.08"
     schema = assemble.load_schema()
-    assert schema["name"] == "rapid.v00_07.alert"
+    assert schema["name"] == "rapid.v00_08.alert"
 
 
 def test_schema_problems_names_a_drifted_file(tmp_path):
@@ -63,7 +63,7 @@ def test_schema_problems_names_a_drifted_file(tmp_path):
         target = root / path.relative_to(assemble.SCHEMA_ROOT)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(path.read_text())
-    alert = root / "00" / "07" / "rapid.v00_07.alert.avsc"
+    alert = root / "00" / "08" / "rapid.v00_08.alert.avsc"
     data = json.loads(alert.read_text())
     data["fields"] = data["fields"][:-1]
     alert.write_text(json.dumps(data))
@@ -80,7 +80,7 @@ def _copy_packaged_schema(root):
 
 
 def test_gen_schema_reproduces_the_packaged_files_byte_for_byte(tmp_path):
-    """The checked-in 00.07 files are exactly what the writer makes from the registry."""
+    """The checked-in 00.08 files are exactly what the writer makes from the registry."""
     assert gen_schema.generate(schema_root=tmp_path, out=io.StringIO()) is True
     for path in assemble.schema_paths():
         written = tmp_path / path.relative_to(assemble.SCHEMA_ROOT)
@@ -92,15 +92,15 @@ def test_gen_schema_check_flags_a_type_change(tmp_path):
     root = tmp_path / "schema"
     _copy_packaged_schema(root)
     assert gen_schema.main(["--check", "--schema-root", str(root)]) == 0
-    source = root / "00" / "07" / "rapid.v00_07.diaSource.avsc"
+    source = root / "00" / "08" / "rapid.v00_08.diaSource.avsc"
     data = json.loads(source.read_text())
     field = next(f for f in data["fields"] if f["name"] == "ra")
     field["type"] = "float"
     source.write_text(json.dumps(data))
-    assert assemble.schema_problems(root) == ["rapid.v00_07.diaSource.avsc differs from the registry"]
+    assert assemble.schema_problems(root) == ["rapid.v00_08.diaSource.avsc differs from the registry"]
     out = io.StringIO()
     assert gen_schema.generate(schema_root=root, check=True, out=out) is False
-    assert "DIFFERS  rapid.v00_07.diaSource.avsc" in out.getvalue()
+    assert "DIFFERS  rapid.v00_08.diaSource.avsc" in out.getvalue()
     assert '-      "type": "float"' in out.getvalue()
     assert gen_schema.main(["--check", "--schema-root", str(root)]) == 1
 
@@ -172,7 +172,7 @@ def test_assemble_alert_is_devs_packet():
     earlier = _source(2, mjdobs=61200.0, aid=900)
     alert = _alert(prv=[earlier], cutout=b"FITS")
     assert set(alert) == {p.name for p in ALERT_PARAMS if p.status is not NOT_USED}
-    assert alert["schemaVersion"] == "00.07"
+    assert alert["schemaVersion"] == "00.08"
     assert alert["diaSource"]["diaObjectId"] == 900
     assert alert["diaSource"]["isNegative"] is False
     assert alert["diaSource"]["isSSCandidate"] is None
