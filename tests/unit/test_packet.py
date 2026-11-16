@@ -193,16 +193,20 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
     write_hp6_store(tmp_path / "ned", [
         {"ra": ra_a - ra_offset(dec_a, 9.0), "dec": dec_a, "prefname": "HOST-A", "ptype": "G", "z": 0.03},
         {"ra": ra_a - ra_offset(dec_a, 40.0), "dec": dec_a, "prefname": "TOO-FAR", "ptype": "G"}])
+    # LVS also lists HOST-A (LVS is a subset of NED, under NED's names), 0.5" from NED's position:
+    # the two catalogs share one registration job, so the external index keeps one HOST-A row
     write_lvs_store(tmp_path / "ned", [{"ra": ra_a - ra_offset(dec_a, 28.0), "dec": dec_a,
-                                        "objname": "LVS-A", "DistMpc": 62.0}])
+                                        "objname": "LVS-A", "DistMpc": 62.0},
+                                       {"ra": ra_a - ra_offset(dec_a, 9.5), "dec": dec_a,
+                                        "objname": "HOST-A", "DistMpc": 120.0}])
     # ss: a known object 0.3" from A (a candidate), one 20" off (outside the match radius, in the
     # cone), one 0.5 degrees away (outside the cone); the day before epoch 2's
     write_ss_store(tmp_path / "ss", SS_DAY, [("2024 AB", ra_a - ra_offset(dec_a, 0.3), dec_a, 18.0),
                                             ("433", ra_a + ra_offset(dec_a, 20.0), dec_a, 11.0),
                                             ("far", ra_a + 0.5, dec_a, 11.0)])
-    catalogs = {name: CatalogInput(name, 3 + i, catalog_reader(name, (tmp_path / root).as_uri() + "/"))
-                for i, (name, root) in enumerate((("gaia", "gaia"), ("ned", "ned"), ("lvs", "ned"),
-                                                  ("ss", "ss")))}
+    catalogs = {name: CatalogInput(name, job, catalog_reader(name, (tmp_path / root).as_uri() + "/"))
+                for name, root, job in (("gaia", "gaia", 3), ("ned", "ned", 4), ("lvs", "ned", 4),
+                                        ("ss", "ss", 6))}       # ned and lvs: one import job
     if broken_catalog:
         catalogs[broken_catalog] = CatalogInput(broken_catalog, catalogs[broken_catalog].job, None,
                                                 "RuntimeError: the copy could not be opened")
@@ -240,8 +244,9 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert [m["sourceId"] for m in a["gaiaMatches"]] == [42] and records[2]["gaiaMatches"] == []
     assert [m["prefName"] for m in a["nedMatches"]] == ["HOST-A"] and records[2]["nedMatches"] == []
     assert a["nedMatches"][0]["z"] == pytest.approx(0.03) and a["nedMatches"][0]["sep"] == pytest.approx(9.0, abs=0.02)
-    assert [m["prefName"] for m in a["lvsMatches"]] == ["LVS-A"] and records[2]["lvsMatches"] == []
-    assert a["lvsMatches"][0]["distMpc"] == pytest.approx(62.0)
+    assert [m["prefName"] for m in a["lvsMatches"]] == ["HOST-A", "LVS-A"]     # nearest first
+    assert a["lvsMatches"][1]["distMpc"] == pytest.approx(62.0)
+    assert [m["prefName"] for m in records[2]["lvsMatches"]] == ["HOST-A"]     # 14" from B, under 30"
     assert a["refStarMatches"] is None
     # the solar-system match: the day before the trigger's date, the predictions in the chip's cone
     assert [(m["designation"], m["predVMag"]) for m in a["ssMatches"]] == [("2024 AB", pytest.approx(23.0))]
@@ -255,8 +260,10 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert ss["mid_time"].startswith("2027-10-08T00:00:00") and ss["gap_days"] == 0.5   # the day's noon to the trigger
     external = pq.read_table(out / "external.parquet").to_pylist()
     assert [(e["sid"], e["catid"], e["catalog_job"]) for e in external] == [
-        (1, "42", 3), (1, "HOST-A", 4), (1, "LVS-A", 5), (1, "2024 AB", 6), (2, "2024 AB", 6)]
-    assert (summary["gaia_matches"], summary["ned_matches"], summary["lvs_matches"]) == (1, 1, 1)
+        (1, "42", 3), (1, "HOST-A", 4), (1, "LVS-A", 4), (1, "2024 AB", 6), (2, "HOST-A", 4), (2, "2024 AB", 6)]
+    # A's one HOST-A row is the LVS match (9.5"), not NED's closer one (9.0"): LVS wins
+    assert external[1]["sep"] == pytest.approx(9.5, abs=0.02)
+    assert (summary["gaia_matches"], summary["ned_matches"], summary["lvs_matches"]) == (1, 1, 3)  # match rows
     assert summary["catalogs_failed"] == []
     # each copy's read is recorded: the chip's cone, the rows it held, and for Gaia the row groups
     gaia = summary["catalogs"]["gaia"]
@@ -268,7 +275,7 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert 132.0 < gaia["cone"]["radius_arcsec"] < 147.0
     ned, lvs = summary["catalogs"]["ned"], summary["catalogs"]["lvs"]
     assert ned["release"] == "NED_TEST" and ned["rows"] == 1 and ned["n_reads"] >= 1      # TOO-FAR is outside the cone
-    assert lvs["release"] == "LVS_TEST" and lvs["rows"] == 1 and lvs["n_reads"] == 1
+    assert lvs["release"] == "LVS_TEST" and lvs["rows"] == 2 and lvs["n_reads"] == 1
     assert 7.0 + 10.0 < ned["cone"]["radius_arcsec"] < 20.0 and 7.0 + 30.0 < lvs["cone"]["radius_arcsec"] < 40.0
 
 
@@ -279,11 +286,11 @@ def test_a_catalog_that_cannot_be_opened_ships_its_field_null_and_is_recorded(tm
         assert fastavro.validation.validate(record, schema, raise_errors=True)
         assert record["nedMatches"] is None                       # did not run, not "nothing found"
     assert [m["sourceId"] for m in records[1]["gaiaMatches"]] == [42]
-    assert [m["prefName"] for m in records[1]["lvsMatches"]] == ["LVS-A"]
+    assert [m["prefName"] for m in records[1]["lvsMatches"]] == ["HOST-A", "LVS-A"]
     assert summary["catalogs_failed"] == ["ned"] and summary["ned_matches"] == 0
     assert summary["catalogs"]["ned"] == {"error": "RuntimeError: the copy could not be opened"}
     external = pq.read_table(out / "external.parquet").to_pylist()
-    assert [e["catid"] for e in external] == ["42", "LVS-A", "2024 AB", "2024 AB"]
+    assert [e["catid"] for e in external] == ["42", "HOST-A", "LVS-A", "2024 AB", "HOST-A", "2024 AB"]
 
 
 def test_index_rows_locate_their_records(tmp_path):
