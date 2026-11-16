@@ -189,10 +189,11 @@ class ObjectRecord:
     # trigger (rapidpipe.science.statistics.lightcurve.flux_statistics),
     # filled by assemble_alert(); a filter with no detection is absent
     flux_stats: dict[str, Any] = dataclasses.field(default_factory=dict)
+    ncoverage: int | None = None
 
-    # fields assemble_alert() fills in later; never storage columns
+    # fields the packet stage or assemble_alert() fill in later; never storage columns
     FILLED_LATER = frozenset({"meanra", "meandec", "first_mjd", "last_mjd", "validity_mjd",
-                              "flux_stats"})
+                              "flux_stats", "ncoverage"})
 
     @classmethod
     def from_row(cls, row: dict[str, Any],

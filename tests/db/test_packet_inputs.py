@@ -520,3 +520,31 @@ def test_a_run_body_naming_the_retired_sources_path_is_refused(connect, tmp_path
     with pytest.raises(ValueError, match="retired with the sources table"):
         run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
     assert query(conn, "SELECT state FROM jobs WHERE id = %s", (job,)) == [("failed",)]
+
+
+def test_the_coverage_count_is_the_official_l2_files_holding_the_object_over_the_whole_history(
+        connect, tmp_path):
+    """``nDiaCoverage`` (ZTF's ncovhist): the trigger's own L2 file and one a year before it on
+    the same footprint, outside both the forced and the prv windows, count; an official L2 file
+    of the field whose footprint is elsewhere, and one on the footprint that is not official
+    (another recipe's), do not. ``nDiaSources`` stays the detections."""
+    conn = connect()
+    job, *_ = packet_job(conn, tmp_path)
+    live, other = (r[0] for r in query(conn, "SELECT id FROM runs ORDER BY id"))
+    l2 = image_rows(tmp_path / "e1")["l2files"][0]
+    shifted = {k: l2[k] + 0.5 for k in ("ra0", "ra1", "ra2", "ra3", "ra4")}  # half a degree east
+    for run, expid, rid, extra in ((live, 2, 502, {"mjdobs": MJD[1] - 365.0}),
+                                   (live, 3, 503, shifted),
+                                   (other, 4, 504, {"mjdobs": MJD[1] - 2.0})):
+        key = {"dataset": DATASET, "expid": expid, "sca": 8, "fid": 8}
+        image_job = create_job(conn, run, "import", {},
+                               expects=[{"product": "l2files", "key": key, "binding": None}])
+        publish(conn, image_job, 1, write_attempt(tmp_path / f"l2-{expid}", {
+            "l2files": [{**l2, **extra, "expid": expid, "rid": rid}]}))
+    official = query(conn, "SELECT (key ->> 'expid')::int FROM official WHERE product = 'l2files'"
+                           " AND closed_at IS NULL ORDER BY 1")
+    assert [e for (e,) in official] == [1, 2, 3]                   # the other recipe's is not
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+    (record,) = _records(conn, job).values()
+    assert record["diaObject"]["nDiaCoverage"] == 2 and record["diaObject"]["nDiaSources"] == 1

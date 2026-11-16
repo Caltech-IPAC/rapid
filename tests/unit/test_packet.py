@@ -1,6 +1,6 @@
 """The packet stage's assembly (``write_set``) on a synthetic object set and two small images.
 
-Contracts: every record is valid 00.07; a member detected after the
+Contracts: every record is valid 00.08; a member detected after the
 trigger is not a previous detection and is not counted in nDiaSources;
 each index row's offset and length hold exactly its record; the three
 cutouts are (2 half width + 1) pixels square with off-chip pixels zero;
@@ -215,7 +215,7 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
                 flags_zero=2,
                 triggers=[a2, b2], aid_of={1: 7, 2: 9}, objects=objects, members=members,
                 images=images, trigger_image=images[1], reuse=reuse,
-                catalogs=catalogs, refcat_path=None)
+                catalogs=catalogs, refcat_path=None, coverage={7: 2, 9: 1})
     out = tmp_path / "out"
     out.mkdir()
     summary = write_set(read, SETTINGS, out, out.as_uri() + "/", "D", sync_seed="test")
@@ -233,6 +233,8 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     assert [p["midpointMjd"] for p in a["prvDiaSources"]] == [MJD[1]]
     assert a["diaObject"]["nDiaSources"] == 2
     assert records[2]["prvDiaSources"] is None and records[2]["diaObject"]["nDiaSources"] == 1
+    # the coverage count the read made, beside the detections, as ZTF's ncovhist and ndethist
+    assert a["diaObject"]["nDiaCoverage"] == 2 and records[2]["diaObject"]["nDiaCoverage"] == 1
     # the F146 statistics over A's two detections up to the trigger (epoch 3's excluded), B's one;
     # the mean position from the object's sums
     obj = a["diaObject"]
