@@ -273,20 +273,25 @@ parse_target() {  # sets TARGET, IMAGE, REST from the argument list
   IMAGE=$(image_current "$IMAGE_ARG")
 }
 
+load_args() {  # ARGS <- container_args TARGET; a refusal there ends the script
+  local text
+  text=$(container_args "$TARGET") || exit 1
+  ARGS=()
+  while IFS= read -r line; do ARGS+=("$line"); done <<< "$text"
+}
+
 cmd_shell() {
   parse_target "$@"
-  local args=()
-  while IFS= read -r line; do args+=("$line"); done < <(container_args "$TARGET")
+  load_args
   echo "dev.sh: target $TARGET, $IMAGE, checkout at /code" >&2
-  exec "$(engine)" run -it "${args[@]}" --entrypoint /bin/sh "$IMAGE" -c "$ENTRY" sh /bin/bash
+  exec "$(engine)" run -it "${ARGS[@]}" --entrypoint /bin/sh "$IMAGE" -c "$ENTRY" sh /bin/bash
 }
 
 cmd_run() {
   parse_target "$@"
   [ ${#REST[@]} -gt 0 ] || die "usage: run [--target local|deployed] [--image IMAGE] -- CMD [ARGS...]"
-  local args=()
-  while IFS= read -r line; do args+=("$line"); done < <(container_args "$TARGET")
-  exec "$(engine)" run "${args[@]}" --entrypoint /bin/sh "$IMAGE" -c "$ENTRY" sh "${REST[@]}"
+  load_args
+  exec "$(engine)" run "${ARGS[@]}" --entrypoint /bin/sh "$IMAGE" -c "$ENTRY" sh "${REST[@]}"
 }
 
 # ---------------------------------------------------------------------------
