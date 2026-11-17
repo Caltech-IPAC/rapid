@@ -248,13 +248,14 @@ container_args() {  # target -> the engine's run arguments, one per line
     deployed)
       [ -n "${RAPIDPIPE_OUTPUTS_ROOT:-}" ] || die "the deployed target: export RAPIDPIPE_OUTPUTS_ROOT (an s3:// scratch prefix) first"
       printf '%s\n' -e RAPID_PARAMETER_PATH="${RAPID_PARAMETER_PATH:-/rapid/rebuild}" \
-        -e RAPIDPIPE_OUTPUTS_ROOT="$RAPIDPIPE_OUTPUTS_ROOT"
-      for v in RAPIDPIPE_BATCH_JOB_QUEUE AWS_DEFAULT_REGION; do
-        [ -n "${!v:-}" ] && printf '%s\n' -e "$v=${!v}"
-      done
+        -e RAPIDPIPE_OUTPUTS_ROOT="$RAPIDPIPE_OUTPUTS_ROOT" -e AWS_DEFAULT_REGION="$REGION"
+      if [ -n "${RAPIDPIPE_BATCH_JOB_QUEUE:-}" ]; then
+        printf '%s\n' -e "RAPIDPIPE_BATCH_JOB_QUEUE=$RAPIDPIPE_BATCH_JOB_QUEUE"
+      fi
       ;;
     *) die "unknown target '$target' (local or deployed)" ;;
   esac
+  return 0
 }
 
 parse_target() {  # sets TARGET, IMAGE, REST from the argument list
@@ -275,7 +276,7 @@ parse_target() {  # sets TARGET, IMAGE, REST from the argument list
 
 load_args() {  # ARGS <- container_args TARGET; a refusal there ends the script
   local text
-  text=$(container_args "$TARGET") || exit 1
+  text=$(container_args "$TARGET") || { echo "dev.sh: not starting the container (above)" >&2; exit 1; }
   ARGS=()
   while IFS= read -r line; do ARGS+=("$line"); done <<< "$text"
 }
