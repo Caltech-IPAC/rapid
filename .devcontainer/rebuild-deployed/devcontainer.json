@@ -1,16 +1,16 @@
 {
   // The team's pipeline image with THIS checkout mounted at /code ahead of the
-  // installed package, on the team's rebuild database: scripts/dev.sh's team
-  // mode, as a VS Code dev container. The database is reached through the
+  // installed package, on the deployed database: scripts/dev.sh's deployed
+  // target, as a VS Code dev container. The database is reached through the
   // rebuild parameter tree under the workstation's instance role; nothing is
-  // copied in. A run here is a real run on the team's database: use a
+  // copied in. A run here is a real run on the deployed database: use a
   // dataset of your own, and run the test suites in the rebuild-local config.
   //
   // Before the first open, on the workstation:
   //   export RAPID_DEV_IMAGE=$(scripts/dev.sh image pull)
   //   export RAPIDPIPE_OUTPUTS_ROOT=s3://<scratch bucket>/rapidpipe/<your prefix>
   // (rapid_systems docs/workstation-submission.md names the bucket and queue).
-  "name": "rapid (rebuild image, team database)",
+  "name": "rapid (rebuild image, deployed database)",
   "image": "${localEnv:RAPID_DEV_IMAGE}",
 
   "workspaceMount": "source=${localWorkspaceFolder},target=/code,type=bind,consistency=cached",
