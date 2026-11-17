@@ -24,6 +24,8 @@
 
   "containerEnv": {
     "PYTHONPATH": "/code",
+    // The image's Python environment (the Containerfile's RAPID_PYTHON) is not on its PATH.
+    "PATH": "/opt/rapid/conda/envs/rapid/bin:${containerEnv:PATH}",
     "RAPID_PARAMETER_PATH": "/rapid/rebuild",
     "RAPIDPIPE_OUTPUTS_ROOT": "${localEnv:RAPIDPIPE_OUTPUTS_ROOT}",
     "RAPIDPIPE_BATCH_JOB_QUEUE": "${localEnv:RAPIDPIPE_BATCH_JOB_QUEUE}",

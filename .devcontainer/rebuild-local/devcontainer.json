@@ -28,6 +28,8 @@
 
   "containerEnv": {
     "PYTHONPATH": "/code",
+    // The image's Python environment (the Containerfile's RAPID_PYTHON) is not on its PATH.
+    "PATH": "/opt/rapid/conda/envs/rapid/bin:${containerEnv:PATH}",
     "PGHOST": "127.0.0.1",
     "PGPORT": "5432",
     "PGDATABASE": "rapid",
