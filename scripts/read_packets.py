@@ -57,8 +57,10 @@ from rapidpipe.science.alerts.cutouts import STAMP_FILL_VALUE
 CUTOUTS = ("cutoutDifference", "cutoutScience", "cutoutReference")
 #: prvDiaForcedSources field -> forced column; the float32 fields compare at float32.
 FORCED_FIELDS = {"diaObjectId": "aid", "expId": "expid", "detector": "sca", "ra": "ra",
-                 "dec": "dec", "band": "band", "midpointMjd": "mjdobs",
-                 "timeProcessedMjd": "time_proc"}
+                 "dec": "dec", "band": "band", "timeProcessedMjd": "time_proc"}
+#: ``midpointMjd`` is expected apart: the forced row's ``mjdobs`` (the exposure start) plus half
+#: its L2 row's exposure time, this script's own arithmetic. TODO (Emily, 2026-11-16): the forced
+#: row should store its mid-time, compared directly then.
 FORCED_FLOAT32 = {"psfFlux": "psf_flux", "psfFluxErr": "psf_fluxerr",
                   "scienceFlux": "science_flux", "scienceFluxErr": "science_fluxerr"}
 
@@ -120,6 +122,9 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
         conn, "SELECT f.* FROM forced_of(ARRAY[%s]::bigint[]) f WHERE"
               " EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
               " AND o.product = 'packets' AND o.job = f.job)", (job,))}
+    rids = sorted({r["rid"] for r in forced.values()})
+    exptime = {r["rid"]: r["exptime"] for r in _query(
+        conn, "SELECT rid, exptime FROM l2files WHERE rid = ANY(%s)", (rids,))} if rids else {}
     inputs = {(r["product"], r["source_job"]) for r in _query(
         conn, "SELECT product, source_job FROM job_inputs WHERE job = %s AND kind = 'input'",
         (job,))}
@@ -215,6 +220,9 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
                 continue
             differ = [field for field, column in FORCED_FIELDS.items()
                       if not _same(entry[field], stored[column])]
+            expected_mid = stored["mjdobs"] + (exptime.get(stored["rid"]) or 0.0) / 2.0 / 86400.0
+            if abs(entry["midpointMjd"] - expected_mid) > 1.0e-8:   # a millisecond
+                differ.append("midpointMjd")
             differ += [field for field, column in FORCED_FLOAT32.items()
                        if not _same(entry[field], _float32(stored[column]))]
             if differ:

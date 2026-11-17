@@ -161,7 +161,8 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
                           diff_psf=beside(e, "diffpsf.fits"),
                           diff_uncert=beside(e, "zogy_diffimage_uncert_masked.fits"),
                           sci=beside(e, "bkg_subbed_science_image.fits"),
-                          sci_psf=sci_psf, l2=(tmp_path / "l2" / f"e{e}.fits").as_uri()) for e in (1, 2)]
+                          sci_psf=sci_psf, l2=(tmp_path / "l2" / f"e{e}.fits").as_uri(),
+                          exptime=60.0) for e in (1, 2)]
     a1, a2, a3 = (source(e, 1, 50, 50, aid=7) for e in (1, 2, 3))
     b2 = source(2, 2, 20, 80, aid=9)
     sums_a, sums_b = Sums(a1.ra, a1.dec), Sums(b2.ra, b2.dec)
@@ -230,7 +231,10 @@ def test_records_are_valid_and_history_is_bounded_by_the_trigger(tmp_path):
     for record in records.values():
         assert fastavro.validation.validate(record, schema, raise_errors=True)
     a = records[1]
-    assert [p["midpointMjd"] for p in a["prvDiaSources"]] == [MJD[1]]
+    # midpointMjd: the exposure start plus half its 60 s
+    assert [p["midpointMjd"] for p in a["prvDiaSources"]] == [pytest.approx(MJD[1] + 30.0 / 86400.0)]
+    assert a["diaSource"]["midpointMjd"] == pytest.approx(MJD[2] + 30.0 / 86400.0)
+    assert [f["midpointMjd"] for f in a["prvDiaForcedSources"]] == [pytest.approx(MJD[e] + 30.0 / 86400.0) for e in (1, 2)]
     assert a["diaObject"]["nDiaSources"] == 2
     assert records[2]["prvDiaSources"] is None and records[2]["diaObject"]["nDiaSources"] == 1
     # the coverage count the read made, beside the detections, as ZTF's ncovhist and ndethist
@@ -332,8 +336,8 @@ def test_forced_rows_a_predecessor_holds_are_reused_not_measured(tmp_path):
     assert (summary["packets"], summary["packets_snr_gt20"]) == (2, 2)  # both triggers at S/N 50
     # the measured epoch-2 flux of A is near its injected 500 (unit-sum PSF, unit noise)
     assert abs(forced[(7, 202)]["psf_flux"] - 500.0) < 50.0
-    carried = {f["midpointMjd"]: f["psfFlux"] for f in records[1]["prvDiaForcedSources"]}
-    # the record's psfFlux is an Avro float
+    carried = {round(f["midpointMjd"] - 30.0 / 86400.0, 6): f["psfFlux"] for f in records[1]["prvDiaForcedSources"]}
+    # the record's psfFlux is an Avro float; its midpointMjd the start plus half the 60 s
     assert carried == {MJD[1]: 12345.0, MJD[2]: pytest.approx(forced[(7, 202)]["psf_flux"], rel=1e-6)}
 
 

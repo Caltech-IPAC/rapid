@@ -587,7 +587,7 @@ CREATE TABLE packets (
     field integer NOT NULL,                          -- the object's field
     source_job bigint NOT NULL REFERENCES jobs (id), -- the source set
     sid bigint NOT NULL,
-    trigger_mjd double precision NOT NULL,
+    trigger_mjd double precision NOT NULL,           -- the packet's midpointMjd: the trigger's exposure start plus half its exposure time (2026-11-16)
     band character varying(16) NOT NULL,
     schema_version text NOT NULL,
     filename text NOT NULL,
