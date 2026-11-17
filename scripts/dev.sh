@@ -44,6 +44,13 @@
 # reference is kept in .rapid-dev/image (git-ignored).
 set -euo pipefail
 
+# Inside a container dev.sh started (it sets RAPID_DEV_TARGET there), none of
+# this works: the engine and git are on the workstation.
+if [ -n "${RAPID_DEV_TARGET:-}" ] && [ "${1:-}" != "--help" ] && [ "${1:-}" != "-h" ]; then
+  echo "dev.sh: this is a dev.sh container (target $RAPID_DEV_TARGET); its commands run on an EC2 or laptop, not in here. Exit the container first." >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE="$ROOT/.rapid-dev"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
