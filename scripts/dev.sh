@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# scripts/dev.sh: work on a branch inside the team's pipeline image, on a RAPID
-# workstation (or any host with podman or docker and AWS access).
+# scripts/dev.sh: work on a branch in a container of the team's pipeline image,
+# on a RAPID workstation (or any host with podman or docker and AWS access).
 #
 #   scripts/dev.sh image latest            The newest rebuild-* tag in the registry.
 #   scripts/dev.sh image pull [TAG]        Log in to the registry, pull TAG (default: the
@@ -18,9 +18,11 @@
 #                                          keeps one already running (its runs stay); `stop`
 #                                          deletes it, data and all; `reset` is both.
 #   scripts/dev.sh shell [--target local|deployed] [--image IMAGE]
-#                                          An interactive bash session in the image: this
-#                                          checkout at /code ahead of the installed package
-#                                          (PYTHONPATH), work/ at /work, rapidpipe on PATH.
+#                                          An interactive bash session in a container of the
+#                                          image: this checkout at /code ahead of the package
+#                                          installed in the image (PYTHONPATH), so the
+#                                          checkout's code runs on the image's dependencies;
+#                                          work/ at /work, rapidpipe on PATH.
 #                                          The target is what the container runs against: the
 #                                          throwaway database here (local, the default; started
 #                                          if it is not) or the deployed one (deployed).
@@ -288,6 +290,6 @@ case "${1:-}" in
   db) shift; cmd_db "$@" ;;
   shell) shift; cmd_shell "$@" ;;
   run) shift; cmd_run "$@" ;;
-  -h|--help|help|"") sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help|"") sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//' ;;
   *) die "unknown command '$1' (image, sync, db, shell, run; --help)" ;;
 esac
