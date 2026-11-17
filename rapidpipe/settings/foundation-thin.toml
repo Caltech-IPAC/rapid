@@ -758,7 +758,7 @@ filename_global_clippedmean_refimage_tbl = "global_clippedmean_reference_image.t
 
 [difference.gainmatch]
 # [GAINMATCH] (socsims/rimtimsims thresholds). `dev`'s
-# upload_intermediate_products is S3-only and not ported.
+# upload_intermediate_products is not ported: the two catalogs are always kept, as dev's ini keeps them.
 verbose = 1
 zero_point_sci_keyword = "ZPTMAG"
 magrefthresmin = 19.0

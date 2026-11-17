@@ -395,6 +395,7 @@ class FakePsfCatalog:
         nsources = len(peaks)
         Path(kwargs["catalog"]).write_text(f"# id x_fit y_fit\n# {nsources} sources\n")
         Path(kwargs["finder"]).write_text("# finder\n")
+        fits.PrimaryHDU(data=np.zeros_like(data, dtype=np.float32)).writeto(kwargs["residual"])
         if kwargs.get("parquet"):
             _write_psfcat_parquet(Path(kwargs["parquet"]), peaks)
         return PsfCatalogResult(produced=True, nsources=nsources)

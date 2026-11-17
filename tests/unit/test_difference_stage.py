@@ -57,6 +57,7 @@ from rapidpipe.science.difference.tools import ToolFailed
 from rapidpipe.science.load.catalogs import source_set, sources_prefilter
 from rapidpipe.foundation.local import JobContext
 from tests.support.fakedifftools import (
+    SCIENCE_NAME,
     ZPTMAG,
     FakePsfCatalog,
     FakeRbClassifier,
@@ -303,9 +304,31 @@ def test_the_job_publishes_the_kept_set_gzipped_and_nothing_else(tmp_path, files
               "bkg_subbed_science_image.fits",               # forced photometry, science cutout
               "awaicgen_output_mosaic_image_resampled_gainmatched.fits",  # template cutout
               "refimage_psf.fits"}                           # the measured reference PSF
+    science = SCIENCE_NAME.removesuffix(".fits.gz")
+    images |= {f"{science}.fits",                            # what dev uploads besides
+               f"{science}_reformatted.fits", f"{science}_reformatted_unc.fits",
+               f"{science}_reformatted_pv.fits",
+               "awaicgen_output_mosaic_image_resampled.fits",
+               "awaicgen_output_mosaic_uncert_image_resampled.fits",
+               "awaicgen_output_mosaic_uncert_image_resampled_gainmatched.fits",
+               "sciimage_psf_f184_sca07_normalized.fits",
+               "sfftsoln.fits", "sfftdiffimage_masked_negative.fits",
+               "zogy_diffimage_masked.fits", "zogy_diffimage_masked_negative.fits",
+               "zogy_diffimage_uncert_masked.fits", "diffpsf.fits",
+               "scorrimage_masked.fits", "scorrimage_masked_negative.fits",
+               "naive_diffimage_masked.fits", "naive_diffimage_masked_negative.fits",
+               "naive_diffimage_uncert_masked.fits"}
+    images |= {f"{d}_masked_psfcat_residual{sign}.fits"
+               for d in ("sfftdiffimage", "zogy_diffimage") for sign in ("", "_negative")}
     catalogs = {f"{d}_masked_psfcat{sign}.parquet"         # the published one and diagnostics
                 for d in ("sfftdiffimage", "zogy_diffimage") for sign in ("", "_negative")}
-    assert {p.name for p in work.iterdir()} == {name + ".gz" for name in images} | catalogs
+    texts = {"bkg_subbed_science_image_scigainmatchsexcat.txt",
+             "awaicgen_output_mosaic_image_resampled_refgainmatchsexcat.txt"}
+    texts |= {f"{d}_masked{sign}.txt" for d in ("sfftdiffimage", "zogy_diffimage", "naive_diffimage")
+              for sign in ("", "_negative")}
+    texts |= {f"{d}_masked_psfcat{kind}{sign}.txt" for d in ("sfftdiffimage", "zogy_diffimage")
+              for kind in ("", "_finder") for sign in ("", "_negative")}
+    assert {p.name for p in work.iterdir()} == {name + ".gz" for name in images} | catalogs | texts
     for name in images:
         assert fits.getdata(work / (name + ".gz")) is not None, name
 
@@ -365,6 +388,11 @@ def test_the_shipped_default_publishes_sffts_cross_convolved_block(tmp_path, fil
     assert manifest(prefix)["difference"]["differencer"] == "sfft"
     (row,) = read(prefix, "diffimages")
     assert row["filename"].endswith("/diff/sfftdiffimage_dconv_masked.fits.gz")
+    for name in ("sfftsoln_cconv", "sfftdiffimage_dconv_masked_negative", "sfftdiffimage_cconv_masked",
+                 "sfftdiffimage_cconv_masked_negative"):  # dev uploads the cross-convolved pair too
+        assert (prefix / "diff" / f"{name}.fits.gz").is_file(), name
+    for name in ("sfftdiffimage_cconv_masked", "sfftdiffimage_cconv_masked_negative"):  # detected on
+        assert (prefix / "diff" / f"{name}.txt").is_file(), name
 
 
 def test_under_sfft_every_candidate_is_scored_and_each_source_carries_its_score(tmp_path, files,
@@ -711,6 +739,8 @@ def test_the_pixel_columns_add_three_columns_and_change_nothing_else(tmp_path, f
             gained = new if path.name.startswith("sfft") else []
             assert sorted(now.column_names) == sorted(old.column_names + gained), path.name
             assert now.select(old.column_names).equals(old), path.name
+        elif path.suffix == ".txt":
+            assert twin.read_text() == path.read_text(), path.name
         else:
             np.testing.assert_array_equal(fits.getdata(twin), fits.getdata(path), err_msg=path.name)
     ignore = {"filename", "checksum"}           # the prefix's own URI; the gzip of a DATE card
