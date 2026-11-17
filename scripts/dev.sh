@@ -215,8 +215,13 @@ cmd_db() {
 # shell / run
 # ---------------------------------------------------------------------------
 
-#: Put rapidpipe on PATH inside the container, then hand over to the command.
-ENTRY='ln -sf /usr/local/bin/rapidpipe-entrypoint /usr/local/bin/rapidpipe; cd /code; exec "$@"'
+#: Put rapidpipe and the image's Python environment on PATH inside the
+#: container, then hand over to the command. The image names its interpreter
+#: only in the entrypoint script (the Containerfile's RAPID_PYTHON), so the
+#: environment's bin directory is read from there.
+ENTRY='py=$(sed -n "s/^exec \"\(.*\)\" -m rapidpipe.*/\1/p" /usr/local/bin/rapidpipe-entrypoint);
+[ -n "$py" ] && export PATH="$(dirname "$py"):$PATH";
+ln -sf /usr/local/bin/rapidpipe-entrypoint /usr/local/bin/rapidpipe; cd /code; exec "$@"'
 
 container_args() {  # target -> the engine's run arguments, one per line
   local target="$1"
