@@ -52,7 +52,10 @@ dq_mask_bits = 34671619
 # clean but column 2646 (half the files) and 2645 (2 files, mildly). No
 # other SCA of program 1049's 288 files of 2026-10-24 shows one. The box is padded one pixel each way: columns 2645
 # to 2668, window rows plus 0 to 2. To be dropped once the L2 DQ flags the
-# ghost (Jacob, 2026-11-16).
+# ghost (Jacob, 2026-11-16). The window is read out on every SCA, guiding or
+# not: program 1049's 76 files of SCAs without a guide star (PGS<sca>00001)
+# show the same dark, JUMP_DET box at their reported (default) window, and
+# 1043's 8 unguided WFI12 files carry the ghost at theirs.
 gw_ghost = [{sca = 12, columns = [2645, 2668], rows = [0, 2]}]
 # The sky moves: the intake's gaia_dx_px / gaia_dy_px carry Gaia DR3's stars
 # by their proper motions to each frame's mid-exposure (runbook part 13 step
