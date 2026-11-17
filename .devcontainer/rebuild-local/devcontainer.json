@@ -1,7 +1,7 @@
 {
   // The team's pipeline image with THIS checkout mounted at /code ahead of the
   // installed package, and a throwaway PostgreSQL beside it: scripts/dev.sh's
-  // local mode, as a VS Code dev container. Open the checkout on a RAPID
+  // local target, as a VS Code dev container. Open the checkout on a RAPID
   // workstation over Remote-SSH (`rapid vscode`), then "Reopen in Container"
   // and pick this config. Git stays on the host: the image carries none.
   //

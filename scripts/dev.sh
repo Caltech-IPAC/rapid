@@ -2,34 +2,39 @@
 # scripts/dev.sh: work on a branch inside the team's pipeline image, on a RAPID
 # workstation (or any host with podman or docker and AWS access).
 #
-#   scripts/dev.sh image latest            the newest rebuild-* tag in the registry
-#   scripts/dev.sh image pull [TAG]        log in to the registry, pull TAG (default: the
-#                                          newest), remember it as this checkout's image
-#   scripts/dev.sh image rev [IMAGE]       the commit the image was built from, and the
-#                                          branches that hold it
-#   scripts/dev.sh sync [REF]              fetch origin and check this checkout out at REF (a
+#   scripts/dev.sh image latest            The newest rebuild-* tag in the registry.
+#   scripts/dev.sh image pull [TAG]        Log in to the registry, pull TAG (default: the
+#                                          newest), remember it as this checkout's image.
+#   scripts/dev.sh image rev [IMAGE]       The commit the image was built from, and the
+#                                          branches that hold it.
+#   scripts/dev.sh sync [REF]              Fetch origin and check this checkout out at REF (a
 #                                          branch, tracking origin's; or a commit, detached);
 #                                          refuses a dirty working tree. `rapid dev` runs it
 #                                          first with the laptop's own commit.
 #   scripts/dev.sh db start|stop|reset|status
-#                                          a throwaway PostgreSQL 18 with database/schema.sql
-#                                          applied, in the pod the containers share
-#   scripts/dev.sh shell [--team] [--image IMAGE]
-#                                          bash in the image: this checkout at /code ahead of
-#                                          the installed package (PYTHONPATH), work/ at /work,
-#                                          rapidpipe on PATH; --local (default) uses the
-#                                          throwaway database, --team the rebuild tree
-#   scripts/dev.sh run [--team] [--image IMAGE] -- CMD [ARGS...]
-#                                          one command the same way, e.g.
-#                                          `run -- rapidpipe run show 7` or
-#                                          `run -- python -m pytest tests/unit -q`
+#                                          A throwaway PostgreSQL 18 with database/schema.sql
+#                                          applied, in the pod the containers share. `start`
+#                                          keeps one already running (its runs stay); `stop`
+#                                          deletes it, data and all; `reset` is both.
+#   scripts/dev.sh shell [--target local|deployed] [--image IMAGE]
+#                                          An interactive bash session in the image: this
+#                                          checkout at /code ahead of the installed package
+#                                          (PYTHONPATH), work/ at /work, rapidpipe on PATH.
+#                                          The target is what the container runs against: the
+#                                          throwaway database here (local, the default; started
+#                                          if it is not) or the deployed one (deployed).
+#   scripts/dev.sh run [--target local|deployed] [--image IMAGE] -- CMD [ARGS...]
+#                                          Start the container, run one command, exit, e.g.
+#                                          `run -- python -m pytest tests/unit -q` or
+#                                          `run --target deployed -- rapidpipe run show 7`.
 #
-# Local mode (the default) talks to the throwaway database through PG* and
-# writes products under work/out; team mode sets RAPID_PARAMETER_PATH to the
-# rebuild tree, so the container reaches the team's rebuild database under the
-# host's instance role (rapid_systems docs/workstation-submission.md), and
-# takes RAPIDPIPE_OUTPUTS_ROOT from the caller's environment. A run against
-# the team's database is a real run: use a dataset of your own.
+# The local target (the default) talks to the throwaway database through PG*
+# and writes products under work/out; the deployed target sets
+# RAPID_PARAMETER_PATH to the rebuild tree, so the container reaches the
+# deployed database under the host's instance role (rapid_systems
+# docs/workstation-submission.md), and takes RAPIDPIPE_OUTPUTS_ROOT from the
+# caller's environment. A run against the deployed database is a real run:
+# use a dataset of your own.
 #
 # Nothing here is account-specific: the registry is derived from the caller's
 # AWS identity, as the README's Getting started does. The pulled image's
@@ -211,58 +216,60 @@ cmd_db() {
 #: Put rapidpipe on PATH inside the container, then hand over to the command.
 ENTRY='ln -sf /usr/local/bin/rapidpipe-entrypoint /usr/local/bin/rapidpipe; cd /code; exec "$@"'
 
-container_args() {  # mode -> the engine's run arguments, one per line
-  local mode="$1"
+container_args() {  # target -> the engine's run arguments, one per line
+  local target="$1"
   mkdir -p "$ROOT/work/out"
   printf '%s\n' --rm -v "$ROOT:/code:Z" -v "$ROOT/work:/work:Z" -w /code \
     -e PYTHONPATH=/code -e RAPIDPIPE_LOG_LEVEL="${RAPIDPIPE_LOG_LEVEL:-INFO}" \
-    -e RAPID_DEV_MODE="$mode"
-  case "$mode" in
+    -e RAPID_DEV_TARGET="$target"
+  case "$target" in
     local)
-      db_running || die "the throwaway database is not running: scripts/dev.sh db start"
+      db_running || db_start >&2   # keeps a running one and its runs; `db reset` clears it
       printf '%s\n' "$(net_args)" -e PGHOST="$(db_host)" -e PGPORT=5432 -e PGDATABASE=rapid \
         -e PGUSER=postgres -e PGPASSWORD="$DB_PASSWORD" \
         -e RAPIDPIPE_OUTPUTS_ROOT="${RAPIDPIPE_OUTPUTS_ROOT:-file:///work/out}"
       ;;
-    team)
-      [ -n "${RAPIDPIPE_OUTPUTS_ROOT:-}" ] || die "team mode: export RAPIDPIPE_OUTPUTS_ROOT (an s3:// scratch prefix) first"
+    deployed)
+      [ -n "${RAPIDPIPE_OUTPUTS_ROOT:-}" ] || die "the deployed target: export RAPIDPIPE_OUTPUTS_ROOT (an s3:// scratch prefix) first"
       printf '%s\n' -e RAPID_PARAMETER_PATH="${RAPID_PARAMETER_PATH:-/rapid/rebuild}" \
         -e RAPIDPIPE_OUTPUTS_ROOT="$RAPIDPIPE_OUTPUTS_ROOT"
       for v in RAPIDPIPE_BATCH_JOB_QUEUE AWS_DEFAULT_REGION; do
         [ -n "${!v:-}" ] && printf '%s\n' -e "$v=${!v}"
       done
       ;;
+    *) die "unknown target '$target' (local or deployed)" ;;
   esac
 }
 
-parse_mode() {  # sets MODE, IMAGE, REST from the argument list
-  MODE=local; IMAGE_ARG=""; REST=()
+parse_target() {  # sets TARGET, IMAGE, REST from the argument list
+  TARGET=local; IMAGE_ARG=""; REST=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --team) MODE=team; shift ;;
-      --local) MODE=local; shift ;;
+      --target) TARGET="${2:-}"; [ -n "$TARGET" ] || die "--target needs a value (local or deployed)"; shift 2 ;;
+      --target=*) TARGET="${1#--target=}"; shift ;;
       --image) IMAGE_ARG="${2:-}"; [ -n "$IMAGE_ARG" ] || die "--image needs a value"; shift 2 ;;
       --) shift; REST=("$@"); break ;;
       -*) die "unknown option $1" ;;
       *) REST=("$@"); break ;;
     esac
   done
+  case "$TARGET" in local|deployed) ;; *) die "unknown target '$TARGET' (local or deployed)" ;; esac
   IMAGE=$(image_current "$IMAGE_ARG")
 }
 
 cmd_shell() {
-  parse_mode "$@"
+  parse_target "$@"
   local args=()
-  while IFS= read -r line; do args+=("$line"); done < <(container_args "$MODE")
-  echo "dev.sh: $MODE mode, $IMAGE, checkout at /code" >&2
+  while IFS= read -r line; do args+=("$line"); done < <(container_args "$TARGET")
+  echo "dev.sh: target $TARGET, $IMAGE, checkout at /code" >&2
   exec "$(engine)" run -it "${args[@]}" --entrypoint /bin/sh "$IMAGE" -c "$ENTRY" sh /bin/bash
 }
 
 cmd_run() {
-  parse_mode "$@"
-  [ ${#REST[@]} -gt 0 ] || die "usage: run [--team] [--image IMAGE] -- CMD [ARGS...]"
+  parse_target "$@"
+  [ ${#REST[@]} -gt 0 ] || die "usage: run [--target local|deployed] [--image IMAGE] -- CMD [ARGS...]"
   local args=()
-  while IFS= read -r line; do args+=("$line"); done < <(container_args "$MODE")
+  while IFS= read -r line; do args+=("$line"); done < <(container_args "$TARGET")
   exec "$(engine)" run "${args[@]}" --entrypoint /bin/sh "$IMAGE" -c "$ENTRY" sh "${REST[@]}"
 }
 
@@ -274,6 +281,6 @@ case "${1:-}" in
   db) shift; cmd_db "$@" ;;
   shell) shift; cmd_shell "$@" ;;
   run) shift; cmd_run "$@" ;;
-  -h|--help|help|"") sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help|"") sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$1' (image, sync, db, shell, run; --help)" ;;
 esac

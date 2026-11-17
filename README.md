@@ -37,23 +37,23 @@ The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rap
 
 ### Working on a branch in the image
 
-To run a branch of this checkout, its tests included, inside the team's image on your workstation, without building an image: `scripts/dev.sh`. It mounts the checkout at `/code` ahead of the package installed in the image (`PYTHONPATH`), so `rapidpipe`, `python -m pytest` and the stages run the checkout's code, and `work/` at `/work`. Two modes:
+To run a branch of this checkout, its tests included, inside the team's image on your workstation, without building an image: `rapid dev <command>` from your laptop (`rapid_systems`' `bin/rapid`), which syncs the workstation's checkout to the commit your laptop's checkout is on and runs `scripts/dev.sh <command>` there. The commands are dev.sh's (`scripts/dev.sh --help`, or `rapid dev --help`). It mounts the checkout at `/code` ahead of the package installed in the image (`PYTHONPATH`), so `rapidpipe`, `python -m pytest` and the stages run the checkout's code, and `work/` at `/work`. The target is what the container runs against:
 
-- **local** (the default): a throwaway PostgreSQL 18 beside the container with `database/schema.sql` applied, `PG*` set to it, products under `work/out`. For the test suites and scratch runs.
-- **`--team`**: `RAPID_PARAMETER_PATH=/rapid/rebuild`, so the container reaches the team's rebuild database under the workstation's instance role (`rapid_systems`' `docs/workstation-submission.md`), with `RAPIDPIPE_OUTPUTS_ROOT` from your environment. A run there is a real run: use a dataset of your own.
+- **`--target local`** (the default): a throwaway PostgreSQL 18 beside the container with `database/schema.sql` applied, `PG*` set to it, products under `work/out`. For the test suites and scratch runs.
+- **`--target deployed`**: `RAPID_PARAMETER_PATH=/rapid/rebuild`, so the container reaches the deployed database under the workstation's instance role (`rapid_systems`' `docs/workstation-submission.md`), with `RAPIDPIPE_OUTPUTS_ROOT` from your environment. A run there is a real run: use a dataset of your own.
 
 ```sh
-export PATH=$PWD/scripts:$PATH                     # optional
-dev.sh image pull                                  # the newest rebuild image; `image pull TAG` for another
-dev.sh sync my-branch                              # this checkout at a pushed branch or commit (refuses a dirty tree)
-dev.sh db start                                    # the throwaway database (stop, reset, status)
-dev.sh shell                                       # bash in the image, this checkout at /code
-dev.sh run -- python -m pytest tests/unit -q       # one command instead of a shell
-dev.sh run -- python -m pytest tests/db tests/cli -q
-dev.sh run --team -- rapidpipe run show 7
+git push                                           # the workstation is synced to this commit
+rapid dev image pull                               # the newest rebuild image; `image pull TAG` for another
+rapid dev db start                                 # the throwaway database (stop, reset, status)
+rapid dev shell                                    # bash in the image, this checkout at /code
+rapid dev run -- python -m pytest tests/unit -q    # one command instead of a shell
+rapid dev run -- python -m pytest tests/db tests/cli -q
+rapid dev run --target deployed -- rapidpipe run show 7
+rapid dev --ref rebuild shell                      # the integration branch instead of your commit
 ```
 
-The image carries no git: commit from the workstation, not the container. For a VS Code session in the same container, open the checkout over Remote-SSH (`rapid vscode`), export `RAPID_DEV_IMAGE=$(scripts/dev.sh image pull)` in your login shell, and "Reopen in Container" with `.devcontainer/rebuild-local` (starts the throwaway database itself) or `.devcontainer/rebuild-team`.
+On the workstation itself the same commands are `scripts/dev.sh image pull`, `scripts/dev.sh db start` and so on, with `scripts/dev.sh sync REF` as the sync `rapid dev` does first. The image carries no git: commit from the workstation, not the container. For a VS Code session in the same container, open the checkout over Remote-SSH (`rapid vscode`), export `RAPID_DEV_IMAGE=$(scripts/dev.sh image pull)` in your login shell, and "Reopen in Container" with `.devcontainer/rebuild-local` (starts the throwaway database itself) or `.devcontainer/rebuild-deployed`.
 
 ### The Gaia catalog
 
