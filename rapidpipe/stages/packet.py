@@ -192,6 +192,7 @@ from rapidpipe.science.alerts.crossmatch import (
 from rapidpipe.science.alerts.kona import ephemeris_from_header, l2_primary_header, noon_jd, predict
 from rapidpipe.science.catalogs.readers import CATALOG_KINDS, catalog_reader, cone_of_corners
 from rapidpipe.science.alerts.cutouts import CUTOUT_FILES, extract_stamp, load_fits_image
+from rapidpipe.science.alerts.param_registry import midpoint_mjd
 from rapidpipe.science.alerts.records import Cutouts, ForcedPhot, ObjectRecord, Source
 from rapidpipe.science.difference.realbogus import version_of
 from rapidpipe.science.statistics.sums import Sums
@@ -390,7 +391,7 @@ def xsource_fields(row: dict) -> dict:
 WINDOW_SQL = (
     "SELECT d.job, d.pid, d.rid, d.dataset, d.expid, d.sca, d.fid, d.filename,"
     " d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4, f.filter,"
-    " l.mjdobs, l.job AS l2_job, l.filename AS l2file"
+    " l.mjdobs, l.exptime, l.job AS l2_job, l.filename AS l2file"
     " FROM diffimages d JOIN filters f ON f.fid = d.fid JOIN l2files l ON l.rid = d.rid"
     " WHERE d.dataset = %(dataset)s"
     " AND 2 * asin(sqrt(power(sin(radians(d.dec0 - %(dec0)s) / 2), 2) + cos(radians(d.dec0))"
@@ -440,6 +441,7 @@ class WindowImage:
     sci: Path
     sci_psf: Path | None                          # None: no psfs row for the image; science not measured
     l2: str | None = None                         # the L2 file's URL: the trigger's header holds the ephemeris
+    exptime: float | None = None                  # the L2 row's EXPTIME: the forced record's mid-time
 
 
 @dataclasses.dataclass
@@ -693,7 +695,8 @@ def _read(job: JobContext) -> Read:
                                              "ra3", "dec3", "ra4", "dec4")),
                 diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[plain]),
                 diff_uncert=_beside(d["filename"], uncert) if uncert else None,
-                sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf, l2=d["l2file"]))
+                sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf, l2=d["l2file"],
+                exptime=d["exptime"]))
 
         reuse: dict[int, dict] = {}
         reused_sets = {}
@@ -934,9 +937,15 @@ def measure_forced(images: list[WindowImage], positions: list[fp.Position],
     return rows, measured
 
 
-def _forced_phot(row: dict) -> ForcedPhot:
+def _forced_phot(row: dict, exptime: float | None) -> ForcedPhot:
+    """The forced record of a ``forced`` row, with its image's exposure time (its mid-time's).
+
+    TODO (Emily, 2026-11-16): the ``forced`` row should store the exposure
+    time; until it does the window image's ``l2files`` row supplies it.
+    """
     return ForcedPhot(forced_id=row["forced_id"], aid=row["aid"], expid=row["expid"],
                       sca=row["sca"], ra=row["ra"], dec=row["dec"], mjdobs=row["mjdobs"],
+                      exptime=exptime,
                       time_proc=row["time_proc"], band=row["band"] or None,
                       flux=row["psf_flux"], fluxerr=row["psf_fluxerr"],
                       science_flux=row["science_flux"],
@@ -1172,6 +1181,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
     timing["cutouts_s"] = time.perf_counter() - t0
 
+    exptime_of = {i.rid: i.exptime for i in read.images}  # each forced row's image, by rid
     forced_by_aid: dict[int, list[dict]] = {}
     for row in forced_rows:
         forced_by_aid.setdefault(row["aid"], []).append(row)
@@ -1205,7 +1215,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                                          for kind, (pixels, header) in stamps.items()})
                 cutout_s += time.perf_counter() - c0
                 lo = trigger_mjd - float(settings["forced_window_days"])
-                forced = [_forced_phot(r) for r in forced_by_aid.get(aid, [])
+                forced = [_forced_phot(r, exptime_of.get(r["rid"])) for r in forced_by_aid.get(aid, [])
                           if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
                 alert = assemble_alert(source, obj, prv, ss_matches=ss_matches, ref_matches=ref_matches,
                                        ned_matches=ned_matches, lvs_matches=lvs_matches,
@@ -1245,7 +1255,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
         index = [{"dataset": dataset, "expid": read.key["expid"], "sca": read.key["sca"],
                   "fid": read.key["fid"], "object_job": read.object_job[aid], "aid": aid,
                   "field": read.field_of[aid],
-                  "source_job": read.source_job, "sid": source.sid, "trigger_mjd": source.mjdobs,
+                  "source_job": read.source_job, "sid": source.sid,
+                  "trigger_mjd": midpoint_mjd(source.mjdobs, source.exptime),  # the packet's midpointMjd
                   "band": source.band, "schema_version": VERSION, "filename": url,
                   "byte_offset": offset, "byte_length": size}
                  for (source, aid), (offset, size, _) in zip(order, blocks)]

@@ -185,6 +185,18 @@ _PSFFLUX_FAIL_BITS = (_PSF_FLAG_NONPOS_FLUX | _PSF_FLAG_NO_CONVERGENCE
 # diaSource -- built from providers.Source
 # ---------------------------------------------------------------------------
 
+def midpoint_mjd(mjdobs: float, exptime: float | None) -> float:
+    """The exposure's mid-time: ``mjdobs`` (MJD-OBS, the start) plus half ``exptime``, in days;
+    the start alone when the exposure time is unknown. The one definition of ``midpointMjd``:
+    the same arithmetic as intake's Gaia propagation epoch, and what the check scripts expect.
+    The ASDF ``meta.exposure.mid_time`` is not carried in the database (2026-11-16)."""
+    return float(mjdobs) + (float(exptime) if exptime is not None else 0.0) / 2.0 / 86400.0
+
+
+def _midpoint(record) -> float:
+    return midpoint_mjd(record.mjdobs, getattr(record, "exptime", None))
+
+
 DIA_SOURCE_PARAMS = (
     # --- Identifiers & associations -------------------------------------
     Param("diaSourceId",   "long",             "Unique identifier for this source detection",
@@ -201,8 +213,8 @@ DIA_SOURCE_PARAMS = (
 
     # --- Time ------------------------------------------------------------
     #TODO - make sure final Roman decision is UTC, propagate to other times
-    Param("midpointMjd", "double",          "Effective mid-observation time (UTC scale) [MJD]",
-                    IMPLEMENTED, "sources.mjdobs", attr="mjdobs"),
+    Param("midpointMjd", "double",          "Effective mid-observation time: the exposure start plus half the exposure time (UTC scale) [MJD]",
+                    IMPLEMENTED, "sources.mjdobs (MJD-OBS) + exposures.exptime / 2", getter=_midpoint),
     Param("timeProcessedMjd",  ["null", "double"],  "Time alert was processed (UTC scale) [MJD]",
                     IMPLEMENTED, "set at assembly time", attr="time_proc"),
     Param("exposureTime",  ["null", "float"],  "Exposure time [s]",
@@ -464,8 +476,8 @@ DIA_FORCED_SOURCE_PARAMS = (
     # forced-photometry position, not the detection position.
 
     # --- Time ---
-    Param("midpointMjd",    "double",          "Effective mid-observation time (UTC scale) [MJD]",
-                        IMPLEMENTED, "l2files.mjdobs of the measured epoch", attr="mjdobs"),
+    Param("midpointMjd",    "double",          "Effective mid-observation time: the exposure start plus half the exposure time (UTC scale) [MJD]",
+                        IMPLEMENTED, "l2files.mjdobs (MJD-OBS) + l2files.exptime / 2 of the measured epoch", getter=_midpoint),
     Param("timeProcessedMjd", "double",        "Time measurement was processed (UTC scale) [MJD]",
                         IMPLEMENTED, "time the chip's forced-photometry run started", attr="time_proc"),
     Param("timeWithdrawnMjd", ["null", "double"], "Time measurement was withdrawn (UTC scale) [MJD]",

@@ -83,7 +83,7 @@
         {
             "name": "midpointMjd",
             "type": "double",
-            "doc": "Effective mid-observation time (UTC scale) [MJD]"
+            "doc": "Effective mid-observation time: the exposure start plus half the exposure time (UTC scale) [MJD]"
         },
         {
             "name": "timeProcessedMjd",

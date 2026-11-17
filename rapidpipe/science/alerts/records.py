@@ -255,6 +255,10 @@ class ForcedPhot:
     science_flux: float | None = None
     science_fluxerr: float | None = None
     flags: int = 0
+    # the measured image's exposure time, for midpointMjd (mjdobs + exptime / 2); the packet
+    # stage passes it from the window image's l2files row. TODO (Emily, 2026-11-16): the forced
+    # row should store it, so a record read back from the table carries its own.
+    exptime: float | None = None
 
 
 @dataclass
