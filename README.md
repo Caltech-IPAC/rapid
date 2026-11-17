@@ -35,9 +35,9 @@ The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rap
 
 `scripts/dev.sh image pull` does the four lines above in one and remembers the image for the other `dev.sh` commands; `scripts/dev.sh image rev` says which commit and branches an image was built from.
 
-### Working on a branch in the image
+### Working on a branch in a container
 
-To run a branch of this checkout, its tests included, inside the team's image on your workstation, without building an image: `rapid dev <command>` from your laptop (`rapid_systems`' `bin/rapid`), which syncs the workstation's checkout to the commit your laptop's checkout is on and runs `scripts/dev.sh <command>` there. The commands are dev.sh's (`scripts/dev.sh --help`, or `rapid dev --help`). It mounts the checkout at `/code` ahead of the package installed in the image (`PYTHONPATH`), so `rapidpipe`, `python -m pytest` and the stages run the checkout's code, and `work/` at `/work`. The target is what the container runs against:
+To run a branch of this checkout, its tests included, in a container of the team's image on your workstation, without building an image: `rapid dev <command>` from your laptop (`rapid_systems`' `bin/rapid`), which syncs the workstation's checkout to the commit your laptop's checkout is on and runs `scripts/dev.sh <command>` there. The commands are dev.sh's (`scripts/dev.sh --help`, or `rapid dev --help`). The container mounts the checkout at `/code` ahead of the `rapidpipe` installed in the image (`PYTHONPATH`), so `rapidpipe`, `python -m pytest` and the stages run the checkout's code on the image's dependencies and tools, and `work/` at `/work`. A branch that changes `requirements.txt` needs a rebuilt image, since the image's libraries are the ones that run. The target is what the container runs against:
 
 - **`--target local`** (the default): a throwaway PostgreSQL 18 beside the container with `database/schema.sql` applied, `PG*` set to it, products under `work/out`. For the test suites and scratch runs.
 - **`--target deployed`**: `RAPID_PARAMETER_PATH=/rapid/rebuild`, so the container reaches the deployed database under the workstation's instance role (`rapid_systems`' `docs/workstation-submission.md`), with `RAPIDPIPE_OUTPUTS_ROOT` from your environment. A run there is a real run: use a dataset of your own.
@@ -46,7 +46,7 @@ To run a branch of this checkout, its tests included, inside the team's image on
 git push                                           # the workstation is synced to this commit
 rapid dev image pull                               # the newest rebuild image; `image pull TAG` for another
 rapid dev db start                                 # the throwaway database (stop, reset, status)
-rapid dev shell                                    # bash in the image, this checkout at /code
+rapid dev shell                                    # bash in a container, this checkout at /code
 rapid dev run -- python -m pytest tests/unit -q    # one command instead of a shell
 rapid dev run -- python -m pytest tests/db tests/cli -q
 rapid dev run --target deployed -- rapidpipe run show 7
