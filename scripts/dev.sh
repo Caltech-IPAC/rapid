@@ -5,8 +5,9 @@
 #   scripts/dev.sh image latest            The newest rebuild-* tag in the registry.
 #   scripts/dev.sh image pull [TAG]        Log in to the registry, pull TAG (default: the
 #                                          newest), remember it as this checkout's image.
-#   scripts/dev.sh image rev [IMAGE]       The commit the image was built from, and the
-#                                          branches that hold it.
+#   scripts/dev.sh image rev [IMAGE]       The commit the image was built from (what a Batch
+#                                          job runs) and the branches that hold it, beside
+#                                          this checkout's (what shell and run run).
 #   scripts/dev.sh sync [REF]              Fetch origin and check this checkout out at REF (a
 #                                          branch, tracking origin's; or a commit, detached);
 #                                          refuses a dirty working tree. `rapid dev` runs it
@@ -106,13 +107,14 @@ image_rev() {
     || die "cannot inspect $image (is it pulled?)"
   [ -n "$sha" ] || die "$image carries no revision label"
   echo "image:    $image"
-  echo "commit:   $sha"
+  echo "commit:   $sha  (the package installed in the image: what a Batch job runs)"
   if git -C "$ROOT" cat-file -e "$sha^{commit}" 2>/dev/null; then
     echo "subject:  $(git -C "$ROOT" log -1 --format='%s (%ad)' --date=short "$sha")"
     echo "branches: $(git -C "$ROOT" branch -r --contains "$sha" --format='%(refname:short)' | tr '\n' ' ')"
   else
     echo "branches: (commit not in this checkout; git fetch and retry)"
   fi
+  echo "checkout: $(git -C "$ROOT" rev-parse --short HEAD) $(git -C "$ROOT" branch --show-current || true)  (mounted at /code: what shell and run run)"
 }
 
 cmd_image() {
@@ -281,6 +283,6 @@ case "${1:-}" in
   db) shift; cmd_db "$@" ;;
   shell) shift; cmd_shell "$@" ;;
   run) shift; cmd_run "$@" ;;
-  -h|--help|help|"") sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help|"") sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$1' (image, sync, db, shell, run; --help)" ;;
 esac
