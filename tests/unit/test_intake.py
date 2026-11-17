@@ -453,6 +453,7 @@ def test_the_flight_ghost_box_is_wfi12s_fixed_columns_over_the_window_rows():
     assert (rows.min(), rows.max(), cols.min(), cols.max()) == (1800, 1817, 2645, 2668)
     assert box.sum() == 18 * 24
     assert gw_ghost_pixels((4088, 4088), 7, 1804, 1819, ghosts) is None
+    assert gw_ghost_pixels((4088, 4088), 12, None, None, ghosts) is None  # no window: passes, unmasked
 
 
 def test_the_ghost_box_is_nan_in_sci_err_and_var_keeps_dq_and_is_counted(tmp_path, source):

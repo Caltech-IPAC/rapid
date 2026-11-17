@@ -83,8 +83,8 @@ the box NaN in ``SCI``, ``ERR`` and ``VAR_*`` as the DQ mask does, leaves
 ``DQ`` as it was and writes ``NGWGHOST``; the manifest's ``dq.gw_ghost``
 counts the box's pixels (0 for an SCA with no box). Only ``soc-l2`` files
 carry a guide window; another reader with a box is refused, and a file of
-a boxed SCA without a window fails. Flight's overlay boxes WFI12's known
-ghost until the L2 DQ flags it.
+a boxed SCA without window rows passes unmasked, with a warning. Flight's
+overlay boxes WFI12's known ghost until the L2 DQ flags it.
 
 ``[intake] crpix_shift`` is a translation of the WCS, ``[dx, dy]`` pixels
 added to ``CRPIX1`` and ``CRPIX2`` of every HDU that carries them, before

@@ -439,8 +439,9 @@ def gw_ghost_pixels(shape: tuple[int, int], sca: int, window_ystart, window_ysto
     Returns
     -------
     numpy.ndarray of bool or None
-        The box, clipped to the array, or None for an SCA with no box. A box for this SCA
-        on a file without a guide window is a ``ConversionError``.
+        The box, clipped to the array, or None for an SCA with no box. A file of a boxed
+        SCA without guide window rows gets no box, with a warning, and passes: on flight
+        data the window is read out on every SCA, guiding or not.
     """
     boxes = [g for g in ghosts if int(g["sca"]) == sca]
     if not boxes:
@@ -448,8 +449,9 @@ def gw_ghost_pixels(shape: tuple[int, int], sca: int, window_ystart, window_ysto
     if len(boxes) > 1:
         raise ConversionError(f"[intake] gw_ghost names SCA {sca} {len(boxes)} times")
     if window_ystart is None or window_ystop is None:
-        raise ConversionError(f"[intake] gw_ghost has a box for SCA {sca} but the file has no "
-                              "guide window (meta.guide_star.window_ystart/ystop)")
+        log.warning("[intake] gw_ghost has a box for SCA %d but the file has no guide window "
+                    "(meta.guide_star.window_ystart/ystop): nothing masked", sca)
+        return None
     (x0, x1), (dy0, dy1) = boxes[0]["columns"], boxes[0]["rows"]
     y0 = int(window_ystart) - REFERENCE_PIXEL_BORDER + int(dy0)
     y1 = int(window_ystop) - REFERENCE_PIXEL_BORDER + int(dy1)
