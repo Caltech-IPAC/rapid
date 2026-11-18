@@ -67,9 +67,9 @@ instead, so this is a recorded divergence (rapid_docs ``decisions.md``,
 2026-10-24: the empirical PSF was 15% wider than the science ePSF the
 ``psf`` stage had handed ZOGY for both, run 17).
 
-Outputs under ``job.path``. ``[paths] work_subdirectory`` holds what the
-packet stage and a person read, and nothing else (:func:`trim`, Ben's
-ruling of 2026-10-22): SFFT's positive difference image,
+Outputs under ``job.path``. ``[paths] work_subdirectory`` holds what `dev`
+uploads (:func:`trim`; rapid_docs ``decisions.md``, 2026-11-17, replacing
+Ben's trim of 2026-10-22): SFFT's positive difference image,
 its uncertainty, its mask (the resampled reference coverage map it is masked with), the
 positive and negative PSF-fit catalogs of SFFT and of ZOGY
 (``*_psfcat[_negative].parquet``, uncapped; all but SFFT's two are
@@ -79,11 +79,20 @@ each catalog measured on the image its sources are positive in), and the packet
 stage's other reads beside the difference image, SFFT's difference PSF (forced photometry), the background-subtracted science
 image (forced photometry and the science cutout) and the resampled
 gain-matched reference (the template cutout), and the measured reference
-PSF (``refimage_psf.fits``). Every FITS file is
-gzipped (``.fits.gz``, level 1, as the intake's). The rest of `dev`'s
-diagnostic files (ZOGY's and naive's images, S_corr, intermediate
-images, text catalogs) is not published; a variant is re-created by
-rerunning the job. Declared tables: ``diffimages`` (one
+PSF (``refimage_psf.fits``). Beside them, the rest of `dev`'s uploads: the
+L2 science image, the reformatted science image and its uncertainty, its
+PV-header copy, the resampled reference and uncertainty before gain
+matching, the gain-matched uncertainty, the normalized science PSF, the
+gain-match SExtractor catalogs, SFFT's solution and negative images (and
+cross-convolved pair), ZOGY's masked difference, uncertainty, PSF and
+S_corr with their negatives, the naive masked images and uncertainty, and
+every differencer's SExtractor text catalogs and Photutils text, finder and
+residual files. Every FITS file is gzipped (``.fits.gz``, level 1, as the
+intake's) and its original removed. The rest (input copies, SWarp weights,
+bkgest scratch, unmasked differences, SFFT's segmentation maps, the science
+SExtractor catalog) is not, as `dev` uploads none of it. The SFFT
+SExtractor catalogs are as SExtractor wrote them: `dev`'s carry its extra
+columns, which here are only in ``xsources``. Declared tables: ``diffimages`` (one
 row, SFFT's positive difference image, ``filename`` the ``.fits.gz``; ``pid`` is drawn from the
 table's identity sequence so the sources can carry it; ``infobitssci`` is
 `dev`'s catalog-outcome mask, ``infobitsref`` the reference's infobits)
@@ -576,6 +585,7 @@ class _Catalogs:
     rb: dict[str, Any] | None = None
     rb_negative: dict[str, Any] | None = None
     xsources: dict[str, Any] | None = None
+    files: list[str] = field(default_factory=list)   # dev's uploaded files of this differencer, kept
 
 
 def with_catalog_zero_point(settings: dict[str, Any], science_image: Path) -> dict[str, Any]:
@@ -638,6 +648,7 @@ def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: d
         kit=kit, work_dir=work_dir, settings=settings, positive=positive, negative=negative,
         weight_image=weight_image, override_weight_type_and_filter=override_weight_type_and_filter,
         overrides=overrides))
+    result.files += [positive["catalog"], negative["catalog"]]
 
     psfcat_settings = psfcat.PsfCatalogSettings.from_table(settings["psfcat_diffimage"])
     for sign, names in (("positive", positive), ("negative", negative)):
@@ -656,7 +667,9 @@ def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: d
             finder=str(work_dir / finder), residual=str(work_dir / residual),
             parquet=str(work_dir / parquet) if parquet else None,
             label=f"{sign} {differencer} difference image", seed=seed)
-        if not outcome.produced:
+        if outcome.produced:
+            result.files += [catalog, finder, residual]
+        else:
             result.bits |= catalog_outcome_bit(differencer, sign)
         result.photutils[sign] = outcome.nsources
         result.parquet[sign] = parquet if outcome.produced else None
@@ -928,6 +941,9 @@ def run(job: JobContext) -> None:
                               "finder": psfcat_table["output_zogy_psfcat_finder_filename"],
                               "residual": psfcat_table["output_zogy_psfcat_residual_filename"]},
                 override_weight_type_and_filter=True, write_parquet=True, overrides=None, seed=seed)
+        zogy_catalogs.files += [filename_diffimage_masked, filename_diffimage_masked_negative,
+                                filename_diffimage_unc_masked, filename_diffpsf,
+                                filename_scorrimage_masked, filename_scorrimage_masked_negative]
     infobits = zogy_catalogs.bits
 
     common = dict(kit=kit, work_dir=work_dir, settings=settings, seed=seed,
@@ -959,9 +975,10 @@ def run(job: JobContext) -> None:
             "psf_positive": sfft_catalogs.rb, "psf_negative": sfft_catalogs.rb_negative,
             **{f"xs_{sign}": summary
                for sign, summary in (sfft_catalogs.xsources or {}).get("rb", {}).items()}}))
+    naive_files = []
     if settings["naive_diffimage"]["naive_diffimage_flag"]:
         with step("naive"):
-            _run_naive(**common)
+            naive_files = _run_naive(**common)
 
     # Rows: SFFT's positive difference image, the only one registered, and its positive and
     # negative PSF-fit catalogs.
@@ -985,13 +1002,22 @@ def run(job: JobContext) -> None:
         negative_catalog = pq.read_table(w(negative_parquet)) if negative_parquet else _EMPTY_CATALOG
 
     diagnostics = [p for c in (sfft_catalogs, zogy_catalogs) for p in c.parquet.values() if p]
+    # The rest of what dev uploads: its intermediate products and every differencer's images and catalogs.
+    dev_files = [science_image_filename, reformatted_science_image_filename,
+                 reformatted_science_uncert_image_filename, sci_fits_file_with_pv,
+                 output_resampled_reference_image, output_resampled_reference_uncert_image,
+                 filename_sciimage_psf_normalized, filename_scigainmatchsexcat_catalog,
+                 filename_refgainmatchsexcat_catalog,
+                 output_resampled_gainmatched_reference_uncert_image,
+                 *zogy_catalogs.files, *sfft_catalogs.files, *naive_files]
     with step("trim"):
         published = trim(work_dir, images=[
             published_image, published_unc,
             output_resampled_reference_cov_map, published_psf,
             filename_bkg_subbed_science_image,
-            output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME],
-            others=diagnostics)
+            output_resampled_gainmatched_reference_image, REFERENCE_PSF_NAME,
+            *[f for f in dev_files if f.endswith(".fits")]],
+            others=diagnostics + [f for f in dev_files if not f.endswith(".fits")])
     metrics["gzip_s"] = published["gzip_s"]
     filename_diffimage_published = published_image + ".gz"
     with step("source_set"):
@@ -1551,6 +1577,9 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
             overrides=sextractor.detection_overrides(
                 settings["sextractor_diffimage_sfft"], crossconv_flag, settings["paths"]["cfg_path"]),
             seed=seed)
+    # dev's SFFT upload: the solution and the negative images; the difference, its uncertainty and PSF are kept anyway.
+    catalogs.files += [names["soln"], diffimage_negative] + (
+        [cconvdiff, cconvdiff_negative] if crossconv_flag else [])
     # dev e4a49c97 and c32e28f6: sumrat, nneg and nbad on every SFFT PSF-fit source, before the
     # cap, each catalog with the image its sources are positive in.
     start = time.perf_counter()
@@ -1730,11 +1759,12 @@ def rb_metrics(classifier, calls: dict[str, dict[str, Any] | None]) -> dict[str,
 
 def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_image,
                gainmatched_reference, resampled_cov_map, nan_indices,
-               reformatted_science_image, gain_times_exptime, thresh) -> None:
+               reformatted_science_image, gain_times_exptime, thresh) -> list[str]:
     """`dev`'s naive block but its Photutils PSF-fit catalogs, which are not made.
 
     ``reformatted_science_image`` (the PSF-fit catalogs' sky coordinates) is
     taken with the other differencers' common arguments and not read.
+    Returns the files `dev` uploads from the block, which the job keeps.
     """
     def w(name: str) -> Path:
         return work_dir / name
@@ -1765,3 +1795,5 @@ def _run_naive(*, kit, work_dir, settings, seed, filename_bkg_subbed_science_ima
         weight_image=unc, override_weight_type_and_filter=False,
         overrides=sextractor.detection_overrides(
             settings["sextractor_diffimage_naive"], False, settings["paths"]["cfg_path"]))
+    return [masked, masked_negative, unc,
+            masked.replace(".fits", ".txt"), masked_negative.replace(".fits", ".txt")]
