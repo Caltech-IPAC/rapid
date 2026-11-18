@@ -26,6 +26,7 @@ and is never imported by a stage module.
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 
 from rapidpipe.db.connection import parameter_tree_environment
@@ -33,6 +34,19 @@ from rapidpipe.foundation import attempts, publish_kafka
 from rapidpipe.foundation.local import failure_reason
 
 __all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "spot", "submit", "vcpus"]
+
+
+#: A test hook, inert unless set: the name of a boundary at which the process exits 137 at once,
+#: ``submit-accepted`` (Batch accepted a first submission, its row not yet committed) or
+#: ``rerun-accepted`` (Batch accepted a rerun, not yet recorded); the continuity proof's kills.
+TEST_KILL_AT = "RAPIDPIPE_TEST_KILL_AT"
+
+
+def _test_kill(boundary: str, batch_job_id: str) -> None:
+    if os.environ.get(TEST_KILL_AT) == boundary:
+        sys.stderr.write(f"rapidpipe: test hook: killed at {boundary} (Batch job {batch_job_id})\n")
+        sys.stderr.flush()
+        os._exit(137)
 
 
 class LaunchError(Exception):
@@ -92,13 +106,14 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     try:
         response = (client or batch_client()).submit_job(**request)
     except Exception as exc:
-        if conn is not None:                # never left ``launched`` with nothing on Batch
+        if conn is not None and not conn.closed:    # never left ``launched`` with nothing on Batch
             conn.rollback()
             with conn.cursor() as cur:
                 cur.execute("UPDATE jobs SET state = 'failed', ended = now(), refusal = %s"
                             " WHERE id = %s AND state <> 'published'", (failure_reason(exc), job_id))
             conn.commit()
         raise
+    _test_kill("rerun-accepted" if name_suffix else "submit-accepted", response["jobId"])
     if conn is not None:
         with conn.cursor() as cur:
             cur.execute("UPDATE jobs SET batch_job_id = %s, state = CASE WHEN state = 'failed'"

@@ -84,3 +84,26 @@ def test_a_stage_whose_own_module_is_missing_is_a_usage_error(monkeypatch):
     with pytest.raises(cli.CommandExit) as raised:
         cli._stage_run("psf")
     assert raised.value.code == ExitCode.USAGE
+
+
+@pytest.mark.parametrize("verb, override, budget", [
+    (["job", "run", "--job", "5"], None, 1800.0),
+    (["job", "run", "--job", "5"], "30", 30.0),
+    (["job", "show", "5"], None, None),
+])
+def test_a_batch_job_connects_with_the_services_budget_and_a_persons_verb_with_the_default(
+        monkeypatch, verb, override, budget):
+    """``job run`` waits out a roll's closure of the database (1,800 s, or RAPIDPIPE_CONNECT_RETRY_S);
+    ``job show``, a person's, keeps the library's default."""
+    budgets = []
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "s3://outputs/foundation")
+    if override:
+        monkeypatch.setenv("RAPIDPIPE_CONNECT_RETRY_S", override)
+    monkeypatch.setattr(cli, "connect", lambda **kw: budgets.append(kw.get("retry_seconds"))
+                        or contextlib.nullcontext())
+    monkeypatch.setattr(foundation, "job_show", lambda conn, job: {"stage": "trivial"})
+    monkeypatch.setattr(cli, "_stage_run", lambda stage: None)
+    monkeypatch.setattr(foundation, "run_job", lambda connect, *a, **kw: connect() and {
+        "job": 5, "attempt": 1, "published": False, "group": None, "refusal": None, "live": None})
+    cli.main(verb)
+    assert budgets and set(budgets) == {budget}

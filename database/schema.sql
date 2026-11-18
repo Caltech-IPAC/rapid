@@ -142,6 +142,23 @@ CREATE TABLE jobs (
 CREATE INDEX jobs_run_idx ON jobs (run);
 CREATE INDEX jobs_state_idx ON jobs (state);
 
+-- A served loop (`rapidpipe loop --serve`): the loop's own arguments, which
+-- `rapidpipe serve` runs one pass of each interval until the run drains. A run
+-- has at most one open loop.
+CREATE TABLE loops (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run bigint NOT NULL REFERENCES runs (id),
+    instruction jsonb NOT NULL,                      -- the selection, job definition, queue and intake limit, as `loop` takes them
+    opened_by text NOT NULL,
+    opened_at timestamp with time zone DEFAULT now() NOT NULL,
+    passed_at timestamp with time zone,              -- its last pass; null before its first
+    closed_at timestamp with time zone,
+    exit_code integer,                               -- the verb's: 0 drained, 1 a job failed, 64 a first pass that admitted nothing
+    CHECK ((closed_at IS NULL) = (exit_code IS NULL))
+);
+
+CREATE UNIQUE INDEX loops_one_open_per_run ON loops (run) WHERE closed_at IS NULL;
+
 -- Official bindings: a product binding (product, key, job) or the live
 -- binding (survey, dataset, run). Both directions of a change are
 -- attributed on the row, so a change group's effect is the rows it opened

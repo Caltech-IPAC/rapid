@@ -56,6 +56,14 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   hedged straggler on the prompt queue (``rapidpipe.foundation.loop``), each
   pass reporting ``queues`` and ``attempts``; ``job submit --job-queue`` names
   one submission's queue;
+- ``loop ... --serve`` validates the loop as above, records it in ``loops``
+  (its arguments, at most one open loop a run), prints its id and returns;
+  ``serve --job-definition D [--interval S]`` runs for ever: each interval
+  one pass of every open loop naming ``D``, closing a loop with the exit
+  code the verb would give (0 or 1 drained, 64 a first pass that admitted
+  nothing); an exception leaves the rows and exits by :func:`exit_code`.
+  ``job run`` and ``serve`` connect with the 1,800 s budget
+  (``rapidpipe.db.connection.SERVICE_CONNECT_RETRY_S``);
 - ``publish --run [--settings FILE]`` produces the run's official packet
   sets not yet stamped to the Kafka topic the ``[kafka]`` table's SSM
   parameters name (``rapidpipe.foundation.publish_kafka``), printing the
@@ -90,15 +98,20 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import psycopg2
+import psycopg2.errors
 
 from rapidpipe import __version__
 from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
-from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
+from rapidpipe.db.connection import (ConnectionConfigError, ConnectionUnavailable, connect,
+                                     service_retry_seconds)
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
 from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
 
+
+#: What a lost connection to the database raises: a job publishes again on a new connection after one.
+LOST_CONNECTION = (psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionUnavailable)
 
 #: The shipped settings body; ``publish`` reads its ``[kafka]`` table by default.
 _SHIPPED_SETTINGS = Path(__file__).resolve().parents[1] / "settings" / "foundation-thin.toml"
@@ -252,6 +265,19 @@ def _build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--once", action="store_true",
                              help="Run one pass and exit: 0, or 1 when a job of the run failed or was "
                                   "refused its binding; 64 when the first pass admits nothing.")
+    loop_parser.add_argument("--serve", action="store_true",
+                             help="Validate, record the loop for 'rapidpipe serve' and print its id; "
+                                  "run no pass here. A run has at most one open loop.")
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="Run the recorded loops of a job definition, for ever.",
+        description="Each --interval seconds, run one pass of every open loop (loop --serve) "
+                    "naming --job-definition; close a loop with the verb's exit code when its "
+                    "pass ends it. Never exits but on an error.")
+    serve_parser.add_argument("--job-definition", required=True,
+                              help="The Batch job definition whose loops this serves.")
+    serve_parser.add_argument("--interval", type=float, default=120.0,
+                              help="Seconds between passes (default 120).")
 
     return parser
 
@@ -296,8 +322,11 @@ def _run_job(args: argparse.Namespace) -> int:
     if not root:
         raise CommandExit(int(ExitCode.USAGE), "RAPIDPIPE_OUTPUTS_ROOT is not set")
 
+    # A Batch job (`job run`) waits out a roll's closure of the database; a person's verb does not.
+    budget = {"retry_seconds": service_retry_seconds()} if args.verb == "run" else {}
+
     def connect_job():
-        return connect(application_name=f"rapidpipe-job-{args.verb}")
+        return connect(application_name=f"rapidpipe-job-{args.verb}", **budget)
 
     if args.verb == "submit" and args.job is not None:      # a new attempt of an existing job
         job_id = args.job
@@ -330,7 +359,8 @@ def _run_job(args: argparse.Namespace) -> int:
             raise CommandExit(int(ExitCode.USAGE), f"job {job_id} recorded, not submitted: {exc}")
         _print_json({"job": job_id, "batch_job": batch_job})
         return int(ExitCode.SUCCESS)
-    result = foundation.run_job(connect_job, job_id, root, stage_run, exit_code=exit_code)
+    result = foundation.run_job(connect_job, job_id, root, stage_run, exit_code=exit_code,
+                                retry_on=LOST_CONNECTION)
     if stage == "packet" and result["published"] and result["group"] is not None:
         result["kafka"] = _send_own_set(connect_job, job_id)
     _print_json(result)
@@ -385,10 +415,13 @@ def _publish(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
-def _loop(args: argparse.Namespace) -> int:
-    def connect_loop():
-        return connect(application_name="rapidpipe-loop")
+#: The loop's own arguments: what a served loop's row keeps as its instruction (``loops.instruction``).
+LOOP_ARGUMENTS = ("filters", "scas", "pointings", "passes", "expids", "programs", "job_definition",
+                  "job_queue", "max_intake")
 
+
+def _loop_pass(args: argparse.Namespace, connect_loop) -> tuple[str, Any]:
+    """The loop of ``args`` validated (its run and its selection): its source root and its one pass."""
     with connect_loop() as conn:
         settings = foundation.run_show(conn, args.run)["settings"]
     intake = settings["intake"]
@@ -403,9 +436,9 @@ def _loop(args: argparse.Namespace) -> int:
     spot = launch.spot(settings)
 
     def submit(item: dict) -> int:
-        with connect_loop() as conn:
+        with connect_loop() as conn:     # one transaction: the row, Batch's acceptance, its id
             job_id = foundation.create_job(conn, args.run, item["stage"], item["scope"],
-                                           item["inputs"], item["expects"])
+                                           item["inputs"], item["expects"], commit=False)
             launch.submit(job_id, item["stage"], job_definition=args.job_definition, conn=conn,
                           memory_mib=launch.memory_mib(settings, item["stage"]),
                           vcpus=launch.vcpus(settings, item["stage"]),
@@ -439,27 +472,89 @@ def _loop(args: argparse.Namespace) -> int:
         return [{k: a[k] for k in ("job", "difference_job", "metric", "value", "bound", "reason")}
                 for a in answers if not a["send"]]
 
-    first = True
-    while True:
+    def one_pass() -> dict:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"], selection)
         summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
                                 args.max_intake, batch, rerun, held_sets, spot)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return summary
+
+    return intake["source_root"], one_pass
+
+
+def _pass_exit(args: argparse.Namespace, summary: dict, first: bool, source_root: str) -> int | None:
+    """The loop's exit after a pass, ``None`` while it goes on; a first pass that admitted nothing exits 64."""
+    if first and summary["admitted"] == 0:      # a later pass admitting nothing new is the drain
+        raise CommandExit(int(ExitCode.USAGE),
+                          f"the first pass found no stem under {source_root} for filters"
+                          f" {args.filters}, SCAs {args.scas}, pointings {args.pointings},"
+                          f" passes {args.passes}, expids {args.expids}, programs {args.programs}")
+    if args.once or summary["drained"]:
+        if summary["failed"]:
+            sys.stderr.write(f"rapidpipe loop: failed or refused jobs of run {args.run}: "
+                             f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
+            return int(ExitCode.FAILURE)
+        return int(ExitCode.SUCCESS)
+    return None
+
+
+def _loop(args: argparse.Namespace) -> int:
+    def connect_loop():
+        return connect(application_name="rapidpipe-loop")
+
+    source_root, one_pass = _loop_pass(args, connect_loop)
+    if args.serve:
+        try:
+            with connect_loop() as conn:
+                print(loop.open_loop(conn, args.run, {k: getattr(args, k) for k in LOOP_ARGUMENTS},
+                                     os.environ.get("USER") or "unknown"))
+        except psycopg2.errors.UniqueViolation as exc:
+            raise CommandExit(int(ExitCode.USAGE), f"run {args.run} already has an open loop") from exc
+        return int(ExitCode.SUCCESS)
+    first = True
+    while True:
+        started = time.monotonic()
+        summary = one_pass()
         print(json.dumps(summary, sort_keys=True), flush=True)
-        if first and summary["admitted"] == 0:      # a later pass admitting nothing new is the drain
-            raise CommandExit(int(ExitCode.USAGE),
-                              f"the first pass found no stem under {intake['source_root']} for filters"
-                              f" {args.filters}, SCAs {args.scas}, pointings {args.pointings},"
-                              f" passes {args.passes}, expids {args.expids}, programs {args.programs}")
+        code = _pass_exit(args, summary, first, source_root)
         first = False
-        if args.once or summary["drained"]:
-            if summary["failed"]:
-                sys.stderr.write(f"rapidpipe loop: failed or refused jobs of run {args.run}: "
-                                 f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
-                return int(ExitCode.FAILURE)
-            return int(ExitCode.SUCCESS)
+        if code is not None:
+            return code
+        time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
+
+
+def _serve(args: argparse.Namespace) -> int:
+    """Each interval, one pass of every open loop naming the job definition, for ever.
+
+    A pass that ends its loop closes the row with the verb's exit code; an
+    exception leaves the rows as they are and ends the process by
+    :func:`exit_code` (its unit restarts it).
+    """
+    logger = logging.getLogger("rapidpipe.serve")
+
+    def connect_serve():
+        return connect(application_name="rapidpipe-serve", retry_seconds=service_retry_seconds())
+
+    while True:
+        started = time.monotonic()
+        with connect_serve() as conn:
+            served = loop.open_loops(conn, args.job_definition)
+        logger.info("serve: %d open loop(s) for %s", len(served), args.job_definition)
+        for row in served:
+            looped = argparse.Namespace(run=row["run"], once=False, **row["instruction"])
+            source_root, one_pass = _loop_pass(looped, connect_serve)
+            summary = one_pass()
+            print(json.dumps({"loop": row["id"], **summary}, sort_keys=True), flush=True)
+            try:
+                code = _pass_exit(looped, summary, row["passed_at"] is None, source_root)
+            except CommandExit as exc:
+                code = exc.code
+            with connect_serve() as conn:
+                loop.record_pass(conn, row["id"], code)
+            logger.info("serve: loop %d run %d pass: admitted %d, drained %s, %s", row["id"], row["run"],
+                        summary["admitted"], summary["drained"], "open" if code is None else f"closed {code}")
         time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
 
 
@@ -492,6 +587,8 @@ def _foundation_command(args: argparse.Namespace) -> int:
         return _publish(args)
     elif args.command == "loop":
         return _loop(args)
+    elif args.command == "serve":
+        return _serve(args)
     elif command == ("official", "change"):
         group = _read(args.group, "group")
         if not isinstance(group, list) or not all(isinstance(item, dict) for item in group):
@@ -549,7 +646,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # traceback and exits 75 or 70. SystemExit and KeyboardInterrupt are not
     # Exception subclasses and pass through.
     try:
-        if args.command in ("run", "job", "official", "publish", "loop"):
+        if args.command in ("run", "job", "official", "publish", "loop", "serve"):
             return _foundation_command(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary
         code = exit_code(exc)

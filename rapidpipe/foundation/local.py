@@ -131,10 +131,23 @@ def named_exit_code(exc: BaseException) -> int:
     return exc.code if isinstance(exc, CommandExit) else int(ExitCode.STAGE_ERROR)
 
 
+#: How many times :func:`run_job` publishes again, on a new connection, after a lost connection.
+PUBLISH_RETRIES = 3
+
+
 def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
             stage_run: Callable[[JobContext], None],
-            exit_code: Callable[[BaseException], int] = named_exit_code) -> dict[str, Any]:
+            exit_code: Callable[[BaseException], int] = named_exit_code,
+            retry_on: tuple[type[BaseException], ...] = ()) -> dict[str, Any]:
     """Run job ``job_id``'s next attempt with ``stage_run`` and publish it.
+
+    The publication and the end's record run again on a new connection, at
+    most :data:`PUBLISH_RETRIES` times, when they raise one of ``retry_on``
+    (``job run`` passes the lost connection's exceptions), each logged as
+    ``publish retry <n> after <class>: <message>``: the attempt's files are
+    written, so nothing is computed again, and a cut that fell after the
+    commit finds the job published and records the end. Nothing else is
+    retried here.
 
     ``connect()`` is a context manager yielding a connection
     (``rapidpipe.db.connection.connect``); the stage gets the same factory.
@@ -241,12 +254,20 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
                 put(context.path, prefix, before_last=record)
         if workdir is not None:
             shutil.rmtree(workdir)
-        with connect() as conn:
-            result = publish(conn, job_id, attempt, context.prefix)
-            _record(conn, job_id, "ended = now(), exit_code = 0, manifest = jsonb_set(manifest,"
-                    " '{metrics}', coalesce(manifest -> 'metrics', '{}'::jsonb) || %s)",
-                    (Json(result.get("metrics", {})),))
-            _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "published"})
+        for retry in range(PUBLISH_RETRIES + 1):
+            try:
+                with connect() as conn:
+                    result = publish(conn, job_id, attempt, context.prefix)
+                    _record(conn, job_id, "ended = now(), exit_code = 0, manifest = jsonb_set(manifest,"
+                            " '{metrics}', coalesce(manifest -> 'metrics', '{}'::jsonb) || %s)",
+                            (Json(result.get("metrics", {})),))
+                    _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "published"})
+                break
+            except retry_on as exc:
+                if retry == PUBLISH_RETRIES:
+                    raise
+                logging.getLogger(__name__).warning("job %d: publish retry %d after %s: %s",
+                                                    job_id, retry + 1, type(exc).__name__, exc)
     except BaseException as exc:
         code = exit_code(exc)
         reason = failure_reason(exc)

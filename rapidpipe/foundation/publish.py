@@ -79,12 +79,14 @@ import itertools
 import json
 import logging
 import math
+import os
 import random
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+import psycopg2
 import pyarrow.parquet as pq
 from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
@@ -114,6 +116,10 @@ CHILDREN = DATE_SCA_CHILDREN | FIELD_CHILDREN
 #: The longest and the first wait, seconds, before a publisher that found a field's lock held
 #: tries again (full jitter, doubling): it waits with no pool connection, so the cap bounds
 #: only how late it sees the lock free.
+#: A test hook, inert unless set: after its commit, a publication closes its connection and raises
+#: ``OperationalError``, as if the commit's acknowledgement were lost (the continuity proof).
+TEST_LOSE_ACK = "RAPIDPIPE_TEST_LOSE_ACK"
+
 LOCK_RETRY_CAP_S = 10.0
 LOCK_RETRY_INITIAL_S = 0.5
 
@@ -180,7 +186,8 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                 children = _children(cur, rows)
         conn.commit()
     except BaseException:
-        conn.rollback()
+        if not conn.closed:     # a closed connection's rollback would replace the error
+            conn.rollback()
         raise
     locked = sorted({f for key, _, _ in RECONCILED if key in (manifest or {})
                      for f in object_catalog.fields(manifest[key])})
@@ -252,8 +259,12 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
                                              set(manifest.get("empty_ok", [])))
         with _held(hold, "commit"):
             conn.commit()
+        if os.environ.get(TEST_LOSE_ACK):
+            conn.close()
+            raise psycopg2.OperationalError("test hook: the commit's acknowledgement withheld")
     except BaseException:
-        conn.rollback()
+        if not conn.closed:     # a closed connection's rollback would replace the error
+            conn.rollback()
         raise
     released = time.perf_counter()
     metrics = {"publish_lock_fields": len(locked), "publish_lock_tries": tries + 1,
