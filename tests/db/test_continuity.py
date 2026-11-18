@@ -266,3 +266,43 @@ def test_loop_serve_records_one_open_loop_a_run_and_serve_closes_each_with_the_v
     closed = {run: one(conn, "SELECT exit_code FROM loops WHERE run = %s", (run,))[0]
               for run in (first, drained, other)}
     assert closed == {first: 64, drained: 0, other: None}
+
+
+def test_serve_closes_a_loop_whose_pass_fails_for_good_and_leaves_them_all_on_a_transient_one(
+        connect, monkeypatch):
+    conn = connect()
+    bad, good = new_run(conn), new_run(conn)
+    monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: type(
+        "Empty", (), {"list_objects_v2": lambda self, **kw: {}})())
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: type(
+        "Idle", (), {"describe_jobs": lambda self, jobs: {"jobs": []}})())
+    for run in (bad, good):
+        assert cli.main(["loop", "--run", str(run), "--job-definition", "jd", "--filters", "F146",
+                         "--scas", "8", "--pointings", "all", "--serve"]) == 0
+    with conn.cursor() as cur:
+        cur.execute("UPDATE loops SET passed_at = now() WHERE run = %s", (good,))
+    conn.commit()
+    real, raised = cli._loop_pass, {"error": cli.foundation.NotFound("no catalogs for the packet stage")}
+
+    def loop_pass(looped, connect_loop):
+        if looped.run == bad:
+            raise raised["error"]
+        return real(looped, connect_loop)
+
+    def stop(seconds):
+        raise Stop
+
+    monkeypatch.setattr(cli, "_loop_pass", loop_pass)
+    monkeypatch.setattr(cli.time, "sleep", stop)
+    serve = cli._build_parser().parse_args(["serve", "--job-definition", "jd", "--interval", "1"])
+    with pytest.raises(Stop):
+        cli._serve(serve)
+    closed = {run: one(conn, "SELECT exit_code FROM loops WHERE run = %s", (run,))[0] for run in (bad, good)}
+    assert closed == {bad: 64, good: 0}                     # the permanent error closed its loop alone
+    third = new_run(conn)
+    assert cli.main(["loop", "--run", str(third), "--job-definition", "jd", "--filters", "F146",
+                     "--scas", "8", "--pointings", "all", "--serve"]) == 0
+    bad, raised["error"] = third, psycopg2.OperationalError("server closed the connection unexpectedly")
+    with pytest.raises(psycopg2.OperationalError):
+        cli._serve(serve)
+    assert one(conn, "SELECT closed_at FROM loops WHERE run = %s", (third,)) == (None,)  # left open

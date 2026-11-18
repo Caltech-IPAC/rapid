@@ -528,9 +528,11 @@ def _loop(args: argparse.Namespace) -> int:
 def _serve(args: argparse.Namespace) -> int:
     """Each interval, one pass of every open loop naming the job definition, for ever.
 
-    A pass that ends its loop closes the row with the verb's exit code; an
-    exception leaves the rows as they are and ends the process by
-    :func:`exit_code` (its unit restarts it).
+    A pass that ends its loop closes the row with the verb's exit code, a pass
+    that raises a permanent error (the code the verb would have exited with)
+    among them, so one loop's error never stops the others; a transient one
+    leaves the rows as they are and ends the process with 75 (its unit
+    restarts it).
     """
     logger = logging.getLogger("rapidpipe.serve")
 
@@ -544,8 +546,17 @@ def _serve(args: argparse.Namespace) -> int:
         logger.info("serve: %d open loop(s) for %s", len(served), args.job_definition)
         for row in served:
             looped = argparse.Namespace(run=row["run"], once=False, **row["instruction"])
-            source_root, one_pass = _loop_pass(looped, connect_serve)
-            summary = one_pass()
+            try:
+                source_root, one_pass = _loop_pass(looped, connect_serve)
+                summary = one_pass()
+            except Exception as exc:  # the verb would have exited: close this loop, unless transient
+                code = exit_code(exc)
+                if code == int(ExitCode.TRANSIENT_FAILURE):
+                    raise
+                logger.exception("serve: loop %d run %d pass failed: closed %d", row["id"], row["run"], code)
+                with connect_serve() as conn:
+                    loop.record_pass(conn, row["id"], code)
+                continue
             print(json.dumps({"loop": row["id"], **summary}, sort_keys=True), flush=True)
             try:
                 code = _pass_exit(looped, summary, row["passed_at"] is None, source_root)
