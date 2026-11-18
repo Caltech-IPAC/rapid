@@ -3,12 +3,13 @@
 Contract: under a live run, a reference job whose inputs are two published
 ``l2files`` rows coadds them (fake tools), and its ``refimages`` row binds
 to the job's expected key; the official views show the row, its two
-``refimimages`` members (the named L2 rows) and its mosaic catalog, all
-under the one ``rfid`` the database drew. Under ``selection_type =
+``refimimages`` members (the named L2 rows), its mosaic catalog and its
+``refimmeta`` row (`dev`'s columns, ``npucatsources`` null), all under the
+one ``rfid`` the database drew. Under ``selection_type =
 "coverage"`` a coadd that covers the minimum publishes and binds, its
 stored manifest recording the measured fraction, and one whose coverage
 map is short of it fails: exit 65, the row ``failed`` with the fraction as
-its reason, no ``refimages`` row and no binding.
+its reason, no ``refimages`` or ``refimmeta`` row and no binding.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from rapidpipe.foundation import change, create_job, create_run, publish
 from tests.support import fakereftools
 from tests.support.fakereftools import FRAMES, RTID, write_frames
 from rapidpipe.stages import reference
+from rapidpipe.science.spatial import field_center, healpix_indexes
 from tests.db.foundation_helpers import write_attempt
 from tests.unit.test_reference_stage import settings
 
@@ -76,6 +78,14 @@ def test_job_local_publishes_a_bound_reference_from_two_named_l2_rows(connect, t
                  (rfid,)) == [(7000,), (7001,)]
     assert query(conn, "SELECT cattype FROM refimcatalogs_official WHERE rfid = %s",
                  (rfid,)) == [(1,)]
+    ((meta_job, field, fid, frames, hp6, hp9, low, high, cov, nsx, npu),) = query(
+        conn, "SELECT job, field, fid, nframes, hp6, hp9, mjdobsmin, mjdobsmax, cov5percent,"
+              " nsxcatsources, npucatsources FROM refimmeta_official WHERE rfid = %s", (rfid,))
+    assert (meta_job, field, fid, frames) == (result["job"], RTID, FID, 2)
+    assert (hp6, hp9) == healpix_indexes(*field_center(RTID))
+    assert (low, high) == (min(FRAMES[0][4], FRAMES[1][4]), max(FRAMES[0][4], FRAMES[1][4]))
+    assert query(conn, "SELECT cov5percent FROM refimages WHERE rfid = %s", (rfid,)) == [(cov,)]
+    assert nsx > 0 and npu is None
 
 
 def test_job_local_under_coverage_publishes_a_covered_reference_and_fails_a_short_one_with_exit_65(
@@ -121,4 +131,5 @@ def test_job_local_under_coverage_publishes_a_covered_reference_and_fails_a_shor
     ((state, exit_code, refusal),) = query(conn, "SELECT state, exit_code, refusal FROM jobs WHERE id = %s", (job,))
     assert (code, state, exit_code) == (65, "failed", 65) and "measured coverage " in refusal
     assert query(conn, "SELECT count(*) FROM refimages WHERE job = %s", (job,)) == [(0,)]
+    assert query(conn, "SELECT count(*) FROM refimmeta WHERE job = %s", (job,)) == [(0,)]
     assert query(conn, "SELECT count(*) FROM official WHERE job = %s", (job,)) == [(0,)]

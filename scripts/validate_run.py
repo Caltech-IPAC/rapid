@@ -117,8 +117,8 @@ KEYS = {
     "xobjects": ("dataset", "field"),
     "catalogs": ("dataset", "name", "version"),
 }
-TABLES = ("exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "diffimages", "psfs",
-          "sources", "xsources", "objects", "memberships", "xobjects", "xmemberships", "packets", "forced",
+TABLES = ("exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "refimmeta", "diffimages",
+          "psfs", "sources", "xsources", "objects", "memberships", "xobjects", "xmemberships", "packets", "forced",
           "external", "catalogs")
 #: Tables whose rows live in child tables, read through <table>_of(jobs) (schema.sql), never the
 #: parent, a read of which visits every child (rapid_docs decisions.md, children-reads).

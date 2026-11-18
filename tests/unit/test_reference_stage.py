@@ -156,11 +156,12 @@ def read(prefix: Path, table: str) -> list[dict]:
     return pq.read_table(prefix / f"{table}.parquet").to_pylist()
 
 
-def test_a_job_writes_its_three_tables_with_one_rfid_and_its_files(tmp_path, frames):
+def test_a_job_writes_its_four_tables_with_one_rfid_and_its_files(tmp_path, frames):
     prefix = run_reference(tmp_path, frames)
     manifest = json.loads((prefix / "manifest.json").read_text())
-    assert [o["table"] for o in manifest["outputs"]] == ["refimages", "refimimages", "refimcatalogs"]
-    for table in ("refimages", "refimimages", "refimcatalogs"):
+    assert [o["table"] for o in manifest["outputs"]] == ["refimages", "refimimages", "refimcatalogs",
+                                                         "refimmeta"]
+    for table in ("refimages", "refimimages", "refimcatalogs", "refimmeta"):
         assert set(pq.read_schema(prefix / f"{table}.parquet").names) == (
             schema_columns(table) - {"rfcatid"})
     (ref,), (cat,) = read(prefix, "refimages"), read(prefix, "refimcatalogs")
@@ -382,3 +383,40 @@ def test_refused_coverage_settings_fail_before_a_manifest(tmp_path, frames, sele
     with pytest.raises(ValueError):
         run_reference(tmp_path, frames, body=by_coverage(**selection))
     assert not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_a_job_writes_dev_s_refimmeta_row_from_its_measurements_with_npucatsources_null(tmp_path, frames):
+    """refimmeta carries the manifest's measurements under dev's names, of the reference's centre and frames."""
+    from rapidpipe.science.spatial import field_center, healpix_indexes
+
+    prefix = run_reference(tmp_path, frames)
+    reported = json.loads((prefix / "manifest.json").read_text())["reference"]
+    (meta,) = read(prefix, "refimmeta")
+    (ref,) = read(prefix, "refimages")
+    assert (meta["rfid"], meta["field"], meta["fid"], meta["nframes"]) == (RFID, RTID, FID, 3)
+    assert (meta["hp6"], meta["hp9"]) == healpix_indexes(*field_center(RTID))
+    assert (meta["mjdobsmin"], meta["mjdobsmax"]) == (min(f[4] for f in FRAMES), max(f[4] for f in FRAMES))
+    for name in ("npixnan", "clnoutliers"):
+        assert meta[name] == reported[name]
+    for name in ("clmean", "clstddev", "gmedian", "datascale", "gmin", "gmax", "cov5percent", "medncov",
+                 "medpixunc", "fwhmmedpix", "fwhmminpix", "fwhmmaxpix"):
+        assert meta[name] == pytest.approx(reported[name], rel=1e-6), name     # float32 in the table
+    assert meta["cov5percent"] == ref["cov5percent"]
+    assert meta["nsxcatsources"] == reported["nsexcatsources"] == 4
+    assert meta["npucatsources"] is None
+
+
+@pytest.mark.parametrize("ra", [359.9999, 0.0001, -0.0001, 360.0001])
+def test_refimmeta_s_healpix_indexes_wrap_at_ra_zero(ra):
+    """A centre either side of RA 0 (or given past 360) gets the same hp6 and hp9 as its wrapped RA."""
+    m = reference.measure.MosaicMeasurements(
+        cov5percent=1.0, medncov=1.0, medpixunc=1.0, npixsat=0, npixnan=0, clmean=0.0, clstddev=1.0,
+        clnoutliers=0, gmedian=0.0, datascale=1.0, gmin=0.0, gmax=1.0)
+    fwhm = reference.catalog.FwhmStatistics(fwhmmedpix=2.0, fwhmminpix=1.0, fwhmmaxpix=3.0,
+                                            nsexcatsources=1, fwhm_ref=0.2, fwhmpctlpix=2.5)
+    row = reference.refimmeta_row(rfid=1, field=2, fid=FID, ra_center=ra, dec_center=10.0,
+                                  mjdobs=[61000.5, 61000.1], measurements=m, fwhm=fwhm)
+    wrapped = reference.refimmeta_row(rfid=1, field=2, fid=FID, ra_center=ra % 360.0, dec_center=10.0,
+                                      mjdobs=[61000.5, 61000.1], measurements=m, fwhm=fwhm)
+    assert (row["hp6"], row["hp9"]) == (wrapped["hp6"], wrapped["hp9"])
+    assert (row["mjdobsmin"], row["mjdobsmax"], row["nframes"]) == ([61000.1], [61000.5], [2])
