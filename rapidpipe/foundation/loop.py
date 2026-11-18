@@ -50,6 +50,20 @@ differenced and packeted, while an official reference of the field, built
 from any program, is reused. A difference job matches its sources against
 the dataset's objects of every run, whatever program founded them.
 
+Every term is ``all`` when left out (2026-11-17). ``--stems`` names files by
+stem, comma separated or ``@FILE`` with one per line: the listing is cut to
+them and an official row is selected when its expid, SCA and filter are a
+named stem's. ``--mjd LO-HI`` bounds the official rows by ``mjdobs``,
+inclusive; ``--dates LO..HI`` is the same window as UTC dates, both days
+included. Neither bounds the files to ingest, since a stem carries no date:
+intake takes every new file of the other terms and the window applies from
+the reference on. ``--dry-run`` (:func:`dry_run`) prints one pass's plan and
+does nothing; ``--local`` runs each planned submission here through ``job
+local``'s path, in stage order, with no Batch, no reconcile, no rerun and
+no publish sweep (a packet job sends its own set), passes repeating at once
+until one drains; ``--stage NAME`` (:func:`cut_to_stage`) keeps one stage's
+submissions and, since such a pass cannot drain, implies ``--once``.
+
 "Pending" is a job of the run in state ``launched`` or ``running``. A job
 of the run in state ``failed`` is reported (``failed``, with its scope) and
 not resubmitted, and the work that does not depend on it goes on, so a
@@ -213,24 +227,32 @@ STAGES = ("psf", "intake", "reference", "difference", "packet")
 @dataclasses.dataclass(frozen=True)
 class Selection:
     """Filters (``F146``), SCAs, pointings (``(visit, exposure)``, or the observing sequence's row for
-    :data:`OPENUNIVERSE`) and the survey's passes, ``None`` for all pointings or all passes; ``reader``
+    :data:`OPENUNIVERSE`) and the survey's passes, ``None`` for all of any of them; ``reader``
     the run's ``[intake] reader``; ``expids`` inclusive ``(lo, hi)`` ranges of the ``expid``, ``None``
     for all; ``programs`` the program numbers, ``None`` for all; ``fixed_program`` the run's
-    ``[intake] program_id`` when its dataset sets one, every stem's program then, ``None`` when unset."""
+    ``[intake] program_id`` when its dataset sets one, every stem's program then, ``None`` when unset;
+    ``stems`` the named stems, ``None`` for all, with ``stem_keys`` their ``(expid, sca, filter)``,
+    which select their official rows too; ``mjd`` an ``(lo, hi)`` window of the official rows'
+    ``mjdobs``, ``None`` for all, ``hi`` excluded when ``mjd_hi_exclusive`` (a window given as dates)."""
 
-    filters: frozenset[str]
-    scas: frozenset[int]
+    filters: frozenset[str] | None
+    scas: frozenset[int] | None
     pointings: frozenset | None
     passes: frozenset[int] | None = None
     reader: str = "soc-l2"
     expids: tuple[tuple[int, int], ...] | None = None
     programs: frozenset[int] | None = None
     fixed_program: int | None = None
+    stems: frozenset[str] | None = None
+    stem_keys: frozenset[tuple[int, int, str]] | None = None
+    mjd: tuple[float, float] | None = None
+    mjd_hi_exclusive: bool = False
 
     @classmethod
-    def parse(cls, filters: str, scas: str, pointings: str, passes: str = "all",
+    def parse(cls, filters: str = "all", scas: str = "all", pointings: str = "all", passes: str = "all",
               reader: str = "soc-l2", expids: str = "all", programs: str = "all",
-              fixed_program: int | str = "") -> "Selection":
+              fixed_program: int | str = "", stems: str | Iterable[str] = "all", mjd: str = "all",
+              mjd_hi_exclusive: bool = False) -> "Selection":
         """A selection from the ``loop`` verb's terms, each comma-separated or ``all``.
 
         Parameters
@@ -243,11 +265,17 @@ class Selection:
             The verb's ``--programs``: program numbers, e.g. ``1049,1018`` or ``-2``, or ``all``.
         fixed_program : int or str
             The run's ``[intake] program_id``; ``""`` means unset, each stem's own program.
+        stems : str or iterable of str
+            The verb's ``--stems``: stems comma-separated, or already split, or ``all``.
+        mjd : str
+            The verb's ``--mjd``, ``LO-HI``, or ``all``; ``--dates`` arrives converted, with
+            ``mjd_hi_exclusive`` true (the window ends at the day after the last date).
 
         Returns
         -------
         Selection
-            The parsed selection; ``ValueError`` names a malformed term.
+            The parsed selection; ``ValueError`` names a malformed term, a stem of another
+            reader or no reader, or a window whose low end is above its high end.
         """
         ranges = None
         if expids != "all":
@@ -262,21 +290,51 @@ class Selection:
         else:
             points = None if pointings == "all" else frozenset(
                 (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
-        return cls(frozenset(f.strip().upper() for f in filters.split(",")),
-                   frozenset(int(s) for s in scas.split(",")), points,
+        named = keys = None
+        if stems != "all":
+            named = frozenset(s.strip() for s in (stems.split(",") if isinstance(stems, str) else stems)
+                              if s.strip())
+            wanted = reader if reader in PASSLESS else "soc-l2"
+            ids = {s: stem_ids(s) for s in named}
+            bad = sorted(s for s, i in ids.items() if i is None or i["reader"] != wanted)
+            if bad:
+                raise ValueError(f"--stems: not a {wanted} stem: {', '.join(bad)}")
+            keys = frozenset((i["expid"], i["sca"], i["filter"]) for i in ids.values())
+        window = None
+        if mjd != "all":
+            lo, _, hi = mjd.partition("-")
+            window = (float(lo), float(hi))
+            if window[0] > window[1]:
+                raise ValueError(f"--mjd {mjd}: the window's low end is above its high end")
+        return cls(None if filters == "all" else frozenset(f.strip().upper() for f in filters.split(",")),
+                   None if scas == "all" else frozenset(int(s) for s in scas.split(",")), points,
                    None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader, ranges,
                    None if programs == "all" else frozenset(int(p) for p in programs.split(",")),
-                   None if fixed_program == "" else int(fixed_program))
+                   None if fixed_program == "" else int(fixed_program), named, keys, window, mjd_hi_exclusive)
 
     def admits_expid(self, expid: int) -> bool:
         return self.expids is None or any(lo <= expid <= hi for lo, hi in self.expids)
+
+    def admits_filter(self, name: str) -> bool:
+        """Whether a filter, by its pipeline name (``F146``), is selected."""
+        return self.filters is None or name.upper() in self.filters
+
+    def admits_sca(self, sca: int) -> bool:
+        return self.scas is None or sca in self.scas
+
+    def admits_mjd(self, mjdobs: float | None) -> bool:
+        """Whether an official row's ``mjdobs`` is in the window; no window admits every row."""
+        if self.mjd is None:
+            return True
+        lo, hi = self.mjd
+        return mjdobs is not None and lo <= mjdobs and (mjdobs < hi if self.mjd_hi_exclusive else mjdobs <= hi)
 
     def admits_stem(self, stem: str) -> dict | None:
         """The stem's SCA, filter and pointing when the selection admits it, else ``None``."""
         ids = stem_ids(stem)
         if ids is None or ids["reader"] != (self.reader if self.reader in PASSLESS else "soc-l2"):
             return None
-        if ids["sca"] not in self.scas or ids["filter"] not in self.filters:
+        if not self.admits_sca(ids["sca"]) or not self.admits_filter(ids["filter"]):
             return None
         if self.pointings is not None and ids["pointing"] not in self.pointings:
             return None
@@ -285,6 +343,8 @@ class Selection:
         if not self.admits_expid(ids["expid"]):
             return None
         if self.programs is not None and self.stem_program(ids) not in self.programs:
+            return None
+        if self.stems is not None and stem not in self.stems:
             return None
         return {"sca": ids["sca"], "filter": ids["filter"], "expid": ids["expid"]}
 
@@ -303,14 +363,21 @@ class Selection:
         """
         return self.fixed_program if self.fixed_program is not None else ids["program"]
 
-    def admits_row(self, expid: int, sca: int, fid: int, fids: set[int], program: int | None = None) -> bool:
+    def admits_row(self, expid: int, sca: int, fid: int, fids: set[int], program: int | None = None,
+                   mjdobs: float | None = None, band: str | None = None) -> bool:
         """Whether an L2 key is selected, ``fids`` the selected filters' fids; ``expid``
         packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits, or is the
         OpenUniverse pointing; ``program`` its official ``exposures`` row's ``program_id``,
-        ``None`` when the exposure has none, which a program selection never admits."""
-        if sca not in self.scas or fid not in fids or not self.admits_expid(expid):
+        ``None`` when the exposure has none, which a program selection never admits;
+        ``mjdobs`` the row's, for the window; ``band`` the row's filter by its pipeline
+        name (``F146``), for a stem selection."""
+        if not self.admits_sca(sca) or fid not in fids or not self.admits_expid(expid):
             return False
         if self.programs is not None and program not in self.programs:
+            return False
+        if not self.admits_mjd(mjdobs):
+            return False
+        if self.stem_keys is not None and (expid, sca, band) not in self.stem_keys:
             return False
         if self.reader in PASSLESS:
             return self.pointings is None or expid in self.pointings
@@ -322,10 +389,14 @@ class Selection:
         points = "all" if self.pointings is None else sorted(self.pointings)
         if self.reader not in PASSLESS and points != "all":
             points = [f"{v:03d}_{e:04d}" for v, e in points]
-        return {"filters": sorted(self.filters), "scas": sorted(self.scas), "pointings": points,
+        return {"filters": "all" if self.filters is None else sorted(self.filters),
+                "scas": "all" if self.scas is None else sorted(self.scas), "pointings": points,
                 "passes": "all" if self.passes is None else sorted(self.passes),
                 "expids": "all" if self.expids is None else [f"{lo}-{hi}" for lo, hi in self.expids],
-                "programs": "all" if self.programs is None else sorted(self.programs)}
+                "programs": "all" if self.programs is None else sorted(self.programs),
+                "stems": "all" if self.stems is None else sorted(self.stems),
+                "mjd": "all" if self.mjd is None else
+                       f"{self.mjd[0]}-{self.mjd[1]}" + ("(excluded)" if self.mjd_hi_exclusive else "")}
 
 
 def stem_expid(stem: str) -> int:
@@ -377,14 +448,15 @@ def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]
             for item in page.get("Contents", []):
                 name = item["Key"][len(root):]
                 if (name.endswith(RTS_SUFFIX) and (m := RTS_STEM.match(name.removesuffix(RTS_SUFFIX)))
-                        and m["filter"] in selection.filters):
+                        and selection.admits_filter(m["filter"])):
                     found.append(name.removesuffix(RTS_SUFFIX))
         return found
     if selection.reader == OPENUNIVERSE:
         found = []
-        for band in sorted(selection.filters):
-            for page in client.get_paginator("list_objects_v2").paginate(
-                    Bucket=bucket, Prefix=root + rapid_filter_name(band) + "/"):
+        prefixes = ([root] if selection.filters is None else
+                    [root + rapid_filter_name(band) + "/" for band in sorted(selection.filters)])
+        for prefix in prefixes:                 # every filter's prefix at once when none is selected
+            for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
                 for item in page.get("Contents", []):
                     name = item["Key"].rsplit("/", 1)[-1]
                     if name.endswith(OU_SUFFIX):
@@ -400,7 +472,7 @@ def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]
             continue
         observation = name[: m.end("observation")]
         after = root + observation + "~"          # past every key of the observation
-        if m["filter"].upper() in selection.filters:
+        if selection.admits_filter(m["filter"]):
             observations.append(observation)
     stems = []
     suffix = LITE_SUFFIX if selection.reader == SOCSIMS_LITE else SUFFIX
@@ -717,7 +789,10 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     ``refusal``, and like a failed one holds its key: neither is submitted again.
     """
     d = snap.dataset
-    fids = {name: _fid(name, snap.fids) for name in selection.filters}
+    # The selected filters' fids by pipeline name; every filter of the table when none is selected.
+    names = selection.filters if selection.filters is not None else {"F" + n[1:] for n in snap.fids}
+    fids = {name: _fid(name, snap.fids) for name in names}
+    bands = {fid: name for name, fid in fids.items()}
     run_jobs = defaultdict(list)
     for job in snap.jobs:
         run_jobs[job["stage"]].append(job)
@@ -780,7 +855,8 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         out.append({"stage": "intake", "scope": {"dataset": d, "file": stem},
                     "inputs": inputs, "expects": expects})
 
-    selected = {k: v for k, v in snap.l2.items() if selection.admits_row(*k, set(fids.values()), v["program"])}
+    selected = {k: v for k, v in snap.l2.items()
+                if selection.admits_row(*k, set(fids.values()), v["program"], v["mjdobs"], bands.get(k[2]))}
     intake_pending = bool(pending["intake"])
     bound = snap.settings["reference"]["selection"].get("before_mjd")
     after = {k: v for k, v in selected.items() if bound is None or v["mjdobs"] >= float(bound)}
@@ -883,18 +959,46 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     return out, counts
 
 
+def cut_to_stage(submissions: list[dict], counts: dict, stage: str | None) -> list[dict]:
+    """The submissions of ``stage`` alone, the other stages' counted as ``cut`` instead of
+    ``submitted``; every submission, unchanged, when ``stage`` is ``None``."""
+    if stage is None:
+        return submissions
+    if stage not in STAGES:
+        raise ValueError(f"--stage {stage}: not one of {', '.join(STAGES)}")
+    kept = [s for s in submissions if s["stage"] == stage]
+    counts["cut"] = {s: n for s, n in counts["submitted"].items() if s != stage and n}
+    counts["submitted"] = {s: (n if s == stage else 0) for s, n in counts["submitted"].items()}
+    return kept
+
+
+def dry_run(conn_factory: Callable[[], Any], run: int, selection: Selection, stems: list[str],
+            max_intake: int = 100, stage: str | None = None) -> dict:
+    """One pass's plan without the pass: the submissions it would make, as ``job submit``
+    takes them, under ``submissions``, with the pass's counts; nothing is recorded or
+    submitted and Batch is not asked. ``stage`` keeps one stage's (:func:`cut_to_stage`)."""
+    with conn_factory() as conn:
+        snap = snapshot(conn, run)
+    cap = snap.settings.get("batch", {}).get("max_submissions_per_pass")
+    submissions, counts = plan(snap, stems, selection, max_intake, cap)
+    submissions = cut_to_stage(submissions, counts, stage)
+    return {"run": run, "selection": selection.summary(), "submissions": submissions, **counts}
+
+
 def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, stems: list[str],
              submit: Callable[[dict], Any], publish: Callable[[], dict] | None,
              max_intake: int = 100, batch: Any = None,
              rerun: Callable[[int, str], Any] | None = None,
-             held_sets: Callable[[], list[dict]] | None = None, spot: dict | None = None) -> dict:
+             held_sets: Callable[[], list[dict]] | None = None, spot: dict | None = None,
+             stage: str | None = None) -> dict:
     """One pass: reconcile with ``batch`` (a Batch client) when given, rerun once through ``rerun``
     (``(job, stage)``, on the prompt queue) each job whose container died for a reason not the
     code's, or whose Spot submission ended unpublished or was hedged (``spot``, the run's
     ``[batch.spot]``), snapshot, plan at most ``[batch] max_submissions_per_pass`` submissions,
     submit each without waiting (``submit(item)`` returns the job id), then publish; return the
     summary, with ``held_sets``, the quality gate's held packet sets after the publish
-    (``held_sets()``), when given, and the run's ``attempts`` report."""
+    (``held_sets()``), when given, and the run's ``attempts`` report. ``stage`` submits one
+    stage's alone (:func:`cut_to_stage`); such a pass never drains."""
     with conn_factory() as conn:
         if batch is not None:
             medians = median_seconds(conn, run) if spot and spot.get("hedge_factor") else None
@@ -912,6 +1016,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
             job["state"] = "running"            # Batch's retry or the rerun in flight: pending, not failed
     cap = snap.settings.get("batch", {}).get("max_submissions_per_pass")
     submissions, counts = plan(snap, stems, selection, max_intake, cap)
+    submissions = cut_to_stage(submissions, counts, stage)
     queues = defaultdict(list)
     for item in submissions:
         queues[item.get("queue") or "prompt"].append(submit(item))
@@ -921,7 +1026,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     counts["sets_produced"] = produced["sets"]
     counts["sets_waiting"] = produced.get("waiting", [])
     counts["sets_late"] = produced.get("late", 0)
-    counts["drained"] = (counts["new"] == 0 and not submissions
+    counts["drained"] = (counts["new"] == 0 and not submissions and not counts.get("cut")
                          and not any(counts["pending"].values()) and not counts["sets_waiting"])
     if held_sets is not None:
         counts["held_sets"] = held_sets()

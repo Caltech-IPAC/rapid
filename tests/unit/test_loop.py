@@ -979,3 +979,167 @@ def test_the_loop_selects_by_programs_and_exits_64_when_none_of_the_listing_is_s
     if programs == "1049":                      # the listed stem is program 342's
         assert json.loads(captured.out)["selection"]["programs"] == [1049]
         assert "programs 1049" in captured.err
+
+
+def test_every_term_defaults_to_all_in_stems_rows_and_the_listing():
+    sel = loop.Selection.parse()
+    assert sel.filters is None and sel.scas is None and sel.pointings is None
+    other = stem(1, 1, 1, sca=3).replace("f146", "f184")
+    assert sel.admits_stem(stem(1, 1, 1)) and sel.admits_stem(other)
+    assert sel.summary()["filters"] == "all" and sel.summary()["scas"] == "all" and sel.summary()["stems"] == "all"
+    pages = Pages([stem(1, 1, 1) + "_cal.asdf", other + "_cal.asdf"])
+    assert sorted(loop.list_stems(pages, "s3://bucket/l2/", sel)) == sorted([stem(1, 1, 1), other])
+    subs, _ = loop.plan(snap(), [stem(1, 1, 1), other], sel)      # every filter of the table is planned
+    assert {s["scope"]["file"] for s in subs if s["stage"] in ("intake", "psf")} == {stem(1, 1, 1), other}
+
+
+def test_stems_select_the_named_files_and_their_rows_and_refuse_another_readers():
+    sel = loop.Selection.parse(stems=f"{stem(1, 1, 1)}, {stem(2, 1, 1)}")
+    assert sel.admits_stem(stem(1, 1, 1)) and not sel.admits_stem(stem(3, 1, 1))
+    k1, k3 = (expid(1, 1, 1), 8, 8), (expid(3, 1, 1), 8, 8)
+    s = snap(published_stems={stem(1, 1, 1), stem(3, 1, 1)},
+             l2={k1: l2row(7, 1.0, 20), k3: l2row(7, 3.0, 22)}, refs={(7, 8): 30})
+    subs, _ = loop.plan(s, [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)], sel)
+    assert [x["scope"]["file"] for x in stages(subs, "intake")] == [stem(2, 1, 1)]
+    assert [x["scope"]["expid"] for x in stages(subs, "difference")] == [expid(1, 1, 1)]   # k3 not named
+    assert sel.summary()["stems"] == [stem(1, 1, 1), stem(2, 1, 1)]
+    with pytest.raises(ValueError, match="not a soc-l2 stem"):
+        loop.Selection.parse(stems="roman_tds_H158_1012_wfi08")
+
+
+def test_an_mjd_window_bounds_the_rows_not_the_files_and_dates_exclude_the_day_after():
+    k1, k2, k3 = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8), (expid(3, 1, 1), 8, 8)
+    s = snap(published_stems={stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1)},
+             l2={k1: l2row(7, 61352.5, 20), k2: l2row(7, 61354.0, 21), k3: l2row(7, 61355.0, 22)},
+             refs={(7, 8): 30})
+    sel = loop.Selection.parse(mjd="61352-61354")                     # --mjd: inclusive
+    subs, _ = loop.plan(s, [stem(1, 1, 1), stem(2, 1, 1), stem(3, 1, 1), stem(4, 1, 1)], sel)
+    assert [x["scope"]["expid"] for x in stages(subs, "difference")] == [expid(1, 1, 1), expid(2, 1, 1)]
+    assert [x["scope"]["file"] for x in stages(subs, "intake")] == [stem(4, 1, 1)]     # files are not bounded
+    dated = loop.Selection.parse(mjd="61352-61354", mjd_hi_exclusive=True)   # --dates 2026-11-08..2026-11-09
+    subs, _ = loop.plan(s, [], dated)
+    assert [x["scope"]["expid"] for x in stages(subs, "difference")] == [expid(1, 1, 1)]
+    assert not sel.admits_mjd(None) and sel.summary()["mjd"] == "61352.0-61354.0"
+    with pytest.raises(ValueError, match="low end is above"):
+        loop.Selection.parse(mjd="5-4")
+
+
+def test_stage_keeps_one_stages_submissions_and_such_a_pass_never_drains():
+    k1 = (expid(1, 1, 1), 8, 8)
+    s = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30})
+    monkey = {"snapshot": s}
+    submitted = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(loop, "snapshot", lambda conn, run: monkey["snapshot"])
+        summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [stem(1, 1, 1), stem(2, 1, 1)],
+                                lambda item: submitted.append(item["stage"]), None, stage="difference")
+    assert submitted == ["difference"]
+    assert summary["submitted"] == {"psf": 0, "intake": 0, "reference": 0, "difference": 1, "packet": 0}
+    assert summary["cut"] == {"intake": 1} and not summary["drained"]
+    with pytest.raises(ValueError, match="not one of"):
+        loop.cut_to_stage([], {"submitted": {}}, "associate")
+
+
+def _local_patches(monkeypatch, snapshots: list[loop.Snapshot], listed: list[str]) -> None:
+    """A loop that must not touch Batch or sleep: each pass sees the next of ``snapshots``."""
+    seen = iter(snapshots)
+    monkeypatch.setattr(loop, "snapshot", lambda conn, run: next(seen))
+    monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
+    monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
+    monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([s + "_cal.asdf" for s in listed]))
+    monkeypatch.setattr(cli.publish_kafka, "unpublished_sets", lambda conn, run: [])
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: pytest.fail("Batch asked"))
+    monkeypatch.setattr(cli.time, "sleep", lambda s: pytest.fail("slept"))
+
+
+def test_dry_run_prints_the_pass_plan_and_records_nothing(monkeypatch, capsys):
+    _local_patches(monkeypatch, [snap(psfs={})], [stem(1, 1, 1)])
+    monkeypatch.setattr(cli.foundation, "create_job", lambda *a, **k: pytest.fail("recorded"))
+    assert cli.main(["loop", "--run", "12", "--dry-run", "--stems", stem(1, 1, 1)]) == ExitCode.SUCCESS
+    printed = json.loads(capsys.readouterr().out)
+    assert [s["stage"] for s in printed["submissions"]] == ["psf"]
+    assert printed["submissions"][0]["expects"][0]["product"] == "psfs"
+    assert printed["submitted"]["psf"] == 1 and printed["selection"]["stems"] == [stem(1, 1, 1)]
+
+
+def test_dry_run_of_a_selection_matching_nothing_exits_64(monkeypatch, capsys):
+    _local_patches(monkeypatch, [snap()], [stem(1, 1, 1)])
+    assert cli.main(["loop", "--run", "12", "--dry-run", "--filters", "F184"]) == ExitCode.USAGE
+    assert "filters F184" in capsys.readouterr().err
+
+
+def test_local_runs_each_planned_job_here_in_order_and_repeats_at_once_until_drained(monkeypatch, capsys):
+    k1 = (expid(1, 1, 1), 8, 8)
+    first = snap(psfs={})                                                       # nothing yet: a psf job
+    second = snap()                                                             # the PSF official: intake
+    third = snap(published_stems={stem(1, 1, 1)}, l2={k1: l2row(7, 1.0, 20)}, refs={(7, 8): 30},
+                 diffs={k1: 41}, sources={k1: 41}, packets={k1: 90})            # drained
+    _local_patches(monkeypatch, [first, second, third], [stem(1, 1, 1)])
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "file:///tmp/out")
+    ran = []
+    monkeypatch.setattr(cli.foundation, "create_job", lambda conn, run, stage, scope, inputs, expects:
+                        ran.append(stage) or len(ran))
+    monkeypatch.setattr(cli, "_stage_run", lambda stage: stage)
+    monkeypatch.setattr(cli.foundation, "run_job", lambda connect, job, root, stage_run, exit_code:
+                        {"job": job, "published": True, "group": 5, "refusal": None, "live": True})
+    code = cli.main(["loop", "--run", "12", "--local", "--interval", "600"])
+    assert code == ExitCode.SUCCESS and ran == ["psf", "intake"]
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [line["drained"] for line in lines] == [False, False, True]
+    assert lines[0]["queues"] == {"prompt": [1]} and "batch" not in lines[0]
+
+
+def test_a_local_job_that_fails_is_logged_and_the_pass_goes_on_around_it(monkeypatch, capsys, caplog):
+    first = snap(psfs={})
+    _local_patches(monkeypatch, [first, first], [stem(1, 1, 1)])
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "file:///tmp/out")
+    monkeypatch.setattr(cli.foundation, "create_job", lambda *a: 7)
+    monkeypatch.setattr(cli, "_stage_run", lambda stage: stage)
+
+    def boom(*a, **k):
+        raise RuntimeError("the stage broke")
+    monkeypatch.setattr(cli.foundation, "run_job", boom)
+    assert cli.main(["loop", "--run", "12", "--local", "--once"]) == ExitCode.SUCCESS
+    assert "job 7 (psf) failed, exit 70: RuntimeError: the stage broke" in caplog.text
+
+
+def test_loop_needs_a_job_definition_unless_local_or_dry_run_and_refuses_a_queue_with_them(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "connect", lambda **kw: pytest.fail("connected"))
+    assert cli.main(["loop", "--run", "12"]) == ExitCode.USAGE
+    assert "--job-definition is required" in capsys.readouterr().err
+    assert cli.main(["loop", "--run", "12", "--local", "--job-queue", "q"]) == ExitCode.USAGE
+    assert "not with --local" in capsys.readouterr().err
+    monkeypatch.delenv("RAPIDPIPE_OUTPUTS_ROOT", raising=False)
+    assert cli.main(["loop", "--run", "12", "--local"]) == ExitCode.USAGE
+    assert "RAPIDPIPE_OUTPUTS_ROOT" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["loop", "--run", "12", "--local", "--dry-run"])
+    assert stop.value.code == ExitCode.USAGE
+
+
+def test_dates_are_a_window_of_whole_utc_days(monkeypatch, capsys):
+    assert cli._dates_window("2026-11-08..2026-11-09") == "61352-61354"
+    assert cli._dates_window("2026-11-08..2026-11-08") == "61352-61353"
+    for bad in ("2026-11-09..2026-11-08", "2026-11-08", "yesterday..today"):
+        with pytest.raises(cli.CommandExit):
+            cli._dates_window(bad)
+
+
+def test_stems_come_from_a_file_one_per_line(tmp_path):
+    listing = tmp_path / "stems.txt"
+    listing.write_text(f"{stem(1, 1, 1)}\n\n  {stem(2, 1, 1)}  \n")
+    assert cli._stems_argument(f"@{listing}") == [stem(1, 1, 1), stem(2, 1, 1)]
+    assert cli._stems_argument("all") == "all"
+    with pytest.raises(cli.CommandExit, match="cannot read the stems file"):
+        cli._stems_argument(f"@{tmp_path / 'missing.txt'}")
+
+
+def test_job_local_without_a_stage_names_the_stages(monkeypatch, capsys):
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", "file:///tmp/out")
+    monkeypatch.setattr(cli, "connect", lambda **kw: pytest.fail("connected"))
+    assert cli.main(["job", "local", "--run", "1", "--scope", "{}"]) == ExitCode.USAGE
+    err = capsys.readouterr().err
+    assert "--stage is required: one of import, psf, intake, reference, difference, packet" in err
+    with pytest.raises(SystemExit) as stop:                       # a stage that does not exist: argparse's list
+        cli.main(["job", "local", "--run", "1", "--stage", "associate", "--scope", "{}"])
+    assert stop.value.code == ExitCode.USAGE and "'associate'" in capsys.readouterr().err

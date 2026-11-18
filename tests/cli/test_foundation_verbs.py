@@ -200,6 +200,29 @@ def test_job_submit_records_the_job_and_submits_job_run_for_it(capsys, conn, mon
         assert cur.fetchone() == (run, "difference", "launched", "batch-1")
 
 
+def test_loop_dry_run_plans_a_pass_from_the_database_and_records_nothing(capsys, conn, monkeypatch, tmp_path):
+    from rapidpipe.cli import main as cli
+    from tests.unit.test_loop import Pages, stem
+
+    settings = tmp_path / "settings.toml"
+    settings.write_text('[intake]\nsource_root = "s3://bucket/l2/"\n[reference.selection]\nmin_frames = 2\n'
+                        '[packet]\ngaia_match = false\n')
+    code, out, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123",
+                          "--settings", str(settings), "--survey", SURVEY, "--dataset", DATASET)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    run = out.strip()
+    monkeypatch.setattr(cli.storage, "s3_client", lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf"]))
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: pytest.fail("Batch asked"))
+    code, out, err = _run(capsys, "loop", "--run", run, "--dry-run")
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    plan = json.loads(out)
+    assert [s["stage"] for s in plan["submissions"]] == ["psf"]        # no official PSF yet: that first
+    assert plan["submissions"][0]["scope"] == {"dataset": DATASET, "file": stem(1, 1, 1)}
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM jobs WHERE run = %s", (int(run),))
+        assert cur.fetchone()[0] == 0
+
+
 def test_job_submit_refuses_without_a_queue_naming_the_recorded_job(capsys, conn, monkeypatch):
     from rapidpipe.cli import main as cli
 

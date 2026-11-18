@@ -35,12 +35,17 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   with Batch each check (``rapidpipe.foundation.loop.wait``), and prints the
   states; exit 0 when every job published, 1 when one failed, 2 when the
   timeout passes first: one blocking waiter for hand-submitted jobs;
-- ``loop --run --filters --scas --pointings [--passes] [--expids] [--programs] --job-definition [--once]``
-  carries the selection one stage forward per pass on Batch and ends each
+- ``loop --run [--filters] [--scas] [--pointings] [--passes] [--expids] [--programs] [--stems]
+  [--mjd LO-HI | --dates LO..HI] (--job-definition D | --local | --dry-run) [--stage NAME] [--once]``
+  carries the selection (every term ``all`` when left out) one stage
+  forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained: exit 0
   (64 when the first pass finds no stem of the selection under the source
-  root, a selection that matches nothing),
+  root, a selection that matches nothing); ``--local`` runs each planned
+  job here through ``job local``'s path instead, with no Batch and no sweep,
+  passes repeating at once; ``--dry-run`` prints one pass's plan and does
+  nothing; ``--stage`` keeps one stage's submissions and implies ``--once``,
   or 1 when a job of the run has failed or was published with its binding
   refused, those jobs named in the pass's ``failed`` with their ``refusal``
   (such a job holds only the work that depends on it, and the rest drains
@@ -79,6 +84,7 @@ Plain argparse; no third-party CLI library.
 from __future__ import annotations
 
 import argparse
+import datetime
 import importlib
 import json
 import logging
@@ -96,6 +102,7 @@ from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
+from rapidpipe.foundation.local import failure_reason
 from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
 
@@ -163,7 +170,8 @@ def _build_parser() -> argparse.ArgumentParser:
     for verb in (job_local, job_submit):
         new_only = verb is job_local       # job submit --job names an existing job instead
         verb.add_argument("--run", required=new_only, type=int)
-        verb.add_argument("--stage", required=new_only)
+        verb.add_argument("--stage", choices=STAGE_NAMES, metavar="NAME",      # checked in _run_job, naming them
+                          help=f"The stage: one of {', '.join(STAGE_NAMES)}.")
         for name, meaning in (("scope", "the job's scope, a JSON object"),
                               ("inputs", "a JSON list of {product, key, source_job}"),
                               ("expects", "a JSON list of {product, key, binding}")):
@@ -224,13 +232,36 @@ def _build_parser() -> argparse.ArgumentParser:
                     "Repeat every --interval seconds until a pass finds nothing new, pending or "
                     "to submit: exit 0, or 1 when a job of the run has failed or was published "
                     "with its binding refused; the work that does not depend on it drains first. "
-                    "Exit 64 when the first pass admits nothing.")
+                    "Exit 64 when the first pass admits nothing. Every selection term is 'all' "
+                    "when left out. With --local each planned job runs here instead, as 'job local' "
+                    "runs one, passes repeating at once until one drains; with --dry-run one pass's "
+                    "plan is printed and nothing is done.")
     loop_parser.add_argument("--run", required=True, type=int)
-    loop_parser.add_argument("--filters", required=True, help="Comma-separated, e.g. F146.")
-    loop_parser.add_argument("--scas", required=True, help="Comma-separated SCA numbers.")
-    loop_parser.add_argument("--pointings", required=True,
+    loop_parser.add_argument("--filters", default="all", help="Comma-separated, e.g. F146, or 'all' (default).")
+    loop_parser.add_argument("--scas", default="all", help="Comma-separated SCA numbers, or 'all' (default).")
+    loop_parser.add_argument("--pointings", default="all",
                              help="Comma-separated VVV_EEEE (visit, exposure), or the observing "
-                                  "sequence's rows for an OpenUniverse run, or 'all'.")
+                                  "sequence's rows for an OpenUniverse run, or 'all' (default).")
+    loop_parser.add_argument("--stems", default="all",
+                             help="Comma-separated L2 file stems (the name without _cal.asdf), or @FILE "
+                                  "with one per line, or 'all' (default): the files to ingest and their "
+                                  "official rows.")
+    window = loop_parser.add_mutually_exclusive_group()
+    window.add_argument("--mjd", default="all", metavar="LO-HI",
+                        help="An inclusive window of the official L2 rows' mjdobs; the files to ingest "
+                             "carry no date and are not bounded.")
+    window.add_argument("--dates", metavar="YYYY-MM-DD..YYYY-MM-DD",
+                        help="The same window as UTC dates, both days included.")
+    mode = loop_parser.add_mutually_exclusive_group()
+    mode.add_argument("--local", action="store_true",
+                      help="Run each planned job here under RAPIDPIPE_OUTPUTS_ROOT, one at a time in "
+                           "stage order, instead of submitting it; no job definition, no Batch.")
+    mode.add_argument("--dry-run", action="store_true",
+                      help="Print one pass's plan (its submissions and counts) as JSON and exit 0; "
+                           "nothing is recorded or submitted.")
+    loop_parser.add_argument("--stage", choices=loop.STAGES, metavar="NAME",
+                             help=f"Keep one stage's submissions, one of {', '.join(loop.STAGES)}; "
+                                  "implies --once.")
     loop_parser.add_argument("--passes", default="all",
                              help="Comma-separated survey pass numbers, e.g. 1,2,3,4, or 'all' (default).")
     loop_parser.add_argument("--expids", default="all",
@@ -240,8 +271,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="Comma-separated program numbers, e.g. 1049,1018 or -2, or 'all' (default): "
                                   "stems by the program intake writes, official L2 rows by their exposure's "
                                   "official program_id.")
-    loop_parser.add_argument("--job-definition", required=True,
-                             help="The Batch job definition the run's revision is registered as.")
+    loop_parser.add_argument("--job-definition",
+                             help="The Batch job definition the run's revision is registered as "
+                                  "(required without --local or --dry-run).")
     loop_parser.add_argument("--job-queue",
                              help="The prompt (on-demand) Batch job queue (default "
                                   "RAPIDPIPE_BATCH_JOB_QUEUE); the run's [batch.spot] names the Spot one.")
@@ -275,6 +307,35 @@ def _json_argument(text: str) -> Any:
 
 #: Stage names whose module name differs (``import`` is a Python keyword).
 _STAGE_MODULES = {"import": "import_products"}
+#: The stages ``job local`` and ``job submit`` take: the loop's, and ``import`` before it.
+STAGE_NAMES = ("import", *loop.STAGES)
+#: MJD 0 is 1858-11-17 UTC; a date's MJD is its days since.
+_MJD_EPOCH = datetime.date(1858, 11, 17)
+
+
+def _dates_window(text: str) -> str:
+    """``--dates LO..HI`` (UTC dates, both days included) as the ``--mjd`` window ``LO-HI`` whose
+    high end is the day after ``HI`` at 0h, to be excluded (:class:`~rapidpipe.foundation.loop.Selection`)."""
+    lo, sep, hi = text.partition("..")
+    try:
+        if not sep:
+            raise ValueError("expected LO..HI")
+        first, last = datetime.date.fromisoformat(lo.strip()), datetime.date.fromisoformat(hi.strip())
+    except ValueError as exc:
+        raise CommandExit(int(ExitCode.USAGE), f"--dates {text}: {exc}") from exc
+    if first > last:
+        raise CommandExit(int(ExitCode.USAGE), f"--dates {text}: the first date is after the last")
+    return f"{(first - _MJD_EPOCH).days}-{(last - _MJD_EPOCH).days + 1}"
+
+
+def _stems_argument(text: str) -> str | list[str]:
+    """``--stems``: ``all``, a comma-separated list, or ``@FILE`` with one stem per line."""
+    if not text.startswith("@"):
+        return text
+    try:
+        return [line.strip() for line in Path(text[1:]).read_text().splitlines() if line.strip()]
+    except OSError as exc:
+        raise CommandExit(int(ExitCode.USAGE), f"cannot read the stems file {text[1:]}: {exc}") from exc
 
 
 def _stage_run(stage: str):
@@ -304,7 +365,9 @@ def _run_job(args: argparse.Namespace) -> int:
         with connect_job() as conn:
             stage = foundation.job_show(conn, job_id)["stage"]
     elif args.verb in ("local", "submit"):
-        if args.run is None or args.stage is None or args.scope is None:
+        if args.stage is None:
+            raise CommandExit(int(ExitCode.USAGE), f"--stage is required: one of {', '.join(STAGE_NAMES)}")
+        if args.run is None or args.scope is None:
             raise CommandExit(int(ExitCode.USAGE), "--run, --stage and --scope are required without --job")
         stage, stage_run = args.stage, _stage_run(args.stage)
         with connect_job() as conn:
@@ -389,18 +452,37 @@ def _loop(args: argparse.Namespace) -> int:
     def connect_loop():
         return connect(application_name="rapidpipe-loop")
 
+    here = args.local or args.dry_run
+    if not here and not args.job_definition:
+        raise CommandExit(int(ExitCode.USAGE), "--job-definition is required without --local or --dry-run")
+    if here and args.job_queue:
+        raise CommandExit(int(ExitCode.USAGE), "--job-queue names a Batch queue: not with --local or --dry-run")
+    root = os.environ.get("RAPIDPIPE_OUTPUTS_ROOT")
+    if args.local and not root:
+        raise CommandExit(int(ExitCode.USAGE), "RAPIDPIPE_OUTPUTS_ROOT is not set")
+    once = args.once or args.dry_run or args.stage is not None
     with connect_loop() as conn:
         settings = foundation.run_show(conn, args.run)["settings"]
     intake = settings["intake"]
+    mjd = _dates_window(args.dates) if args.dates else args.mjd
     try:
         selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes,
                                          intake.get("reader", "soc-l2"), args.expids, args.programs,
-                                         intake.get("program_id", ""))
+                                         intake.get("program_id", ""), _stems_argument(args.stems), mjd,
+                                         mjd_hi_exclusive=bool(args.dates))
     except ValueError as exc:
         raise CommandExit(int(ExitCode.USAGE), str(exc)) from exc
     s3 = storage.s3_client(unsigned=bool(intake.get("unsigned")))
-    batch = launch.batch_client()
-    spot = launch.spot(settings)
+    if args.dry_run:
+        stems = loop.list_stems(s3, intake["source_root"], selection)
+        plan = loop.dry_run(connect_loop, args.run, selection, stems, args.max_intake, args.stage)
+        _print_json(plan)
+        if plan["admitted"] == 0:
+            raise CommandExit(int(ExitCode.USAGE), _nothing_admitted(args, intake))
+        return int(ExitCode.SUCCESS)
+    batch = None if args.local else launch.batch_client()
+    spot = None if args.local else launch.spot(settings)
+    logger = logging.getLogger("rapidpipe.cli")
 
     def submit(item: dict) -> int:
         with connect_loop() as conn:
@@ -411,6 +493,25 @@ def _loop(args: argparse.Namespace) -> int:
                           vcpus=launch.vcpus(settings, item["stage"]),
                           environment_extra=launch.job_environment(settings),
                           queue=item.get("queue") or args.job_queue, one_attempt="queue" in item)
+        return job_id
+
+    def submit_local(item: dict) -> int:      # job local's path: record, run here, publish
+        stage, stage_run = item["stage"], _stage_run(item["stage"])
+        with connect_loop() as conn:
+            job_id = foundation.create_job(conn, args.run, stage, item["scope"], item["inputs"], item["expects"])
+        logger.info("job %d (%s %s): running here", job_id, stage, json.dumps(item["scope"], sort_keys=True))
+        try:
+            result = foundation.run_job(connect_loop, job_id, root, stage_run, exit_code=exit_code)
+        except Exception as exc:  # noqa: BLE001 - the row is failed (run_job); the pass goes on around it
+            logger.error("job %d (%s) failed, exit %d: %s; its key is held", job_id, stage, exit_code(exc),
+                         failure_reason(exc))
+            return job_id
+        if stage == "packet" and result["published"] and result["group"] is not None:
+            result["kafka"] = _send_own_set(connect_loop, job_id)
+        if result["published"] and result["refusal"]:
+            logger.error("job %d (%s) published, binding refused: %s", job_id, stage, result["refusal"])
+        else:
+            logger.info("job %d (%s) published, group %s", job_id, stage, result["group"])
         return job_id
 
     def rerun(job_id: int, stage: str) -> None:          # always the prompt queue
@@ -443,24 +544,32 @@ def _loop(args: argparse.Namespace) -> int:
     while True:
         started = time.monotonic()
         stems = loop.list_stems(s3, intake["source_root"], selection)
-        summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
-                                args.max_intake, batch, rerun, held_sets, spot)
+        if args.local:                  # no Batch, no rerun, no sweep: a packet job sends its own set
+            summary = loop.run_pass(connect_loop, args.run, selection, stems, submit_local, None,
+                                    args.max_intake, held_sets=held_sets, stage=args.stage)
+        else:
+            summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
+                                    args.max_intake, batch, rerun, held_sets, spot, args.stage)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
         if first and summary["admitted"] == 0:      # a later pass admitting nothing new is the drain
-            raise CommandExit(int(ExitCode.USAGE),
-                              f"the first pass found no stem under {intake['source_root']} for filters"
-                              f" {args.filters}, SCAs {args.scas}, pointings {args.pointings},"
-                              f" passes {args.passes}, expids {args.expids}, programs {args.programs}")
+            raise CommandExit(int(ExitCode.USAGE), _nothing_admitted(args, intake))
         first = False
-        if args.once or summary["drained"]:
+        if once or summary["drained"]:
             if summary["failed"]:
                 sys.stderr.write(f"rapidpipe loop: failed or refused jobs of run {args.run}: "
                                  f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
                 return int(ExitCode.FAILURE)
             return int(ExitCode.SUCCESS)
-        time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
+        if not args.local:              # locally nothing is pending between passes: the next starts at once
+            time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
+
+
+def _nothing_admitted(args: argparse.Namespace, intake: dict) -> str:
+    return (f"the first pass found no stem under {intake['source_root']} for filters {args.filters},"
+            f" SCAs {args.scas}, pointings {args.pointings}, passes {args.passes}, expids {args.expids},"
+            f" programs {args.programs}, stems {args.stems}" + (f", dates {args.dates}" if args.dates else ""))
 
 
 def _foundation_command(args: argparse.Namespace) -> int:
