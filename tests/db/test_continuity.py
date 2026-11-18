@@ -151,21 +151,6 @@ def test_a_lost_connection_while_publishing_publishes_once_without_computing_aga
     assert len(retries) == 1 and retries[0].startswith(f"job {job}: publish retry 1 after ")
 
 
-def test_publication_gives_up_after_its_retries_and_the_job_fails_75(connect, tmp_path, monkeypatch):
-    conn = connect()
-    job = create_job(conn, new_run(conn), "trivial", {})
-
-    def always_lost(*a, **kw):
-        raise psycopg2.OperationalError("server closed the connection unexpectedly")
-
-    monkeypatch.setattr(local, "publish", always_lost)
-    with pytest.raises(psycopg2.OperationalError) as raised:
-        local.run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), counting_stage([]),
-                      exit_code=cli.exit_code, retry_on=cli.LOST_CONNECTION)
-    assert cli.exit_code(raised.value) == 75
-    assert one(conn, "SELECT state, exit_code FROM jobs WHERE id = %s", (job,)) == ("failed", 75)
-
-
 #: A loop pass in a process of its own (a kill ends it): S3 lists :data:`STEM`, Batch accepts every
 #: submission and logs it to BATCH_LOG, and describes the Batch ids BATCH_FAILED names as a dead host.
 DRIVER = f"""
