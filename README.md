@@ -14,13 +14,13 @@ This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) 
 - At least 16 GB of memory (the difference peaked at 15.2 GB) and 2 GB of disk.
 - Network access to the public bucket `s3://stpubdata` (read unsigned, no AWS account) and to `https://roman-crds.stsci.edu` (the PSF stage's reference).
 - The RuBR-AT model, which scores the SFFT difference's candidates: the difference job reads it as a Batch job does, the bucket from the SSM parameter `[difference.rubrat] model_bucket_parameter` names and the files under its `model_key`, so it runs on a RAPID host under the host's instance role (`rapid_systems`' `cloudformation/rapid-storage-buckets.yaml` carries the read).
-- The pipeline image: the team's `rapid-pipeline:rebuild-<sha>`, pulled as [The image](#the-image) says, or one you build ([`containers/README.md`](containers/README.md)).
+- The pipeline image: the team's `rapid-pipeline:rebuild-<sha>-<base8>`, pulled as [The image](#the-image) says, or one you build ([`containers/README.md`](containers/README.md)).
 - A Gaia DR3 mirror covering the field, in the layout the pipeline reads: [The Gaia catalog](#the-gaia-catalog) builds a local one from the one LINCC leaf the field is on.
 - PostgreSQL 18 as the public `docker.io/library/postgres:18` image, the one CI uses.
 
 ### The image
 
-The team's images are in the SMDC account's private container registry, repository `rapid-pipeline`, one tag `rebuild-<sha>` per commit of `rebuild` built for Batch, the full 40-character sha. Pull one on a RAPID host, whose instance role carries the pull grant (`rapid_systems`' `cloudformation/rapid-ecr.yaml`); an SMDC login and `rapid_systems`' README, Setup, get you onto one. The newest tag, and the image:
+The team's images are in the SMDC account's private container registry, repository `rapid-pipeline`, tagged `rebuild-<sha>-<base8>` for each commit of `rebuild` built for Batch: the full 40-character sha, then the first eight hex of the base image's digest (`rapid_systems`' `containers/rapid-pipeline/build-rebuild.sh`), so one commit built on two bases has two tags. The tag is not a commit: the image's commit is its `org.opencontainers.image.revision` label, which [One epoch](#one-epoch) reads as `REV`. Pull one on a RAPID host, whose instance role carries the pull grant (`rapid_systems`' `cloudformation/rapid-ecr.yaml`); an SMDC login and `rapid_systems`' README, Setup, get you onto one. The newest tag, and the image:
 
 ```sh
 REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
@@ -71,7 +71,7 @@ It prints the ingest record: `"leaves_done": 1`, `"complete": false` (one leaf o
 The local values are set, and the team deployment's values are commented. The packet job sends its set to Kafka as its last act. Locally, the three `RAPIDPIPE_KAFKA_*` variables point that send at a closed local port. The send fails, the job still publishes and exits 0, and nothing reaches the team's topic.
 
 ```sh
-export IMAGE=<the pipeline image>                 # e.g. rapid-pipeline:rebuild-<sha>
+export IMAGE=<the pipeline image>                 # e.g. rapid-pipeline:rebuild-<sha>-<base8>
 export GAIA=$PWD/gaia                             # The Gaia catalog, above: the local mirror's directory
 export PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=rapid PGUSER=postgres PGPASSWORD=local
 export RAPIDPIPE_OUTPUTS_ROOT=file:///work/out    # ./rapid-local/out, as the container sees it
