@@ -66,6 +66,9 @@ MAX_AREA_M2 = 4.6
 FILTERS = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
 SCAS = [f"SCA{i:02d}" for i in range(1, 19)]
 
+# numpy 2 names it trapezoid; requirements.txt still admits numpy 1.x, which has only trapz
+trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 
 def sca_pattern(sca):
     """Return a regular expression matching ``sca`` as a whole token in a file name.
@@ -513,15 +516,15 @@ def compute_filter_metrics(wave_um, a_eff_m2, gain, omega_pix):
     a_peak = np.max(a_eff_m2)
 
     # Equivalent Width (um): integral(A_eff d_lambda) / A_peak
-    int_a = np.trapezoid(a_eff_m2, wave_um)
+    int_a = trapezoid(a_eff_m2, wave_um)
     ew = int_a / a_peak
 
     # Mean wavelength (um): integral(A_eff * lambda d_lambda) / integral(A_eff d_lambda)
-    int_a_lam = np.trapezoid(a_eff_m2 * wave_um, wave_um)
+    int_a_lam = trapezoid(a_eff_m2 * wave_um, wave_um)
     lambda_0 = int_a_lam / int_a
 
     # Pivot wavelength (um): sqrt( integral(A_eff * lambda d_lambda) / integral(A_eff / lambda d_lambda) )
-    int_a_over_lam = np.trapezoid(a_eff_m2 / wave_um, wave_um)
+    int_a_over_lam = trapezoid(a_eff_m2 / wave_um, wave_um)
     lambda_piv = np.sqrt(int_a_lam / int_a_over_lam)
 
     # Count rate (DN/s) for a 1 Jy source:
