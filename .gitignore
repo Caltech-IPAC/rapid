@@ -10,8 +10,9 @@ _build/
 
 .venv/
 
-# scripts/dev.sh: the pulled image's reference
+# scripts/dev.sh: the pulled image's reference, and a work folder kept inside the checkout (RAPID_DEV_WORK)
 .rapid-dev/
+/work/
 
 # a personal dev-container credential file, never committed
 .devcontainer/devcontainer.env

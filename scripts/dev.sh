@@ -22,7 +22,7 @@
 #                                          image: this checkout at /code ahead of the package
 #                                          installed in the image (PYTHONPATH), so the
 #                                          checkout's code runs on the image's dependencies;
-#                                          work/ at /work, rapidpipe on PATH.
+#                                          the work folder at /work, rapidpipe on PATH.
 #                                          The target is what the container runs against: the
 #                                          throwaway database here (local, the default; started
 #                                          if it is not) or the deployed one (deployed).
@@ -31,8 +31,14 @@
 #                                          `run -- python -m pytest tests/unit -q` or
 #                                          `run --target deployed -- rapidpipe run show 7`.
 #
+# The work folder is yours, mounted at /work: what you hand the container (L2
+# files, a catalog mirror, a change-group file) and what you take out. It is
+# RAPID_DEV_WORK, by default rapid-work/ beside this checkout, created on
+# first use. Its out/ is the pipeline's outputs root, written by jobs and
+# read by `job show`; nothing else belongs there.
+#
 # The local target (the default) talks to the throwaway database through PG*
-# and writes products under work/out; the deployed target sets
+# and writes products under the work folder's out/; the deployed target sets
 # RAPID_PARAMETER_PATH to the rebuild tree, so the container reaches the
 # deployed database under the host's instance role (rapid_systems
 # docs/workstation-submission.md), and takes RAPIDPIPE_OUTPUTS_ROOT from the
@@ -41,7 +47,9 @@
 #
 # Nothing here is account-specific: the registry is derived from the caller's
 # AWS identity, as the README's Getting started does. The pulled image's
-# reference is kept in .rapid-dev/image (git-ignored).
+# reference is kept in .rapid-dev/image (git-ignored). RAPID_DEV_WORK,
+# RAPID_DEV_REPOSITORY, RAPID_DEV_TAG_PREFIX and RAPID_DEV_POD override the
+# work folder, the registry repository, the tag prefix and the pod name.
 set -euo pipefail
 
 # Inside a container dev.sh started (it sets RAPID_DEV_TARGET there), none of
@@ -53,6 +61,7 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE="$ROOT/.rapid-dev"
+WORK="${RAPID_DEV_WORK:-$(dirname "$ROOT")/rapid-work}"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 REPO="${RAPID_DEV_REPOSITORY:-rapid-pipeline}"
 TAG_PREFIX="${RAPID_DEV_TAG_PREFIX:-rebuild-}"
@@ -234,8 +243,8 @@ ln -sf /usr/local/bin/rapidpipe-entrypoint /usr/local/bin/rapidpipe; cd /code; e
 
 container_args() {  # target -> the engine's run arguments, one per line
   local target="$1"
-  mkdir -p "$ROOT/work/out"
-  printf '%s\n' --rm -v "$ROOT:/code:Z" -v "$ROOT/work:/work:Z" -w /code \
+  mkdir -p "$WORK/out"
+  printf '%s\n' --rm -v "$ROOT:/code:Z" -v "$WORK:/work:Z" -w /code \
     -e PYTHONPATH=/code -e RAPIDPIPE_LOG_LEVEL="${RAPIDPIPE_LOG_LEVEL:-INFO}" \
     -e RAPID_DEV_TARGET="$target"
   case "$target" in
@@ -284,7 +293,7 @@ load_args() {  # ARGS <- container_args TARGET; a refusal there ends the script
 cmd_shell() {
   parse_target "$@"
   load_args
-  echo "dev.sh: target $TARGET, $IMAGE, checkout at /code" >&2
+  echo "dev.sh: target $TARGET, $IMAGE, checkout at /code, $WORK at /work" >&2
   exec "$(engine)" run -it "${ARGS[@]}" --entrypoint /bin/sh "$IMAGE" -c "$ENTRY" sh /bin/bash
 }
 
