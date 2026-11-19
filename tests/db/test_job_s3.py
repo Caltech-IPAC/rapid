@@ -36,11 +36,13 @@ def test_job_local_uploads_publishes_from_the_bucket_and_binds(connect, s3, monk
     run = new_run(conn, live=True)
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", ROOT)
     monkeypatch.setattr(cli, "_stage_run", lambda stage: trivial_stage)
-    code = cli.main(["job", "local", "--run", str(run), "--stage", "trivial", "--scope", "{}",
+    # "import" is a placeholder: job local takes only the real stage names, and the import
+    # stage does not run here. The patched _stage_run above runs trivial_stage under that name.
+    code = cli.main(["job", "local", "--run", str(run), "--stage", "import", "--scope", "{}",
                      "--expects", json.dumps([{"product": "exposures", "key": KEY, "binding": None}])])
     result = json.loads(capsys.readouterr().out)
     assert code == 0 and result["published"] and result["group"] is not None
-    attempt = f"foundation/{run}/trivial/{result['job']}/1/"
+    attempt = f"foundation/{run}/import/{result['job']}/1/"
     uploads = [key for op, key in s3.calls if op == "upload_file"]
     assert uploads == [attempt + "exposures.parquet", attempt + "manifest.json"]
     with conn.cursor() as cur:
