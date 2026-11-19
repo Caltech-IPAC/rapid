@@ -7,16 +7,24 @@ from the gain and area references CRDS recommends for that detector and date.
 The CRDS photom reference's ``photmjsr`` is printed beside the computed K as a
 check.
 
+Before computing, the data folder is checked: each table against GitHub's
+listing (git blob SHA, and any other table GitHub has for that SCA), and each
+recommended CRDS reference for presence and CRDS's size. If anything is
+missing or out of date the script says what and asks whether to continue
+(``--yes`` continues without asking; with no terminal it stops).
+
 Usage: python compute_wfi_zeropoints.py [--effarea-dir DIR] [--sca SCA01 ...]
-       [--date 2026-10-29T00:00:00] [--ipc-factor 1.10] [--cache-dir DIR]
+       [--date 2026-10-29T00:00:00] [--ipc-factor 1.10] [--cache-dir DIR] [--yes]
 """
 
 import argparse
 import datetime
 import glob
+import hashlib
 import json
 import os
 import re
+import sys
 import urllib.request
 import warnings
 
@@ -34,6 +42,9 @@ DATA_DIR = os.path.expanduser("~/Folks/rapid/Roman_Technical_Information_Reposit
 EFFAREA_DIR = DATA_DIR
 CACHE_DIR = DATA_DIR
 CRDS_SERVER = "https://roman-crds.stsci.edu"
+# GitHub's listing of the effective-area tables, each with its git blob SHA
+EFFAREA_LISTING_URL = ("https://api.github.com/repos/RomanSpaceTelescope/roman-technical-information/contents/"
+                       "roman_technical_information/data/WideFieldInstrument/Imaging/EffectiveAreas?ref=main")
 
 # The gain reference holds the photon-transfer gain, which IPC biases high.
 # CRDS photom (context roman_0078) implies gain = median(gain reference) / 1.100
@@ -56,6 +67,22 @@ FILTERS = ["F062", "F087", "F106", "F129", "F146", "F158", "F184", "F213"]
 SCAS = [f"SCA{i:02d}" for i in range(1, 19)]
 
 
+def sca_pattern(sca):
+    """Return a regular expression matching ``sca`` as a whole token in a file name.
+
+    Parameters
+    ----------
+    sca : str
+        SCA name, ``SCA01`` to ``SCA18``.
+
+    Returns
+    -------
+    re.Pattern
+        Case-insensitive pattern that matches ``SCA01`` but not ``SCA010``.
+    """
+    return re.compile(rf"(?<![0-9A-Za-z]){sca}(?![0-9])", re.IGNORECASE)
+
+
 def find_effarea_file(effarea_dir, sca):
     """Return the one effective-area file in ``effarea_dir`` whose name carries ``sca``.
 
@@ -76,7 +103,7 @@ def find_effarea_file(effarea_dir, sca):
     FileNotFoundError
         If no file, or more than one, names this SCA.
     """
-    token = re.compile(rf"(?<![0-9A-Za-z]){sca}(?![0-9])", re.IGNORECASE)
+    token = sca_pattern(sca)
     files = sorted(glob.glob(os.path.join(effarea_dir, "*.ecsv")))
     matches = [f for f in files if token.search(os.path.basename(f))]
     if len(matches) != 1:
@@ -175,8 +202,8 @@ def crds_call(server, method, params):
     return reply["result"]
 
 
-def fetch_reference(server, name, cache_dir):
-    """Return the local path of a CRDS reference file, downloading it once into ``cache_dir``.
+def fetch_reference(server, name, cache_dir, size=None):
+    """Return the local path of a CRDS reference file, downloading it into ``cache_dir`` when needed.
 
     Parameters
     ----------
@@ -186,6 +213,9 @@ def fetch_reference(server, name, cache_dir):
         Reference file name, e.g. ``roman_wfi_gain_0044.asdf``.
     cache_dir : str
         Directory the file is kept in.
+    size : int, optional
+        CRDS's size of the file [bytes]; a local copy of another size is
+        downloaded again.
 
     Returns
     -------
@@ -193,13 +223,202 @@ def fetch_reference(server, name, cache_dir):
         Path of the local copy.
     """
     path = os.path.join(cache_dir, name)
-    if not os.path.exists(path):
+    if not os.path.exists(path) or (size is not None and os.path.getsize(path) != size):
         os.makedirs(cache_dir, exist_ok=True)
         url = server.rstrip("/") + "/unchecked_get/references/roman/" + name
-        print(f"Fetching {url}", flush=True)
+        print(f"Fetching {url}", file=sys.stderr, flush=True)
         urllib.request.urlretrieve(url, path + ".part")
         os.replace(path + ".part", path)
     return path
+
+
+def best_references(sca, date, context, server):
+    """Return the gain, area and photom reference names CRDS recommends for one SCA and date.
+
+    Parameters
+    ----------
+    sca : str
+        SCA name, ``SCA01`` to ``SCA18`` (CRDS detector ``WFI01`` to ``WFI18``).
+    date : str
+        Exposure start time the references are selected for, ``YYYY-MM-DDTHH:MM:SS``.
+    context : str
+        CRDS context, e.g. ``roman_0078.pmap``.
+    server : str
+        CRDS server URL.
+
+    Returns
+    -------
+    dict
+        Reference file name per kind: ``gain``, ``area`` and ``photom``.
+
+    Raises
+    ------
+    RuntimeError
+        If CRDS has no reference of a kind for this detector and date.
+    """
+    detector = "WFI" + sca[3:]
+    header = {"ROMAN.META.INSTRUMENT.NAME": "WFI",
+              "ROMAN.META.INSTRUMENT.DETECTOR": detector,
+              "ROMAN.META.EXPOSURE.START_TIME": date}
+    refs = crds_call(server, "get_best_references", [context, header, ["gain", "area", "photom"]])
+    for kind, name in refs.items():
+        if not isinstance(name, str) or not name.endswith(".asdf"):
+            raise RuntimeError(f"CRDS has no {kind} reference for {detector} at {date}: {name}")
+    return refs
+
+
+def git_blob_sha(path):
+    """Return a file's git blob SHA-1, the checksum GitHub lists for it.
+
+    Parameters
+    ----------
+    path : str
+        Path of the file.
+
+    Returns
+    -------
+    str
+        Hex SHA-1 of ``b"blob <size>\\0"`` followed by the file's bytes.
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def check_effarea(effarea_dir, scas, listing_url=EFFAREA_LISTING_URL):
+    """Compare the local effective-area tables with the Roman Technical Information Repository's.
+
+    Parameters
+    ----------
+    effarea_dir : str
+        Directory holding the local ``.ecsv`` tables.
+    scas : list of str
+        SCAs whose tables are checked.
+    listing_url : str, optional
+        GitHub contents-API URL of the repository's effective-area folder.
+
+    Returns
+    -------
+    list of str
+        One line per problem: a table missing, differing from GitHub's, absent
+        from GitHub, or alongside another table GitHub has for that SCA (a
+        newer version); a line saying the check could not run when GitHub
+        cannot be reached. Empty when every table is GitHub's current one.
+    """
+    try:
+        req = urllib.request.Request(listing_url, headers={"Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            listing = json.load(resp)
+        remote = {x["name"]: x["sha"] for x in listing if x["name"].endswith(".ecsv")}
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return [f"effective-area tables not checked: GitHub listing failed ({e})"]
+
+    local_files = sorted(glob.glob(os.path.join(effarea_dir, "*.ecsv")))
+    problems = []
+    for sca in scas:
+        token = sca_pattern(sca)
+        names = sorted(n for n in remote if token.search(n))
+        local = [f for f in local_files if token.search(os.path.basename(f))]
+        if not local:
+            problems.append(f"{sca}: no local table; GitHub has {', '.join(names) or 'none'}")
+            continue
+        if len(local) > 1:
+            problems.append(f"{sca}: {len(local)} local tables ({', '.join(map(os.path.basename, local))})")
+            continue
+        name = os.path.basename(local[0])
+        if name not in remote:
+            problems.append(f"{sca}: {name} is not on GitHub, which has {', '.join(names) or 'none'}")
+        elif git_blob_sha(local[0]) != remote[name]:
+            problems.append(f"{sca}: {name} differs from GitHub's copy")
+        newer = [n for n in names if n != name]
+        if newer:
+            problems.append(f"{sca}: GitHub also has {', '.join(newer)}")
+    return problems
+
+
+def check_references(cache_dir, refs, server, all_names=None):
+    """Compare the local CRDS references with the ones CRDS recommends.
+
+    CRDS reference names are never reused for new content, so a recommended
+    name present at CRDS's size is up to date.
+
+    Parameters
+    ----------
+    cache_dir : str
+        Directory the reference files are kept in.
+    refs : dict
+        Recommended reference names per kind, per SCA: ``{sca: {kind: name}}``.
+    server : str
+        CRDS server URL.
+    all_names : set of str, optional
+        The references recommended for all 18 SCAs; a local file outside it
+        is reported unused. Defaults to the names in ``refs``.
+
+    Returns
+    -------
+    problems : list of str
+        One line for the recommended references not yet downloaded, with
+        their total size, and one per local copy whose size is not CRDS's.
+    unused : list of str
+        Local ``roman_wfi_{gain,area,photom}_*.asdf`` files CRDS does not
+        recommend for any SCA at this date and context.
+    sizes : dict
+        CRDS's size [bytes] of each recommended reference.
+    """
+    names = sorted({n for r in refs.values() for n in r.values()})
+    info = crds_call(server, "get_file_info_map", ["roman", names, ["size"]])
+    sizes = {n: int(info[n]["size"]) for n in names}
+
+    problems = []
+    missing = [n for n in names if not os.path.exists(os.path.join(cache_dir, n))]
+    if missing:
+        gbytes = sum(sizes[n] for n in missing) / 1e9
+        problems.append(f"{len(missing)} recommended CRDS reference{'s are' if len(missing) > 1 else ' is'} "
+                        f"not in {cache_dir} ({gbytes:.2f} GB to download): {', '.join(missing)}")
+    for n in names:
+        path = os.path.join(cache_dir, n)
+        if n not in missing and os.path.getsize(path) != sizes[n]:
+            problems.append(f"{n}: local size {os.path.getsize(path)} bytes, CRDS's {sizes[n]}; "
+                            "it will be downloaded again")
+
+    local = [os.path.basename(f) for kind in ("gain", "area", "photom")
+             for f in glob.glob(os.path.join(cache_dir, f"roman_wfi_{kind}_*.asdf"))]
+    unused = sorted(set(local) - set(all_names or names))
+    return problems, unused, sizes
+
+
+def ask_to_continue(problems, assume_yes):
+    """Report what is out of date in the data folder and ask whether to continue.
+
+    Parameters
+    ----------
+    problems : list of str
+        Lines describing what is missing or out of date.
+    assume_yes : bool
+        Continue without asking (``--yes``).
+
+    Returns
+    -------
+    bool
+        True to continue. False when the answer is not yes, or when there is
+        no terminal to ask and ``assume_yes`` is False.
+    """
+    print("The data folder is not up to date:", file=sys.stderr)
+    for line in problems:
+        print(f"  - {line}", file=sys.stderr)
+    if assume_yes:
+        print("Continuing (--yes).", file=sys.stderr)
+        return True
+    if not sys.stdin.isatty():
+        print("No terminal to ask; rerun with --yes to continue anyway.", file=sys.stderr)
+        return False
+    print("Continue? [y/N] ", end="", file=sys.stderr, flush=True)
+    try:
+        answer = input()
+    except EOFError:  # input closed: no answer is no
+        print(file=sys.stderr)
+        return False
+    return answer.strip().lower() in ("y", "yes")
 
 
 def open_reference(path):
@@ -221,23 +440,22 @@ def open_reference(path):
     return af, af["roman"]
 
 
-def sca_calibration(sca, date, context, server, cache_dir, ipc_factor):
+def sca_calibration(refs, server, cache_dir, ipc_factor, sizes=None):
     """Return one SCA's gain, pixel area and photom ``photmjsr`` values from its CRDS references.
 
     Parameters
     ----------
-    sca : str
-        SCA name, ``SCA01`` to ``SCA18`` (CRDS detector ``WFI01`` to ``WFI18``).
-    date : str
-        Exposure start time the references are selected for, ``YYYY-MM-DDTHH:MM:SS``.
-    context : str
-        CRDS context, e.g. ``roman_0078.pmap``.
+    refs : dict
+        The SCA's reference names per kind, from :func:`best_references`.
     server : str
         CRDS server URL.
     cache_dir : str
         Directory the reference files are kept in.
     ipc_factor : float
         Divisor applied to the gain reference's median, its IPC correction.
+    sizes : dict, optional
+        CRDS's size [bytes] per reference name; a local copy of another size
+        is downloaded again.
 
     Returns
     -------
@@ -247,25 +465,21 @@ def sca_calibration(sca, date, context, server, cache_dir, ipc_factor):
         nominal pixel area; ``photmjsr``, per filter, the photom reference's
         [(MJy/sr)/(DN/s)]; and ``refs``, the reference names used.
     """
-    detector = "WFI" + sca[3:]
-    header = {"ROMAN.META.INSTRUMENT.NAME": "WFI",
-              "ROMAN.META.INSTRUMENT.DETECTOR": detector,
-              "ROMAN.META.EXPOSURE.START_TIME": date}
-    refs = crds_call(server, "get_best_references", [context, header, ["gain", "area", "photom"]])
-    for kind, name in refs.items():
-        if not isinstance(name, str) or not name.endswith(".asdf"):
-            raise RuntimeError(f"CRDS has no {kind} reference for {detector} at {date}: {name}")
+    sizes = sizes or {}
 
-    af, tree = open_reference(fetch_reference(server, refs["gain"], cache_dir))
+    def local(kind):
+        return fetch_reference(server, refs[kind], cache_dir, sizes.get(refs[kind]))
+
+    af, tree = open_reference(local("gain"))
     with af:
         gain = np.asarray(tree["data"], dtype=float)[REFPIX:-REFPIX, REFPIX:-REFPIX]
         gain = float(np.median(gain[np.isfinite(gain) & (gain > 0)]))
 
-    af, tree = open_reference(fetch_reference(server, refs["area"], cache_dir))
+    af, tree = open_reference(local("area"))
     with af:
         omega_pix = float(tree["meta"]["photometry"]["pixelarea_steradians"])
 
-    af, tree = open_reference(fetch_reference(server, refs["photom"], cache_dir))
+    af, tree = open_reference(local("photom"))
     with af:
         photmjsr = {f: tree["phot_table"][f]["photmjsr"] for f in FILTERS if f in tree["phot_table"]}
 
@@ -360,12 +574,33 @@ def parse_args(argv=None):
     p.add_argument("--cache-dir", default=CACHE_DIR, help="where CRDS references are downloaded once (default: %(default)s)")
     p.add_argument("--ipc-factor", type=float, default=IPC_FACTOR,
                    help="divisor applied to the gain reference's median (default: %(default)s)")
+    p.add_argument("--yes", action="store_true",
+                   help="continue without asking when the data folder is not up to date")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     context = args.context or crds_call(args.crds_server, "get_default_context", ["roman", "operational"])
+
+    # Is the data folder up to date: the effective-area tables against GitHub's,
+    # the CRDS references against the ones recommended for these SCAs and date
+    all_refs = {sca: best_references(sca, args.date, context, args.crds_server) for sca in SCAS}
+    refs = {sca: all_refs[sca] for sca in args.sca}
+    all_names = {n for r in all_refs.values() for n in r.values()}
+    problems = check_effarea(args.effarea_dir, args.sca)
+    ref_problems, unused, sizes = check_references(args.cache_dir, refs, args.crds_server, all_names)
+    problems += ref_problems
+    if unused:
+        print(f"Not used for {context} at {args.date}: {', '.join(unused)}", file=sys.stderr)
+    if problems and not ask_to_continue(problems, args.yes):
+        sys.exit("Stopped: the data folder is not up to date.")
+
+    # Each SCA needs exactly one table: find them all before downloading anything
+    try:
+        tables = {sca: find_effarea_file(args.effarea_dir, sca) for sca in args.sca}
+    except FileNotFoundError as e:
+        sys.exit(f"Stopped: {e}")
 
     header = (
         f"{'SCA':<5} | {'Filter':<6} | {'lam_0 (um)':>10} | {'lam_piv (um)':>12} | "
@@ -375,8 +610,8 @@ def main(argv=None):
     lines = []
     zps = {f: [] for f in FILTERS}
     for sca in args.sca:
-        filepath = find_effarea_file(args.effarea_dir, sca)
-        cal = sca_calibration(sca, args.date, context, args.crds_server, args.cache_dir, args.ipc_factor)
+        filepath = tables[sca]
+        cal =sca_calibration(refs[sca], args.crds_server, args.cache_dir, args.ipc_factor, sizes)
         pix_arcsec = np.sqrt(cal["omega_pix"]) * u.rad.to(u.arcsec)
         lines.append(f"# {sca}: {os.path.basename(filepath)}, "
                      + ", ".join(f"{k} {v}" for k, v in sorted(cal["refs"].items())))
