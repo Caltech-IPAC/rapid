@@ -10,8 +10,10 @@ _build/
 
 .venv/
 
-# scripts/dev.sh: the pulled image's reference, and a work folder kept inside the checkout (RAPID_DEV_WORK)
+# scripts/dev.sh: the pulled image's reference
 .rapid-dev/
+# scripts/dev.sh's work folder is rapid-work/ beside the checkout by default; this is for
+# anyone who sets RAPID_DEV_WORK to work/ inside it instead
 /work/
 
 # a personal dev-container credential file, never committed
