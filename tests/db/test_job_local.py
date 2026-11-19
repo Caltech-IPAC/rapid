@@ -56,11 +56,13 @@ def test_job_local_publishes_and_binds_under_a_live_run(connect, tmp_path, monke
     run = new_run(conn, live=True)
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", tmp_path.as_uri())
     monkeypatch.setattr(cli, "_stage_run", lambda stage: trivial_stage)
-    code = cli.main(["job", "local", "--run", str(run), "--stage", "trivial", "--scope", "{}",
+    # "import" is a placeholder: job local takes only the real stage names, and the import
+    # stage does not run here. The patched _stage_run above runs trivial_stage under that name.
+    code = cli.main(["job", "local", "--run", str(run), "--stage", "import", "--scope", "{}",
                      "--expects", json.dumps([{"product": "exposures", "key": KEY, "binding": None}])])
     result = json.loads(capsys.readouterr().out)
     assert code == 0 and result["published"] and result["group"] is not None
-    assert (tmp_path / str(run) / "trivial" / str(result["job"]) / "1" / "manifest.json").is_file()
+    assert (tmp_path / str(run) / "import" / str(result["job"]) / "1" / "manifest.json").is_file()
     with conn.cursor() as cur:
         cur.execute("SELECT job, run FROM exposures_official WHERE expid = 7")
         assert cur.fetchall() == [(result["job"], run)]
