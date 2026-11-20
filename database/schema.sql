@@ -143,7 +143,11 @@ CREATE TABLE runs (
     settings jsonb NOT NULL,                         -- the full settings body, resolved
     layers jsonb,                                    -- its hash and the layers it was resolved from (rapidpipe.foundation.layers); null on earlier runs
     survey text NOT NULL,
-    dataset text NOT NULL
+    dataset text NOT NULL,
+    stopped timestamp with time zone,                -- when `rapidpipe run stop` closed the run to further jobs; null while it takes them
+    stopped_by text,                                 -- who stopped it
+    stopped_why text,                                -- and why
+    CHECK ((stopped IS NULL) = (stopped_by IS NULL) AND (stopped IS NULL) = (stopped_why IS NULL))
 );
 
 -- A job is one execution of one stage under a run.
