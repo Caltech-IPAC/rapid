@@ -316,6 +316,7 @@ def _epoch(job: JobContext, settings: dict, source: Path, epoch: dict) -> tuple[
         "overlapfields": overlapping_fields(
             *wcs_columns.values(), header["NAXIS1"], header["NAXIS2"], field=field),
         **footprint,
+        "pixel_area_map": None,  # dev's converted files name no pixel area map
     }
 
     copies = {name: _copy(job, difference / name) for name in DIFFERENCE_FILES}

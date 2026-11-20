@@ -92,6 +92,20 @@ F158 = 26.4
 F184 = 25.9
 F213 = 25.4
 
+[pixel_area_map]
+# New, not dev's: CRDS's area reference, one per detector. True (flight's
+# overlay): intake records each file's map by its CRDS name, from the file,
+# else CRDS's best reference, else the store's index. False: none recorded.
+# TODO(crds-area-keyword): flight L2 files carry INCOMPLETE in
+# meta.ref_file.area; if CRDS fills it, crds_server and crds_context are no
+# longer read.
+lookup = false
+# A prefix holding each map under its CRDS name, with index.json
+# (scripts/copy_pixel_area_maps.py); a location, so a run's --set, never here.
+store = ""
+crds_server = "https://roman-crds.stsci.edu"
+crds_context = "roman-operational"
+
 [psf]
 # New, not dev's: the psf stage (rapidpipe.stages.psf) fetches the CRDS ePSF
 # reference an L2 file names from this server, by name, and reduces it to a
