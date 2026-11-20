@@ -909,6 +909,11 @@ photutils_cols_prefilter_only = true
 # set by --set for a run; "" (shipped) reads the bucket from the SSM
 # parameter model_bucket_parameter, as [kafka] names its deployment values,
 # under model_key. The model's version is the prefix's last path component.
+# The parameter is the rebuild's own tree, /rapid/rebuild, which the scratch
+# and production job roles and the Operators' workstations all read; under
+# /rapid/scratch the production job role could not read it (program 1049's
+# first production run, Azalee Bostroem, 2026-11-20). The bucket is named
+# by the deployment, never here (AGENTS.md).
 # New, not dev's: model, where dev names its Keras checkpoint, is the ONNX
 # file exported from that checkpoint (modules/rubrat/training/export_onnx.py),
 # run on onnxruntime in the stage's process; TensorFlow and Keras are not in
@@ -917,7 +922,7 @@ photutils_cols_prefilter_only = true
 # because the inputs bucket is write-once and the rubrat/ prefix's
 # SHA256SUMS could not take the file.
 model_prefix = ""
-model_bucket_parameter = "/rapid/scratch/s3/inputs-bucket"
+model_bucket_parameter = "/rapid/rebuild/s3/inputs-bucket"
 model_key = "rubrat-onnx/2026-10-06_canonical9_seed42"
 model = "best.onnx"
 feats_scaler = "canonical_9.json"

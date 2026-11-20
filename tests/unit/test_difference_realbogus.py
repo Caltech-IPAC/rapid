@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tomllib
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -61,6 +63,23 @@ def test_the_prefix_is_the_parameters_bucket_and_the_key_unless_a_prefix_is_set(
     assert realbogus.model_prefix(RUBRAT, FakeSsm()) == "s3://the-bucket/rubrat/m-1"
     assert realbogus.model_prefix({**RUBRAT, "model_prefix": "file:///m/x/"}, None) == "file:///m/x"
     assert realbogus.version_of("s3://the-bucket/rubrat/m-1/") == "m-1"
+
+
+def test_a_run_with_no_override_reads_the_model_bucket_from_the_rebuild_tree_not_scratch():
+    """The production job role reads ``/rapid/rebuild`` and is withheld ``/rapid/scratch``."""
+    shipped = Path(realbogus.__file__).parents[2] / "settings" / "foundation-thin.toml"
+    rubrat = tomllib.loads(shipped.read_text())["difference"]["rubrat"]
+    asked = []
+
+    class RebuildTreeSsm:
+        def get_parameter(self, Name):
+            asked.append(Name)
+            if not Name.startswith("/rapid/rebuild/"):
+                raise PermissionError(Name)
+            return {"Parameter": {"Value": "inputs"}}
+
+    assert realbogus.model_prefix(rubrat, RebuildTreeSsm()) == f"s3://inputs/{rubrat['model_key']}"
+    assert asked == ["/rapid/rebuild/s3/inputs-bucket"]
 
 
 def _model_dir(tmp_path, sums=None):

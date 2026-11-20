@@ -136,10 +136,21 @@ scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 -
 Prints the first pass's plan as JSON and does nothing: it submits nothing, records nothing and assigns no exposure id. On a fresh run the plan is one `psf` submission and `"new"`, the count of files the selection admits that no intake has taken in (4 here); the intakes are planned the pass after the PSF is published, so a dry run then lists them, and a new exposure under `unassigned`. Read it before spending Batch time; a selection that admits no file is refused, naming the term that admits none.
 
 ```sh
-scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 --job-definition rapid-rebuild
+aws batch describe-job-definitions --job-definition-name rapid-rebuild --status ACTIVE \
+  --query 'sort_by(jobDefinitions, &revision)[-1].[revision, containerProperties.image]' --output text
 ```
 
-Submits the selection one stage forward per pass on Batch and prints one JSON line a pass, every two minutes, until a pass finds it drained: exit 0, or 1 when a job failed, named on stderr (`rapidpipe job show <id>` gives its `refusal`). `rapid-rebuild` without a revision is the newest revision of the scratch job definition, which the release registers for the newest image; `scripts/dev.sh image rev` and the `revision` that `rapidpipe run show N` prints should name the same commit.
+Prints the newest revision of the scratch job definition, called `R` below, and the image it runs, `…/rapid-pipeline@sha256:<digest>`. Name the job definition by that number, `rapid-rebuild:R`: a bare `rapid-rebuild` is whatever revision is newest when Batch reads it, so a release registered while the run goes would change the build under it. `scripts/dev.sh image rev` and the `revision` that `rapidpipe run show N` prints should name the commit of that image.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 --job-definition rapid-rebuild:R
+```
+
+Submits the selection one stage forward per pass on Batch and prints one JSON line a pass, every two minutes, until a pass finds it drained: exit 0, or 1 when a job failed, named on stderr (`rapidpipe job show <id>` gives its `refusal`).
+
+A reference whose frames do not cover enough of its field is one such failure, and an expected one: the reference job is recorded `failed` with exit code 65 and a `refusal` naming the coverage, `estimated coverage <f> < <minimum>` or `measured coverage <f> < <minimum>` (the flight overlay's `[reference.selection] selection_type = "coverage"`), the field's differences wait for a reference, and the loop exits 1. That row is told from a fault by its reason: any other failed job of the run keeps its own exit code and reason, and is a fault to read.
+
+The digest the first command printed is what `promote` takes to put this build into production (`rapid_systems`' `cloudformation/release-hooks/promote <sha256:digest>`), so the build promoted is the build this run tested; promoting by the newest revision or tag at the time can be another build.
 
 ```sh
 scripts/dev.sh run --target deployed -- scripts/check_run.sh --run N
@@ -164,6 +175,8 @@ A trial's live binding is closed once it is checked, so the live list names only
 ### Taking a run's products out of official
 
 `rapidpipe official undo <group> --why Y` applies the inverse of one change group: it closes every binding the group opened and opens again, as new rows, every binding it closed. A run's products became official in many groups, one per published job (the `"group"` each job's result printed, and the `opened_group` of each binding `rapidpipe job show <job>` lists), plus the group that made it live. To retract a run, undo those groups, the newest first; a group whose binding has since moved (a later run superseded it) is refused, naming that binding and the change group that closed it, which is undone first if the later run's binding is to go too; otherwise the later run's binding stands.
+
+A retracted run's dataset does not take its files in again. The loop plans an intake for a listed file only when no intake job of the dataset is published for it (in any run) and no intake job of this run exists; bindings do not enter that rule, so closing or undoing every binding of a dataset leaves its files taken in. To process the same files again today, create a run under a new dataset name.
 
 What it leaves in place: every row the run's jobs wrote (the `*_official` views stop showing the retracted ones, since they read through the open bindings), every file under the outputs root, the jobs and their attempts, and the closed bindings themselves, with who closed them, when and why. Work of other runs built on them stays as it is: a reference another run reused, an object a later difference joined. A packet already sent is not recalled: the packets are on the Kafka topic for its retention and consumers may have read them. `official undo` of the undo puts the products back.
 
