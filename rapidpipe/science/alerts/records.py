@@ -86,6 +86,12 @@ class Source:
     apflux: float | None = None
     apfluxerr: float | None = None
     exptime: float | None = None
+    # the nJy calibration (new, not dev's; rapid_docs decision-fluxes-in-njy): the image's AB
+    # zero point and its pixel area map's CRDS name, read from its l2files row, and the map's
+    # value at (xfit, yfit), set when the fluxes are calibrated; None where there is none
+    zptmag: float | None = None
+    pixel_area_map: str | None = None
+    pixel_area_factor: float | None = None
     # Roman observation identifiers, from the exposures row (migration
     # 20261015; null for exposures ingested before it). `pass` is a Python
     # keyword, hence obs_pass; the wire name is still "pass".
@@ -112,9 +118,9 @@ class Source:
     rb_version: str | None = None
 
     # fields filled after construction (association, assembly stamping,
-    # KONA); never storage columns
+    # KONA, the nJy calibration); never storage columns
     FILLED_LATER = frozenset({"aid", "time_proc", "is_ss_candidate",
-                              "rb_threshold", "rb_version"})
+                              "rb_threshold", "rb_version", "pixel_area_factor"})
 
     @property
     def snr(self) -> float | None:
@@ -237,8 +243,10 @@ class ForcedPhot:
 
     Filled by AlertDataProvider from the per-chip forced-photometry run
     (alerts.forced_phot), cached per chip as a table and expanded per
-    object. Fluxes are instrumental (image units), like diaSource.psfFlux;
-    the nJy calibration is pending for both. ``flags`` ORs the difference-
+    object. Fluxes are in nJy, like diaSource.psfFlux, calibrated by the
+    measured image's zero point and pixel area map when the record is made
+    (rapid_docs decision-fluxes-in-njy); the ``forced`` table keeps them
+    instrumental. ``flags`` ORs the difference-
     and science-image fit flags (photutils bits plus forced_phot.FLAG_*).
     """
     forced_id: int
@@ -259,6 +267,10 @@ class ForcedPhot:
     # stage passes it from the window image's l2files row. TODO (Emily, 2026-11-16): the forced
     # row should store it, so a record read back from the table carries its own.
     exptime: float | None = None
+    # the measured image's AB zero point and its pixel area map's value at the measurement's
+    # position, with which the fluxes above were calibrated; None where there is none
+    zptmag: float | None = None
+    pixel_area_factor: float | None = None
 
 
 @dataclass

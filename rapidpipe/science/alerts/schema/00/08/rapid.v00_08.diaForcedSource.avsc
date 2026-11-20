@@ -81,6 +81,24 @@
             "doc": "Uncertainty in scienceFlux (stub) [nJy]"
         },
         {
+            "name": "zeroPoint",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "AB zero point of the image the fluxes were measured on: the magnitude of 1 DN/s [mag]"
+        },
+        {
+            "name": "pixelAreaFactor",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Pixel area map value at the measured position, a factor in the fluxes; null when the image has no map"
+        },
+        {
             "name": "midpointMjd",
             "type": "double",
             "doc": "Effective mid-observation time: the exposure start plus half the exposure time (UTC scale) [MJD]"

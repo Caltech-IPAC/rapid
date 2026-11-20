@@ -13,8 +13,11 @@ set (a ``packets_official`` job; ``--job`` narrows to some), it checks:
   edge fill, 0.0 (the stage's ``STAMP_FILL_VALUE``); the chip is the trigger
   difference image's shape, read from its header;
 - forced: every ``prvDiaForcedSources`` entry equals the ``forced_official``
-  row of the same set with its ``diaForcedSourceId`` (fluxes compared at
-  the record's float32 precision; a null flux is a null);
+  row of the same set with its ``diaForcedSourceId`` (the row's fluxes are
+  instrumental and the record's in nJy: each is calibrated by the record's
+  ``zeroPoint`` and ``pixelAreaFactor`` and compared at the record's float32
+  precision, a null flux is a null, and ``zeroPoint`` is the measured
+  image's ``l2files.zptmag``);
 - history: every ``prvDiaSources`` entry's ``midpointMjd`` precedes the
   index row's ``trigger_mjd``;
 - index: every ``packets_official`` row's ``(filename, byte_offset,
@@ -51,6 +54,7 @@ from astropy.io import fits
 
 from rapidpipe.db.connection import connect
 from rapidpipe.foundation.prefix import get
+from rapidpipe.science.alerts import calibration
 from rapidpipe.science.alerts.assemble import load_schema
 from rapidpipe.science.alerts.cutouts import STAMP_FILL_VALUE
 
@@ -83,6 +87,29 @@ def _same(a, b) -> bool:
 
 def _float32(value):
     return None if value is None else float(np.float32(value))
+
+
+def forced_flux_differences(entry: dict, stored: dict, zptmag: float | None) -> list[str]:
+    """The flux fields of a packet's forced record that are not its stored row's, calibrated.
+
+    The ``forced`` table keeps instrumental fluxes and the packet carries
+    nJy, so each stored flux is calibrated by the record's own ``zeroPoint``
+    and ``pixelAreaFactor`` with the stage's arithmetic
+    (``rapidpipe.science.alerts.calibration``) and compared at the record's
+    float32 precision. ``zeroPoint`` is named when it is not ``zptmag``, the
+    measured image's ``l2files`` value.
+    """
+    differ = [] if _same(entry["zeroPoint"], _float32(zptmag)) else ["zeroPoint"]
+    scale = calibration.njy_per_dn_s(entry["zeroPoint"])
+    for field, column in FORCED_FLOAT32.items():
+        expected = calibration.calibrate(stored[column], scale, entry["pixelAreaFactor"])
+        if expected is None or entry[field] is None:
+            same = expected is None and entry[field] is None
+        else:
+            same = math.isclose(entry[field], expected, rel_tol=1.0e-5, abs_tol=1.0e-30)
+        if not same:
+            differ.append(field)
+    return differ
 
 
 def check_cutout(blob: bytes | None, size: int, col: int, row: int,
@@ -123,8 +150,10 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
               " EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
               " AND o.product = 'packets' AND o.job = f.job)", (job,))}
     rids = sorted({r["rid"] for r in forced.values()})
-    exptime = {r["rid"]: r["exptime"] for r in _query(
-        conn, "SELECT rid, exptime FROM l2files WHERE rid = ANY(%s)", (rids,))} if rids else {}
+    l2 = {r["rid"]: r for r in _query(
+        conn, "SELECT rid, exptime, zptmag FROM l2files WHERE rid = ANY(%s)", (rids,))} if rids else {}
+    exptime = {rid: r["exptime"] for rid, r in l2.items()}
+    zptmag = {rid: r["zptmag"] for rid, r in l2.items()}
     inputs = {(r["product"], r["source_job"]) for r in _query(
         conn, "SELECT product, source_job FROM job_inputs WHERE job = %s AND kind = 'input'",
         (job,))}
@@ -223,8 +252,7 @@ def read_set(conn, job: int) -> tuple[dict, list[str]]:
             expected_mid = stored["mjdobs"] + (exptime.get(stored["rid"]) or 0.0) / 2.0 / 86400.0
             if abs(entry["midpointMjd"] - expected_mid) > 1.0e-8:   # a millisecond
                 differ.append("midpointMjd")
-            differ += [field for field, column in FORCED_FLOAT32.items()
-                       if not _same(entry[field], _float32(stored[column]))]
+            differ += forced_flux_differences(entry, stored, zptmag.get(stored["rid"]))
             if differ:
                 failures.append(f"{where}: forced {entry['diaForcedSourceId']} differs in"
                                 f" {', '.join(differ)}")

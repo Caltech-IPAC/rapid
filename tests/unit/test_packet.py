@@ -128,21 +128,31 @@ def corners() -> tuple[float, ...]:
     return tuple(v for pair in zip(ra, dec) for v in pair)
 
 
-def source(epoch: int, sid: int, x: float, y: float, aid: int) -> Source:
+#: The zero point at which 1 DN/s is 1 nJy: the fixtures' default, so their fluxes read the same in both.
+NJY_ZPTMAG = 31.4
+
+
+def source(epoch: int, sid: int, x: float, y: float, aid: int, zptmag: float | None = NJY_ZPTMAG,
+           area_map: str | None = None) -> Source:
     ra, dec = wcs().all_pix2world([x], [y], 1)
     return Source(sid=sid, aid=aid, expid=epoch, sca=8, mjdobs=MJD[epoch], ra=float(ra[0]),
                   dec=float(dec[0]), xfit=x - 1, yfit=y - 1, band="W146", xerr=0.1, yerr=0.1,
-                  fluxfit=500.0, fluxerr=10.0, flags=0, field=1, pid=100 + epoch, exptime=60.0)
+                  fluxfit=500.0, fluxerr=10.0, flags=0, field=1, pid=100 + epoch, exptime=60.0,
+                  zptmag=zptmag, pixel_area_map=area_map)
 
 
 def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: str | None = None,
-          broken_catalog: str | None = None):
+          broken_catalog: str | None = None, zptmags: dict | None = None, area_maps: dict | None = None,
+          load_map=None):
     """Two objects: A with members in epochs 1, 2 and 3; B (near the edge) only in epoch 2.
 
     The packet set is epoch 2's; epoch 3's detection of A is after the trigger.
+    ``zptmags`` and ``area_maps`` give an epoch's image its zero point (else 31.4, at which 1 DN/s
+    is 1 nJy) and its pixel area map's name (else none); ``load_map`` loads a map by name.
     ``unreadable`` names a file under the job directories (``e1/...``) overwritten with bytes
     that are not FITS. ``broken_catalog`` names a catalog whose copy could not be opened.
     """
+    zptmags, area_maps = zptmags or {}, area_maps or {}
     write_epoch(tmp_path / "e1", [(50, 50, 400.0)], gzipped)
     write_epoch(tmp_path / "e2", [(50, 50, 500.0), (20, 80, 300.0)], gzipped)
     if unreadable:
@@ -162,9 +172,11 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
                           diff_uncert=beside(e, "zogy_diffimage_uncert_masked.fits"),
                           sci=beside(e, "bkg_subbed_science_image.fits"),
                           sci_psf=sci_psf, l2=(tmp_path / "l2" / f"e{e}.fits").as_uri(),
-                          exptime=60.0) for e in (1, 2)]
-    a1, a2, a3 = (source(e, 1, 50, 50, aid=7) for e in (1, 2, 3))
-    b2 = source(2, 2, 20, 80, aid=9)
+                          exptime=60.0, zptmag=zptmags.get(e, NJY_ZPTMAG),
+                          pixel_area_map=area_maps.get(e)) for e in (1, 2)]
+    a1, a2, a3 = (source(e, 1, 50, 50, aid=7, zptmag=zptmags.get(e, NJY_ZPTMAG), area_map=area_maps.get(e))
+                  for e in (1, 2, 3))
+    b2 = source(2, 2, 20, 80, aid=9, zptmag=zptmags.get(2, NJY_ZPTMAG), area_map=area_maps.get(2))
     sums_a, sums_b = Sums(a1.ra, a1.dec), Sums(b2.ra, b2.dec)
     for member in (a1, a2):
         sums_a.add(member.ra, member.dec, member.fluxfit)
@@ -219,7 +231,8 @@ def build(tmp_path, reuse_first_epoch: bool, gzipped: bool = False, unreadable: 
                 catalogs=catalogs, refcat_path=None, coverage={7: 2, 9: 1})
     out = tmp_path / "out"
     out.mkdir()
-    summary = write_set(read, SETTINGS, out, out.as_uri() + "/", "D", sync_seed="test")
+    summary = write_set(read, SETTINGS, out, out.as_uri() + "/", "D", sync_seed="test",
+                        **({"load_map": load_map} if load_map else {}))
     with (out / summary["avro"]).open("rb") as stream:
         records = list(fastavro.reader(stream))
     return out, summary, {r["diaSourceId"]: r for r in records}
@@ -532,3 +545,119 @@ def test_the_alert_catalog_reads_the_xsources_tables():
     assert "FROM xmemberships_of(" in x.sql(TRIGGER_SQL) and "xsid AS sid" in x.sql(TRIGGER_SQL)
     assert "(NULL::xobjects," in x.sql(ORIGINS_SQL)
     assert "(NULL::xmemberships," in x.sql(MEMBERSHIPS_SQL)
+
+
+# The nJy calibration: each flux by its own image's zero point and pixel area map.
+
+#: A tilted plane over the image, steeper along x than y: map[y, x] = 1 + 1e-3 x + 1e-5 y.
+PLANE = 1.0 + 1e-3 * np.arange(N)[None, :] + 1e-5 * np.arange(N)[:, None]
+#: Its value where A (pixel 50, 50) and B (pixel 20, 80) sit, the pixels 1-based as the fixture places them.
+AT_A, AT_B = 1.0 + 1e-3 * 49 + 1e-5 * 49, 1.0 + 1e-3 * 19 + 1e-5 * 79
+
+
+def test_each_flux_is_calibrated_by_its_own_images_zero_point_and_area_map(tmp_path):
+    maps, loaded = {"one.asdf": PLANE, "two.asdf": PLANE + 0.5}, []
+
+    def load(name):
+        loaded.append(name)
+        return maps[name]
+
+    # epoch 1 at zero point 28.9 (10 nJy per DN/s) on map one; epoch 2, the trigger's, at 26.4 (100) on map two
+    out, summary, records = build(tmp_path, reuse_first_epoch=True, zptmags={1: 28.9, 2: 26.4},
+                                  area_maps={1: "one.asdf", 2: "two.asdf"}, load_map=load)
+    assert loaded == ["one.asdf", "two.asdf"]                    # each distinct map once
+    close = lambda value: pytest.approx(value, rel=1e-5)         # noqa: E731 - Avro floats are 32-bit
+    a, b = records[1], records[2]
+    trigger = a["diaSource"]
+    assert (trigger["zeroPoint"], trigger["pixelAreaFactor"]) == (close(26.4), close(AT_A + 0.5))
+    assert trigger["psfFlux"] == close(500.0 * 100.0 * (AT_A + 0.5))
+    assert trigger["psfFluxErr"] == close(10.0 * 100.0 * (AT_A + 0.5)) and trigger["snr"] == close(50.0)
+    assert b["diaSource"]["pixelAreaFactor"] == close(AT_B + 0.5)    # x along the map's second axis
+    # the previous detection, epoch 1's, by epoch 1's zero point and map
+    (previous,) = a["prvDiaSources"]
+    assert (previous["zeroPoint"], previous["pixelAreaFactor"]) == (close(28.9), close(AT_A))
+    assert previous["psfFlux"] == close(500.0 * 10.0 * AT_A)
+    # the object's statistics are of the calibrated fluxes
+    obj = a["diaObject"]
+    assert obj["F146PsfFluxNdata"] == 2
+    assert obj["F146PsfFluxMean"] == close((500.0 * 10.0 * AT_A + 500.0 * 100.0 * (AT_A + 0.5)) / 2)
+    # forced photometry: epoch 1's row is reused (12345 and 54321 DN/s at pixel 50, 50, 1-based)
+    reused, measured = a["prvDiaForcedSources"]
+    assert (reused["zeroPoint"], reused["pixelAreaFactor"]) == (close(28.9), close(AT_A))
+    assert reused["psfFlux"] == close(12345.0 * 10.0 * AT_A)
+    assert reused["scienceFlux"] == close(54321.0 * 10.0 * AT_A)
+    assert measured["zeroPoint"] == close(26.4)
+    assert measured["pixelAreaFactor"] == pytest.approx(AT_A + 0.5, abs=2e-4)   # at its fitted position
+    # the forced table keeps the instrumental fluxes
+    rows = {r["rid"]: r for r in pq.read_table(out / "forced.parquet").to_pylist() if r["aid"] == 7}
+    assert (rows[201]["psf_flux"], rows[201]["science_flux"]) == (12345.0, 54321.0)
+    calibration = summary["calibration"]
+    assert calibration["maps"] == ["one.asdf", "two.asdf"] and calibration["sources"] == 4
+    assert calibration["sources_without_zero_point"] == 0
+    assert calibration["sources_without_area_factor"] == 1       # epoch 3's detection of A names no map
+    assert calibration["forced_without_area_factor"] == 0 and "calibration_s" in summary["timing_s"]
+
+
+def test_an_image_without_a_zero_point_gives_null_fluxes_and_the_others_keep_theirs(tmp_path):
+    out, summary, records = build(tmp_path, reuse_first_epoch=False, zptmags={2: None})
+    for record in records.values():
+        assert fastavro.validation.validate(record, load_schema(), raise_errors=True)
+        trigger = record["diaSource"]
+        assert trigger["psfFlux"] is None and trigger["psfFluxErr"] is None and trigger["zeroPoint"] is None
+    (previous,) = records[1]["prvDiaSources"]
+    assert previous["psfFlux"] == 500.0 and previous["zeroPoint"] == pytest.approx(NJY_ZPTMAG)
+    assert summary["calibration"]["sources_without_zero_point"] == 2       # the two triggers
+
+
+def test_a_map_that_cannot_be_loaded_leaves_the_zero_point_alone_and_a_null_factor(tmp_path):
+    out, summary, records = build(tmp_path, reuse_first_epoch=False, area_maps={2: "gone.asdf"},
+                                  load_map=lambda name: None)
+    trigger = records[1]["diaSource"]
+    assert trigger["psfFlux"] == 500.0 and trigger["pixelAreaFactor"] is None
+    assert summary["calibration"]["maps"] == ["gone.asdf"]
+    assert summary["calibration"]["sources_without_area_factor"] == 4
+
+
+def _area_map_file(path) -> bytes:
+    import asdf
+
+    asdf.AsdfFile({"roman": {"meta": {"reftype": "AREA"}, "data": PLANE.astype(np.float32)}}).write_to(path)
+    return path.read_bytes()
+
+
+def test_the_loader_reads_a_map_from_the_store(tmp_path):
+    from rapidpipe.stages import packet
+
+    (tmp_path / "store").mkdir()
+    _area_map_file(tmp_path / "store" / "one.asdf")
+    load = packet.area_map_loader({"pixel_area_map": {"store": (tmp_path / "store").as_uri(), "crds_server": ""}})
+    assert load("one.asdf")[49, 19] == pytest.approx(PLANE[49, 19], rel=1e-6)
+
+
+def test_the_loader_fetches_a_map_the_store_lacks_from_crds_by_name(tmp_path, monkeypatch, caplog):
+    from rapidpipe.stages import packet
+
+    served, asked = _area_map_file(tmp_path / "served.asdf"), []
+
+    def urlopen(url, timeout):
+        asked.append(url)
+        return io.BytesIO(served)
+
+    monkeypatch.setattr(packet.urllib.request, "urlopen", urlopen)
+    (tmp_path / "store").mkdir()
+    load = packet.area_map_loader({"pixel_area_map": {"store": (tmp_path / "store").as_uri(),
+                                                      "crds_server": "https://crds.invalid"}})
+    with caplog.at_level("WARNING"):
+        assert load("one.asdf").shape == (N, N)
+    assert asked == ["https://crds.invalid/unchecked_get/references/roman/one.asdf"]
+    assert "not read from the store" in caplog.text
+
+
+@pytest.mark.parametrize("settings", [{}, {"pixel_area_map": {"store": "", "crds_server": ""}},
+                                      {"pixel_area_map": {"lookup": True}}])
+def test_the_loader_gives_none_with_a_warning_when_no_source_has_the_map(settings, caplog):
+    from rapidpipe.stages import packet
+
+    with caplog.at_level("WARNING"):
+        assert packet.area_map_loader(settings)("one.asdf") is None
+    assert "calibrated by their zero points alone" in caplog.text

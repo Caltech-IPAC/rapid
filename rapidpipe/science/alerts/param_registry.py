@@ -244,18 +244,26 @@ DIA_SOURCE_PARAMS = (
     Param("band",          ["null", "string"], "Filter band name (F062, F087, F106, F129, F146, F158, F184, F213)",
                     IMPLEMENTED, "filters.filter"),
     Param("psfFlux",       ["null", "float"],  "Flux from PSF-fit on difference image [nJy]",
-                    IMPLEMENTED, "sources.fluxfit (instrumental; nJy calibration pending)", attr="fluxfit"),
+                    IMPLEMENTED, "sources.fluxfit, in nJy by zeroPoint and pixelAreaFactor", attr="fluxfit"),
     Param("psfFluxErr",    ["null", "float"],  "Uncertainty in psfFlux [nJy]",
-                    IMPLEMENTED, "sources.fluxerr", attr="fluxerr"),
+                    IMPLEMENTED, "sources.fluxerr, calibrated as psfFlux", attr="fluxerr"),
     Param("snr",           ["null", "float"],  "Signal-to-noise ratio (psfFlux / psfFluxErr)",
                     IMPLEMENTED, "computed: fluxfit / fluxerr"),
     Param("isNegative",    "boolean",          "true if source is from negative (ref minus sci) subtraction",
                     IMPLEMENTED, "sources.isdiffpos (inverted; renamed per schema spreadsheet)",
                     getter=lambda d: not d.isdiffpos),
     Param("apFlux",        ["null", "float"],  "Aperture flux on difference image (stub) [nJy]",
-                    IMPLEMENTED, "xsources.fluxap1 (FLUX_APER_1, 3 px; null for a source)", attr="apflux"),
+                    IMPLEMENTED, "xsources.fluxap1 (FLUX_APER_1, 3 px; null for a source), calibrated as "
+                                 "psfFlux; no aperture correction", attr="apflux"),
     Param("apFluxErr",     ["null", "float"],  "Uncertainty in apFlux (stub) [nJy]",
-                    IMPLEMENTED, "xsources.fluxerrap1 (FLUXERR_APER_1)", attr="apfluxerr"),
+                    IMPLEMENTED, "xsources.fluxerrap1 (FLUXERR_APER_1), calibrated as psfFlux", attr="apfluxerr"),
+    Param("zeroPoint",     ["null", "float"],  "AB zero point of the image the fluxes were measured on: "
+                                               "the magnitude of 1 DN/s [mag]",
+                    IMPLEMENTED, "l2files.zptmag of the difference image's L2 file", attr="zptmag"),
+    Param("pixelAreaFactor", ["null", "float"], "Pixel area map value at the source position, a factor in "
+                                                "the fluxes; null when the image has no map",
+                    IMPLEMENTED, "the L2 file's CRDS area reference (l2files.pixel_area_map), interpolated "
+                                 "at (xfit, yfit)", attr="pixel_area_factor"),
     # --- Forced Photometry ---------------------------------------------------- #TODO
     Param("scienceFlux",   ["null", "float"],  "Forced PSF flux on science image (stub) [nJy]", #TODO: why is this not in diaForcedSource???
                     STUB, _FP),
@@ -454,18 +462,25 @@ DIA_FORCED_SOURCE_PARAMS = (
     Param("band",              ["null", "string"], "Filter band name",
                         IMPLEMENTED, "filters.filter of the measured epoch"),
     Param("psfFlux",           ["null", "float"], "Forced PSF flux on difference image [nJy]",
-                        IMPLEMENTED, "forced_phot.psfphot on the difference image (instrumental; nJy calibration pending)",
-                        attr="flux"),
+                        IMPLEMENTED, "forced_phot.psfphot on the difference image, in nJy by zeroPoint and "
+                                     "pixelAreaFactor", attr="flux"),
     Param("psfFluxErr",        ["null", "float"], "Uncertainty in psfFlux [nJy]",
-                        IMPLEMENTED, "forced_phot.psfphot (instrumental; nJy calibration pending)", attr="fluxerr"),
+                        IMPLEMENTED, "forced_phot.psfphot, calibrated as psfFlux", attr="fluxerr"),
     # TODO: drop "(stub)" from the two doc strings below at the next schema
     # version bump; the wording is baked into the checked-in .avsc files.
     Param("scienceFlux",       ["null", "float"], "Forced PSF flux on science image (stub) [nJy]",
-                        IMPLEMENTED, "forced_phot.psfphot on the background-subtracted science image "
-                                     "(instrumental; nJy calibration pending)", attr="science_flux"),
+                        IMPLEMENTED, "forced_phot.psfphot on the background-subtracted science image, "
+                                     "calibrated as psfFlux", attr="science_flux"),
     Param("scienceFluxErr",    ["null", "float"], "Uncertainty in scienceFlux (stub) [nJy]",
-                        IMPLEMENTED, "forced_phot.psfphot (instrumental; nJy calibration pending)",
+                        IMPLEMENTED, "forced_phot.psfphot, calibrated as psfFlux",
                         attr="science_fluxerr"),
+    Param("zeroPoint",         ["null", "float"], "AB zero point of the image the fluxes were measured on: "
+                                                  "the magnitude of 1 DN/s [mag]",
+                        IMPLEMENTED, "l2files.zptmag of the measured image's L2 file", attr="zptmag"),
+    Param("pixelAreaFactor",   ["null", "float"], "Pixel area map value at the measured position, a factor in "
+                                                  "the fluxes; null when the image has no map",
+                        IMPLEMENTED, "the L2 file's CRDS area reference (l2files.pixel_area_map), interpolated "
+                                     "at the forced position", attr="pixel_area_factor"),
     # TODO (2026-09-29): decide where the forced-position reference flux lives.
     # Not here for now. It is one number per object per band (per reference
     # version), so the natural home is the diaObject record; the case for
@@ -506,12 +521,11 @@ def _per_filter_flux_params():
         One param per (Roman filter, flux statistic) pair, read from the
         statistics the packet stage computes over the object's detections up
         to the trigger (``lightcurve.flux_statistics``); null for a filter
-        the object has no detection in. The fluxes are the catalog's, as
-        diaSource.psfFlux: the nJy calibration is pending for both.
+        the object has no detection in. The fluxes are the detections'
+        diaSource.psfFlux, in nJy, each calibrated by its own image.
     """
     src = ("computed at assembly over the object's detections up to the trigger "
-           "(rapidpipe.science.statistics.lightcurve.flux_statistics; instrumental, "
-           "nJy calibration pending, see roman_rapid_alerts FILTER_ZP_EFF)")
+           "(rapidpipe.science.statistics.lightcurve.flux_statistics), from their psfFlux in nJy")
     params = []
     for b in ROMAN_FILTERS:
         params += [

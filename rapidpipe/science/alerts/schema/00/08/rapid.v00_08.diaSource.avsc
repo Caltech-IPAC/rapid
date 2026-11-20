@@ -164,6 +164,24 @@
             "doc": "Uncertainty in apFlux (stub) [nJy]"
         },
         {
+            "name": "zeroPoint",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "AB zero point of the image the fluxes were measured on: the magnitude of 1 DN/s [mag]"
+        },
+        {
+            "name": "pixelAreaFactor",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Pixel area map value at the source position, a factor in the fluxes; null when the image has no map"
+        },
+        {
             "name": "scienceFlux",
             "type": [
                 "null",
