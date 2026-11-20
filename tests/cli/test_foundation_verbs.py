@@ -225,6 +225,57 @@ def test_loop_dry_run_plans_a_pass_from_the_database_and_records_nothing(capsys,
         assert cur.fetchone()[0] == 0
 
 
+def test_a_dry_run_over_an_exposure_never_seen_assigns_no_id_records_no_job_and_prints_its_plan(
+        capsys, conn, monkeypatch, tmp_path):
+    """The dry run's contract with the serial id: the pass would assign the exposure its id before it
+    plans; the dry run assigns none, records nothing, asks Batch nothing, and still prints the intake
+    the pass would submit, its ``expid`` null and the exposure named under ``unassigned``; an
+    exposure the dataset already holds is planned with its id."""
+    from rapidpipe.cli import main as cli
+    from rapidpipe.foundation import change, create_job, loop, publish
+    from tests.db.foundation_helpers import write_attempt
+    from tests.unit.test_loop import Pages, stem
+
+    settings = tmp_path / "settings.toml"
+    settings.write_text('[intake]\nsource_root = "s3://bucket/l2/"\n[reference.selection]\nmin_frames = 2\n'
+                        '[packet]\ngaia_match = false\n')
+    code, out, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123",
+                          "--settings", str(settings), "--survey", SURVEY, "--dataset", DATASET)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    run = int(out.strip())
+    change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}], "tester", "live")
+    psf_key = {"dataset": DATASET, "fid": 8, "sca": 8, "kind": "science"}      # F146 (the table's W146), SCA 8
+    psf = create_job(conn, run, "import", {}, expects=[{"product": "psfs", "key": psf_key, "binding": None}])
+    publish(conn, psf, 1, write_attempt(tmp_path / "psf", {"psfs": [{
+        **psf_key, "filename": "psf.fits", "checksum": "0" * 32, "status": 1}]}))
+    seen, unseen = stem(1, 1, 1), stem(2, 1, 1)
+    held = loop.exposure_ids(conn, DATASET, [loop.stem_ids(seen)["name"]])
+
+    def state():
+        with conn.cursor() as cur:
+            cur.execute("SELECT (SELECT count(*) FROM exposure_ids WHERE dataset = %s),"
+                        " (SELECT count(*) FROM jobs WHERE run = %s),"
+                        " (SELECT last_value FROM exposure_ids_expid_seq)", (DATASET, run))
+            found = cur.fetchone()
+        conn.commit()
+        return found
+
+    before = state()
+    monkeypatch.setattr(cli.storage, "s3_client",
+                        lambda unsigned=False: Pages([seen + "_cal.asdf", unseen + "_cal.asdf"]))
+    monkeypatch.setattr(cli.launch, "batch_client", lambda: pytest.fail("Batch asked"))
+    code, out, err = _run(capsys, "loop", "--run", str(run), "--dry-run")
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    assert state() == before                       # no id handed out, none consumed, no job recorded
+    plan = json.loads(out)
+    intakes = {s["scope"]["file"]: s for s in plan["submissions"]}
+    assert set(intakes) == {seen, unseen} and all(s["stage"] == "intake" for s in intakes.values())
+    assert intakes[seen]["scope"]["expid"] == held[loop.stem_ids(seen)["name"]]
+    assert intakes[unseen]["scope"] == {"dataset": DATASET, "file": unseen, "expid": None}
+    assert [e["product"] for e in intakes[unseen]["expects"]] == ["exposures", "l2files"]
+    assert plan["unassigned"] == [loop.stem_ids(unseen)["name"]]
+
+
 def test_job_submit_refuses_without_a_queue_naming_the_recorded_job(capsys, conn, monkeypatch):
     from rapidpipe.cli import main as cli
 
