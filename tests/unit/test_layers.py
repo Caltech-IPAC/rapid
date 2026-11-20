@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from rapidpipe.foundation.layers import LayerError, body_hash, parse_set, resolve
+from rapidpipe.foundation.layers import LayerError, body_hash, parse_set, resolve, to_toml
 
 SETTINGS = Path(__file__).resolve().parents[2] / "rapidpipe" / "settings"
 SHIPPED = SETTINGS / "foundation-thin.toml"
@@ -226,3 +226,23 @@ def test_flight_scales_reference_inputs_by_the_on_orbit_nominal_zptmag_and_the_b
         "F146": 27.01, "F158": 25.80, "F184": 25.34, "F213": 25.29}
     for body in (base, flight):
         assert set(body["intake"]["nominal_zptmag"]) == set(ROMAN_TO_RAPID_FILTER_NAMES)
+
+
+@pytest.mark.parametrize("overlay", [None, *sorted((SETTINGS / "datasets").glob("*.toml"))],
+                         ids=lambda p: p.name if p else "base")
+def test_a_stored_body_written_as_toml_resolves_to_the_same_body_and_hash(tmp_path, overlay):
+    """``run show --toml``'s contract: the file is a base ``run create --settings`` reads to the stored body."""
+    body, record = resolve(SHIPPED, overlay, ['intake.source_root="s3://bucket/l2/"',
+                                              "reference.selection.before_mjd=61591.0"])
+    stored = json.loads(json.dumps(body))                 # as the database returns it
+    again, written = resolve(_toml(tmp_path, "run.toml", to_toml(stored)))
+    assert again == body and written["settings_hash"] == record["settings_hash"]
+
+
+def test_toml_holds_every_value_a_body_can_and_refuses_a_null_naming_its_key():
+    body = {"plain": {"text": 'a "quoted"\\ line\nand a tab\t, ünïcode', "whole": 61591.0, "small": 1e-05,
+                      "count": -3, "on": True, "nested": [[1, 2], [3.5]], "rows": [{"a": 1}, {"b": "x"}],
+                      "empty": [], "a key.with dots": 1, "deep": {"er": {}}}}
+    assert tomllib.loads(to_toml(body)) == body
+    with pytest.raises(LayerError, match="plain.missing"):
+        to_toml({"plain": {"missing": None}})
