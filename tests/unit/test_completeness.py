@@ -241,3 +241,9 @@ def test_a_packed_id_that_names_two_exposures_of_the_dataset_is_refused_naming_b
     with pytest.raises(ValueError, match="r0104301001001001001_0001, r0104302001001001001_0001"):
         completeness.legacy_ids(plans, {1010101, 4040101})
     assert completeness.legacy_ids(plans, {7070707}) == {}                  # no exposure packs to it
+
+
+def test_a_packed_id_two_names_pack_to_names_the_exposure_stored_under_that_very_id():
+    """An exposure stored before the serial kept its packed id; a later name packing alike got a new one."""
+    plans = {"r0104301001001001001_0001": 1010101, "r0104302001001001001_0001": 7000003}
+    assert completeness.legacy_ids(plans, {1010101}) == {1010101: 1010101}

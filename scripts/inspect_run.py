@@ -172,7 +172,8 @@ def gallery(cur, run: int, job: int, out: Path) -> Path:
     from rapidpipe.foundation.prefix import get
 
     cur.execute("SELECT d.filename, j.manifest -> 'difference' -> 'residual_stars', d.expid, x.name"
-                " FROM diffimages d JOIN jobs j ON j.id = d.job LEFT JOIN exposure_ids x ON x.expid = d.expid"
+                " FROM diffimages d JOIN jobs j ON j.id = d.job LEFT JOIN exposure_ids x"
+                " ON x.dataset = d.dataset AND x.expid = d.expid"
                 " WHERE d.job = %s", (job,))
     url, stars, expid, name = cur.fetchone()
     base = url.rsplit("/", 1)[0] + "/"

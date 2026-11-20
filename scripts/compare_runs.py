@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         for run in (a.run_a, a.run_b):
             with conn.cursor() as cur:
                 cur.execute("SELECT x.name, d.sca, d.job, d.expid FROM diffimages_official d"
-                            " JOIN exposure_ids x ON x.expid = d.expid WHERE d.run = %s", (run,))
+                            " JOIN exposure_ids x ON x.dataset = d.dataset AND x.expid = d.expid WHERE d.run = %s", (run,))
                 jobs[run], ids[run] = by_name(cur.fetchall())
                 cur.execute(inspect_run.QUERY, (run,))
                 names = [d[0] for d in cur.description]

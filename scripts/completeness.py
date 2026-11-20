@@ -109,8 +109,10 @@ def legacy_ids(names: dict[str, int], packed: set[int]) -> dict[int, int]:
     every SOC exposure name of the dataset (``names``, name to id), kept only to read such a truth.
 
     A packed id that two of the dataset's exposures pack to (two execution plans, two programs) names
-    neither: ``ValueError``, naming both, and nothing is mapped by guess. One that no exposure packs to
-    is absent, and its truth rows are unprocessed.
+    the one stored under that very id, an exposure the dataset took in before the serial, which kept its
+    packed id (``database/2026-11-20-exposure-ids.sql``): the one the truth read before. When none or
+    more than one is, it names neither: ``ValueError``, naming them, and nothing is mapped by guess. One
+    that no exposure packs to is absent, and its truth rows are unprocessed.
     """
     by: dict[int, list[str]] = defaultdict(list)
     for name in names:
@@ -118,6 +120,9 @@ def legacy_ids(names: dict[str, int], packed: set[int]) -> dict[int, int]:
             by[int(m["pass"]) * 10**6 + int(m["observation"]) * 10**4 + int(m["visit"]) * 10**2
                + int(m["exposure"])].append(name)
     for packed_id in sorted(packed):
+        kept = [n for n in by.get(packed_id, ()) if names[n] == packed_id]
+        if len(by.get(packed_id, ())) > 1 and len(kept) == 1:
+            by[packed_id] = kept
         if len(by.get(packed_id, ())) > 1:
             raise ValueError(f"packed expid {packed_id} of the truth names {len(by[packed_id])} exposures of the"
                              f" dataset, {', '.join(sorted(by[packed_id]))}: a truth written with packed ids"
