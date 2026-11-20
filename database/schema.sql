@@ -269,6 +269,7 @@ CREATE TABLE l2files (
     ra4 double precision NOT NULL,
     dec4 double precision NOT NULL,
     created timestamp without time zone DEFAULT now() NOT NULL,
+    pixel_area_map text,                             -- PAMREF, the map's CRDS name; null when none
     UNIQUE (dataset, expid, sca, fid, job)
 );
 
