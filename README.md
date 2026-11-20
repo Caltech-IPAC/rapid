@@ -81,11 +81,11 @@ The result: `validate_run.py` ends `run 1: 6/6 checks PASS`, and `read_packets.p
 scripts/dev.sh db stop
 ```
 
-Removes the throwaway database and everything in it. `../rapid-work/` stays until you delete it; a second test needs `db start` and the commands above again, or, on the same database, a dataset name of its own (`--dataset r00342-local2` in each command), since a dataset has one live run.
+Removes the throwaway database, everything in it, and the pod it ran in. `../rapid-work/` stays until you delete it; a second test needs `db start` and the commands above again, or, on the same database, a dataset name of its own (`--dataset r00342-local2` in each command), since a dataset has one live run.
 
 ### A flight program on SMDC
 
-One night of program 1049 (four F158 WFI02 epochs, observation 2 visit 1) on the team's database and Batch, under a dataset of your own: `flight` itself is one dataset, the team's, whose live run admits new files and is changed only on purpose ([datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html)). It differs from the local test in four ways: `--target deployed`, so the container reaches the team's database under the workstation's role; the jobs run on Batch, from the image, not from this checkout; the catalogs are the team's copies; and the run is stopped and cleaned up at the end. The values in angle brackets are the team's, stated on the [datasets page](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html) and in `rapid_systems`, since this repository names no account, bucket or host.
+One night of program 1049 (four F158 WFI02 epochs, observation 2 visit 1) on the team's database and Batch, under a dataset of your own: `flight` itself is one dataset, the team's, whose live run admits new files and is changed only on purpose ([datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html)). It differs from the local test in four ways: `--target deployed`, so the container reaches the team's database under the workstation's role; the jobs run on Batch, from the image, not from this checkout; the catalogs are the team's copies; and the run is stopped and cleaned up at the end. The values in angle brackets are the team's bucket and queue names, which this repository does not carry (it names no account, bucket or host): the scratch bucket, the Batch queue and the catalog copies' prefixes are in step 1 of [Starting a night](https://roman-rapid.readthedocs.io/en/latest/system/loop.html#starting-a-night), the inputs bucket on the [datasets page](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html).
 
 ```sh
 scripts/dev.sh image pull
@@ -93,7 +93,7 @@ scripts/dev.sh image rev
 scripts/dev.sh sync <the commit image rev printed>
 ```
 
-Pulls the newest image, prints the commit it was built from, and puts this checkout at that commit. A Batch job runs the image's commit, so with the checkout there too the run records that commit as its revision by itself; at any other commit `run create` refuses until you name `--revision`.
+Pulls the newest image, prints the commit and branches it was built from, and puts this checkout at that commit. A Batch job runs the image's commit, so with the checkout there too the run records that commit as its revision by itself; at any other commit `run create` refuses until you name `--revision`. This example needs an image built from `rebuild` after the serial exposure id and this command-line pass landed: at an older commit `--exposures`, `loop --dry-run`, `run stop` and `run cleanup` do not exist, so if `image rev` names no such commit, stop here until one is registered.
 
 ```sh
 export RAPIDPIPE_OUTPUTS_ROOT=s3://<the scratch bucket>/rapidpipe/<your login>
@@ -106,11 +106,11 @@ Where the run's products go and the Batch queue the loop submits to; the deploye
 scripts/dev.sh run --target deployed -- rapidpipe run create --why "program 1049 trial" \
   --overlay rapidpipe/settings/datasets/flight.toml \
   --set 'intake.source_root="s3://<the inputs bucket>/flight-1049/"' \
-  --set reference.selection.before_mjd=<an MJD after the epochs the reference is built from> \
+  --set reference.selection.before_mjd=61337.4594 \
   --survey <the survey> --dataset flight-1049-<your initials>
 ```
 
-Records the run under the flight overlay and prints its id, called `N` below. Every value is yours to choose but the overlay: the source root is the prefix `scripts/stream_l2_files.py 1049` filled ([The command line](#the-command-line)); the bound decides which epochs build the reference (before it) and which are differenced (at or after it); the survey is the name the live binding is kept under with the dataset (whether `run create` should require one is an open question).
+Records the run under the flight overlay and prints its id, called `N` below. Every value is yours to choose but the overlay: the source root is the prefix `scripts/stream_l2_files.py 1049` filled ([The command line](#the-command-line)); the bound decides which epochs build the reference (before it) and which are differenced (at or after it), and 61337.4594 is program 1049's, the first three epochs building the reference for the fourth ([datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html)); the survey is the name the live binding is kept under with the dataset (whether `run create` should require one is an open question).
 
 ```sh
 cat > ../rapid-work/live-N.json <<'END'
@@ -123,8 +123,8 @@ Makes run `N` the live run of your dataset; it prints the change group's id.
 
 ```sh
 scripts/dev.sh run --target deployed -- rapidpipe job local --run N --stage import \
-  --scope '{"gaia": {"version": "DR3", "prefix": "<the Gaia mirror>"}, "ned": {"version": "<NED version>", "prefix": "<the NED copy>"}, "lvs": {"version": "<NED-LVS version>", "prefix": "<the NED copy>"}, "ss": {"version": "rolling", "prefix": "<the ss root>"}}' \
-  --expects '[{"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "gaia", "version": "DR3"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "ned", "version": "<NED version>"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "lvs", "version": "<NED-LVS version>"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "ss", "version": "rolling"}, "binding": null}]'
+  --scope '{"gaia": {"version": "DR3", "prefix": "<the Gaia mirror>"}, "ned": {"version": "36.1_20260527_v2", "prefix": "<the NED copy>"}, "lvs": {"version": "20260424", "prefix": "<the NED copy>"}, "ss": {"version": "rolling", "prefix": "<the ss root>"}}' \
+  --expects '[{"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "gaia", "version": "DR3"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "ned", "version": "36.1_20260527_v2"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "lvs", "version": "20260424"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "ss", "version": "rolling"}, "binding": null}]'
 ```
 
 Registers the team's four catalog copies under your dataset, once; it names each copy's prefix and copies nothing. It prints `"published": true`. Without a copy whose `[packet] <name>_match` is on, the loop stops with exit 64 when the first packet job is due, naming the missing one.
@@ -133,7 +133,7 @@ Registers the team's four catalog copies under your dataset, once; it names each
 scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 --dry-run
 ```
 
-Prints the first pass's plan as JSON and does nothing: it submits nothing, records nothing and assigns no exposure id (a new exposure is listed under `unassigned`). Read it before spending Batch time; a selection that admits no file is refused, naming the term that admits none.
+Prints the first pass's plan as JSON and does nothing: it submits nothing, records nothing and assigns no exposure id. On a fresh run the plan is one `psf` submission and `"new"`, the count of files the selection admits that no intake has taken in (4 here); the intakes are planned the pass after the PSF is published, so a dry run then lists them, and a new exposure under `unassigned`. Read it before spending Batch time; a selection that admits no file is refused, naming the term that admits none.
 
 ```sh
 scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 --job-definition rapid-rebuild
@@ -145,7 +145,7 @@ Submits the selection one stage forward per pass on Batch and prints one JSON li
 scripts/dev.sh run --target deployed -- scripts/check_run.sh --run N
 ```
 
-The result: one line, `Check run N: CLEAN validate 6/6 reader M/M consumer M/M ...`, and exit 0. Any failure prints `FAIL` and exits non-zero.
+The result: one line, `Check run N: CLEAN validate 6/6 <s> s reader M/M <s> s consumer M/M <s> s` (each check followed by its seconds), and exit 0. Any failure prints `FAIL` and exits non-zero.
 
 ```sh
 scripts/dev.sh run --target deployed -- rapidpipe run stop --run N --why "trial checked"
@@ -163,7 +163,7 @@ A trial's live binding is closed once it is checked, so the live list names only
 
 ### Taking a run's products out of official
 
-`rapidpipe official undo <group> --why Y` applies the inverse of one change group: it closes every binding the group opened and opens again, as new rows, every binding it closed. A run's products became official in many groups, one per published job (the `"group"` each job's result printed, and the `opened_group` of each binding `rapidpipe job show <job>` lists), plus the group that made it live. To retract a run, undo those groups, the newest first; a group whose binding has since moved (a later run superseded it) is refused, naming that binding, and the later run's binding stands.
+`rapidpipe official undo <group> --why Y` applies the inverse of one change group: it closes every binding the group opened and opens again, as new rows, every binding it closed. A run's products became official in many groups, one per published job (the `"group"` each job's result printed, and the `opened_group` of each binding `rapidpipe job show <job>` lists), plus the group that made it live. To retract a run, undo those groups, the newest first; a group whose binding has since moved (a later run superseded it) is refused, naming that binding and the change group that closed it, which is undone first if the later run's binding is to go too; otherwise the later run's binding stands.
 
 What it leaves in place: every row the run's jobs wrote (the `*_official` views stop showing the retracted ones, since they read through the open bindings), every file under the outputs root, the jobs and their attempts, and the closed bindings themselves, with who closed them, when and why. Work of other runs built on them stays as it is: a reference another run reused, an object a later difference joined. A packet already sent is not recalled: the packets are on the Kafka topic for its retention and consumers may have read them. `official undo` of the undo puts the products back.
 

@@ -56,7 +56,12 @@ def apply(cur, group: Iterable[dict], who: str, why: str) -> int:
             " closed_why = %s WHERE id = %s AND closed_at IS NULL",
             (group_id, who, why, binding))
         if cur.rowcount == 0:
-            raise Refused(f"binding {binding} is no longer open", binding)
+            cur.execute("SELECT closed_group, closed_by, closed_why FROM official WHERE id = %s", (binding,))
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                raise Refused(f"binding {binding} is no longer open", binding)
+            raise Refused(f"binding {binding} is no longer open: change group {row[0]} closed it"
+                          f" ({row[1]}: {row[2]}); undo group {row[0]} first to undo this one", binding)
     for item in group:
         new = item.get("open")
         if new is not None:

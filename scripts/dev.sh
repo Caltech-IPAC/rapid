@@ -217,6 +217,9 @@ db_start() {
 db_stop() {
   local eng; eng=$(engine)
   db_running && "$eng" rm -f "$DB_CONTAINER" >/dev/null
+  # the pod or network goes too, unless another container still uses it
+  if [ "$eng" = podman ]; then "$eng" pod rm "$POD" >/dev/null 2>&1 || true
+  else "$eng" network rm "$POD" >/dev/null 2>&1 || true; fi
   echo "db: stopped" >&2
 }
 

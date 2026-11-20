@@ -847,7 +847,8 @@ def _fid(band: str, fids: dict[str, int]) -> int:
     for name, fid in fids.items():
         if name[1:] == band[1:]:
             return fid
-    raise NotFound(f"no filters row for {band}")
+    known = ", ".join(sorted("F" + name[1:] for name in fids))
+    raise NotFound(f"no filters row for {band}; the filters table holds {known}")
 
 
 def reference_center(reference: dict, field: int) -> tuple[float, float]:
@@ -1159,7 +1160,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
              max_intake: int = 100, batch: Any = None,
              rerun: Callable[[int, str], Any] | None = None,
              held_sets: Callable[[], list[dict]] | None = None, spot: dict | None = None,
-             stage: str | None = None) -> dict:
+             stage: str | None = None, queue: str = "prompt") -> dict:
     """One pass: reconcile with ``batch`` (a Batch client) when given, rerun once through ``rerun``
     (``(job, stage)``, on the prompt queue) each job whose container died for a reason not the
     code's, or whose Spot submission ended unpublished or was hedged (``spot``, the run's
@@ -1169,7 +1170,8 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     (``submit(item)`` returns the job id), then publish; return the summary, with ``held_sets``,
     the quality gate's held packet sets after the publish (``held_sets()``), when given, and the
     run's ``attempts`` report. ``stage`` submits one stage's alone (:func:`cut_to_stage`); such a
-    pass never drains."""
+    pass never drains. ``queue`` names, under ``queues``, the submissions no Spot queue took
+    (``local`` for the loop's ``--local``, whose jobs run here)."""
     with conn_factory() as conn:
         if batch is not None:
             medians = median_seconds(conn, run) if spot and spot.get("hedge_factor") else None
@@ -1191,7 +1193,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     submissions = cut_to_stage(submissions, counts, stage)
     queues = defaultdict(list)
     for item in submissions:
-        queues[item.get("queue") or "prompt"].append(submit(item))
+        queues[item.get("queue") or queue].append(submit(item))
     counts["queues"] = dict(queues)
     produced = publish() if publish is not None else {"packets": 0, "sets": []}
     counts["packets_produced"] = produced["packets"]

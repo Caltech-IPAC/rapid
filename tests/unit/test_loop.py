@@ -1251,7 +1251,7 @@ def test_local_runs_each_planned_job_here_in_order_and_repeats_at_once_until_dra
     assert code == ExitCode.SUCCESS and ran == ["psf", "intake"]
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [line["drained"] for line in lines] == [False, False, True]
-    assert lines[0]["queues"] == {"prompt": [1]} and "batch" not in lines[0]
+    assert lines[0]["queues"] == {"local": [1]} and "batch" not in lines[0]
 
 
 def test_a_local_job_that_fails_is_logged_and_the_pass_goes_on_around_it(monkeypatch, capsys, caplog):
@@ -1366,3 +1366,8 @@ def test_a_root_with_no_file_of_the_runs_reader_is_refused_naming_the_root_and_r
 def test_a_malformed_selection_term_is_refused_naming_the_term_and_its_text(term, text):
     with pytest.raises(ValueError, match=f"--{term} {text}: "):
         loop.Selection.parse(**{term: text})
+
+
+def test_a_filter_the_table_lacks_is_refused_naming_the_filters_it_holds():
+    with pytest.raises(loop.NotFound, match=r"no filters row for F999; the filters table holds F146, F158"):
+        loop._fid("F999", {"W146": 8, "F158": 2})

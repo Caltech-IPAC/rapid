@@ -677,7 +677,7 @@ def _loop(args: argparse.Namespace) -> int:
         stems = loop.list_stems(s3, intake["source_root"], selection)
         if args.local:                  # no Batch, no rerun, no sweep: a packet job sends its own set
             summary = loop.run_pass(connect_loop, args.run, selection, stems, submit_local, None,
-                                    args.max_intake, held_sets=held_sets, stage=args.stage)
+                                    args.max_intake, held_sets=held_sets, stage=args.stage, queue="local")
         else:
             summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
                                     args.max_intake, batch, rerun, held_sets, spot, args.stage)

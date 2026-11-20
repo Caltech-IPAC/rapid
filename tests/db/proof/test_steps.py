@@ -248,7 +248,7 @@ def test_step_11_publication_racing_a_cutover(world, connect):
         result = pending.result(timeout=10)
 
     assert result["published"] and result["group"] is None
-    assert result["refusal"] == f"binding {expected} is no longer open"
+    assert result["refusal"].startswith(f"binding {expected} is no longer open")
     assert world.rows("SELECT count(*) FROM packets WHERE job = %s", (late,))[0][0] == NSOURCES
     assert late not in _official_jobs(world, "packets_official")
     packet_bindings = world.rows("SELECT key, job, opened_group FROM official"

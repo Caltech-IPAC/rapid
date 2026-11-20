@@ -165,10 +165,12 @@ def test_official_undo_refuses_when_a_binding_has_since_moved(capsys, conn, tmp_
     (binding, *_), = open_bindings(conn)
     moved = _group_file(tmp_path, [{"close": binding,
                                     "open": {"product": "objects", "key": FIELD_KEY, "job": second}}])
-    assert _run(capsys, "official", "change", "--group", moved, *WHO_WHY)[0] == ExitCode.SUCCESS
+    code, later, _ = _run(capsys, "official", "change", "--group", moved, *WHO_WHY)
+    assert code == ExitCode.SUCCESS
     code, out, err = _run(capsys, "official", "undo", opened.strip(), *WHO_WHY)
     assert (code, out) == (ExitCode.FAILURE, "")
     assert f"refused: binding {binding} is no longer open" in err
+    assert f"change group {later.strip()} closed it" in err and f"undo group {later.strip()} first" in err
 
 
 class _Batch:

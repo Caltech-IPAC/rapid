@@ -169,6 +169,16 @@ def test_submit_refuses_an_outputs_root_a_batch_job_cannot_write(batch_env, monk
         launch.submit(7, "difference", job_definition="definition", client=batch)
     assert batch.submitted == []
 
+def test_a_submission_refused_for_its_environment_leaves_the_row_failed_with_what_to_export(batch_env, monkeypatch):
+    monkeypatch.delenv("RAPIDPIPE_BATCH_JOB_QUEUE")
+    conn = _Conn()
+    with pytest.raises(launch.LaunchError, match="export the Batch job queue"):
+        launch.submit(7, "difference", job_definition="definition", conn=conn, client=_Batch())
+    ((sql, params),) = conn.statements
+    assert "SET state = 'failed'" in sql and params[1] == 7 and "RAPIDPIPE_BATCH_JOB_QUEUE" in params[0]
+    assert conn.committed
+
+
 
 class _Ssm:
     """A fake SSM client: the database tree under ``/rapid/x`` and the three Kafka parameters."""
