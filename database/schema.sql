@@ -247,13 +247,17 @@ CREATE INDEX job_inputs_source_job_idx ON job_inputs (source_job);
 -- scope's id against this table; `rapidpipe exposure id` resolves one by hand.
 -- Rows are never changed or deleted, so a name keeps its id across passes,
 -- reruns and runs of its dataset; one identity serves every dataset, so no two
--- exposures anywhere share an expid, and the same exposure taken into two
--- datasets has two.
+-- exposures share an id the identity handed out, and the same exposure taken
+-- into two datasets has two. The key is (dataset, expid), not expid alone: an
+-- exposure a database stored before this table keeps the id it had
+-- (2026-11-20-exposure-ids.sql), and those ids are unique within a dataset and
+-- repeat across datasets, so every join to this table matches on dataset too.
 CREATE TABLE exposure_ids (
-    expid integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    expid integer GENERATED ALWAYS AS IDENTITY,
     dataset text NOT NULL,
     name text NOT NULL,                              -- the producer's name for the exposure (loop.stem_ids)
     created timestamp with time zone DEFAULT now() NOT NULL,
+    PRIMARY KEY (dataset, expid),
     UNIQUE (dataset, name)
 );
 

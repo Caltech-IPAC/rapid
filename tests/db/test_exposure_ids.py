@@ -6,8 +6,10 @@ uncommitted insert and reading the row it committed; two names that pack to
 one old ``expid`` (program 1043's two execution plans) get two ids; a name
 keeps its id on a later pass and under another connection, and a second
 row for one ``(dataset, name)`` is refused by the table; one identity
-serves every dataset, so the same name in two datasets gets two ids. Run by
-foundation.yml against database/schema.sql.
+serves every dataset, so the same name in two datasets gets two ids; an id
+stored before the table existed, which the dated file records as it stands,
+may repeat across datasets and never within one. Run by foundation.yml
+against database/schema.sql.
 """
 
 from __future__ import annotations
@@ -73,3 +75,17 @@ def test_one_identity_serves_every_dataset_so_a_name_in_two_datasets_gets_two_id
     there = loop.exposure_ids(conn, "flight-trial", [PLAN_1])[PLAN_1]
     assert here != there
     assert loop.exposure_ids(conn, DATASET, []) == {}
+
+
+def test_an_id_stored_before_the_serial_may_repeat_across_datasets_and_never_within_one(connect):
+    """The key is (dataset, expid): what ``database/2026-11-20-exposure-ids.sql`` records needs no more."""
+    conn = connect()
+    packed = "INSERT INTO exposure_ids (expid, dataset, name) OVERRIDING SYSTEM VALUE VALUES (%s, %s, %s)"
+    with conn.cursor() as cur:
+        cur.execute(packed, (1040101, DATASET, PLAN_1))
+        cur.execute(packed, (1040101, "flight-trial", PLAN_1))
+    conn.commit()
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        with conn.cursor() as cur:
+            cur.execute(packed, (1040101, DATASET, PLAN_2))
+    conn.rollback()

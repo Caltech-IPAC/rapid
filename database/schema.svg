@@ -226,18 +226,17 @@
 <!-- exposure_ids -->
 <g id="node6" class="node">
 <title>exposure_ids</title>
-<polygon fill="#f6d9c8" stroke="none" points="43,-149 43,-167 169,-167 169,-149 43,-149"/>
-<text text-anchor="start" x="46" y="-155.5" font-family="Menlo" font-weight="bold" font-size="10.00">exposure_ids</text>
-<text text-anchor="start" x="46" y="-137.5" font-family="Menlo" font-weight="bold" font-size="10.00">expid</text>
-<text text-anchor="start" x="76" y="-137.5" font-family="Menlo" font-size="10.00" fill="#c2410c"> PK</text>
-<text text-anchor="start" x="100" y="-136.5" font-family="Menlo" font-size="10.00" fill="#6b7785">int</text>
-<text text-anchor="start" x="46" y="-118.5" font-family="Menlo" font-size="10.00">dataset</text>
-<text text-anchor="start" x="100" y="-118.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="46" y="-100.5" font-family="Menlo" font-size="10.00">name</text>
-<text text-anchor="start" x="100" y="-100.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="46" y="-82.5" font-family="Menlo" font-size="10.00">created</text>
-<text text-anchor="start" x="100" y="-82.5" font-family="Menlo" font-size="10.00" fill="#6b7785">timestamptz</text>
-<polygon fill="none" stroke="#9aa8b8" points="42,-76 42,-168 170,-168 170,-76 42,-76"/>
+<polygon fill="#f6d9c8" stroke="none" points="46,-149 46,-167 166,-167 166,-149 46,-149"/>
+<text text-anchor="start" x="49" y="-155.5" font-family="Menlo" font-weight="bold" font-size="10.00">exposure_ids</text>
+<text text-anchor="start" x="49" y="-136.5" font-family="Menlo" font-size="10.00">expid</text>
+<text text-anchor="start" x="97" y="-136.5" font-family="Menlo" font-size="10.00" fill="#6b7785">int</text>
+<text text-anchor="start" x="49" y="-118.5" font-family="Menlo" font-size="10.00">dataset</text>
+<text text-anchor="start" x="97" y="-118.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="49" y="-100.5" font-family="Menlo" font-size="10.00">name</text>
+<text text-anchor="start" x="97" y="-100.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="49" y="-82.5" font-family="Menlo" font-size="10.00">created</text>
+<text text-anchor="start" x="97" y="-82.5" font-family="Menlo" font-size="10.00" fill="#6b7785">timestamptz</text>
+<polygon fill="none" stroke="#9aa8b8" points="45,-76 45,-168 167,-168 167,-76 45,-76"/>
 </g>
 <!-- filters -->
 <g id="node7" class="node">
