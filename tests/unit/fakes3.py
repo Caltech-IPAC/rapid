@@ -108,6 +108,12 @@ class FakeS3:
             response["IsTruncated"] = False
         return response
 
+    def delete_objects(self, *, Bucket: str, Delete: dict, **_: Any) -> dict:
+        for obj in Delete["Objects"]:
+            self.calls.append(("delete_objects", obj["Key"]))
+            self._objects.pop((Bucket, obj["Key"]), None)
+        return {}
+
     def upload_file(self, filename: str, bucket: str, key: str, **_: Any) -> None:
         self.calls.append(("upload_file", key))
         with open(filename, "rb") as fh:

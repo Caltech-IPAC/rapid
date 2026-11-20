@@ -29,6 +29,22 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   ``FILE`` as TOML instead (``rapidpipe.foundation.layers.to_toml``): a
   base ``run create --settings FILE`` takes, giving a run of the same
   ``settings_hash``;
+- ``run stop --run N [--who] --why`` records the run as stopped and ends what
+  it has on Batch (``rapidpipe.foundation.stop``): from then on no job of the
+  run is recorded, submitted or started, on any path (``loop``, ``job local``,
+  ``job submit``, ``job run``; each is refused, exit 1, saying who stopped it,
+  when and why), its jobs recorded and not yet submitted are ``failed`` with
+  the stop as their ``refusal``, and Batch is asked to cancel or terminate
+  every job of it that has not ended; it prints what it did as JSON and may be
+  repeated;
+- ``run cleanup --run N [--delete]`` is for a stopped run whose every job is
+  shown to have ended, and refuses, naming the job and what would end it,
+  otherwise: it prints the attempt directories under
+  ``RAPIDPIPE_OUTPUTS_ROOT`` that belong to the run's jobs and hold no
+  published product, with their file counts, as JSON, and removes nothing;
+  with ``--delete`` it removes exactly those files, checking each attempt
+  again as it comes to it and keeping, and naming, any that no longer
+  qualifies (exit 1 then);
 - ``job local --run --stage --scope JSON [--inputs JSON] [--expects JSON]``
   records a job and runs it; ``job run --job <id>``
   runs an existing job's next attempt. Both run the stage's ``run(job)``
@@ -121,6 +137,8 @@ from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
+from rapidpipe.foundation import stop as run_stop
+from rapidpipe.foundation.bookkeeping import stopped_message
 from rapidpipe.foundation.local import failure_reason
 from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
@@ -139,8 +157,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="Create or show a run.",
-                                       description="Create or show a run.")
+    run_parser = subparsers.add_parser("run", help="Create, show, stop or clean up a run.",
+                                       description="Create or show a run, stop one, or clean up after a "
+                                                   "stopped one.")
     run_parser.set_defaults(group_parser=run_parser)
     run_subparsers = run_parser.add_subparsers(dest="verb")
     create = run_subparsers.add_parser(
@@ -168,6 +187,26 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="Write the run's stored settings body to FILE as TOML and print nothing: "
                                "'run create --settings FILE' then stores the same body, with the same "
                                "settings_hash.")
+    run_stop = run_subparsers.add_parser(
+        "stop", help="Stop a run: no further job of it, and its Batch jobs ended.",
+        description="Record the run as stopped and ask Batch to cancel or terminate every job of it that "
+                    "has not ended. From then on 'loop', 'job local', 'job submit' and 'job run' refuse "
+                    "the run, saying who stopped it and why; a stopped run is not started again (a new "
+                    "run takes the work on). Prints what it did as JSON; repeat it to ask Batch again.")
+    run_stop.add_argument("--run", required=True, type=int)
+    run_stop.add_argument("--who", help=_WHO_HELP)
+    run_stop.add_argument("--why", required=True)
+    run_cleanup = run_subparsers.add_parser(
+        "cleanup", help="List what a stopped run left behind, or remove it with --delete.",
+        description="For a stopped run whose every job has ended: print the attempt directories under "
+                    "RAPIDPIPE_OUTPUTS_ROOT that belong to the run's jobs and hold no published product, "
+                    "with their file counts, as JSON. Nothing is removed without --delete. Refuses, naming "
+                    "the job and what would end it, while a job is not shown to have ended.")
+    run_cleanup.add_argument("--run", required=True, type=int)
+    run_cleanup.add_argument("--delete", action="store_true",
+                             help="Remove the listed files, checking each attempt again as it comes to it; "
+                                  "one that no longer qualifies (published meanwhile) is kept and named, "
+                                  "exit 1.")
 
     job_parser = subparsers.add_parser("job", help="Show, launch or run a job.",
                                        description="Show a job, or run one here and publish it.")
@@ -549,7 +588,10 @@ def _loop(args: argparse.Namespace) -> int:
         raise CommandExit(int(ExitCode.USAGE), "RAPIDPIPE_OUTPUTS_ROOT is not set")
     once = args.once or args.dry_run or args.stage is not None
     with connect_loop() as conn:
-        settings = foundation.run_show(conn, args.run)["settings"]
+        run = foundation.run_show(conn, args.run)
+    if run.get("stopped") is not None:  # before anything is listed, planned or submitted
+        raise foundation.Stopped(stopped_message(args.run, run["stopped"], run["stopped_by"], run["stopped_why"]))
+    settings = run["settings"]
     intake = settings["intake"]
     dated = args.dates != "all"
     mjd = _dates_window(args.dates) if dated else args.mjd
@@ -698,6 +740,21 @@ def _foundation_command(args: argparse.Namespace) -> int:
             except (OSError, layers.LayerError) as exc:
                 raise CommandExit(int(ExitCode.USAGE),
                                   f"run {args.id}'s settings not written to {args.toml}: {exc}") from exc
+    elif command == ("run", "stop"):
+        who = _who(args)
+        with connect(application_name="rapidpipe-run-stop") as conn:
+            _print_json(run_stop.stop(conn, args.run, who, args.why, launch.batch_client))
+    elif command == ("run", "cleanup"):
+        root = os.environ.get("RAPIDPIPE_OUTPUTS_ROOT")
+        if not root:
+            raise CommandExit(int(ExitCode.USAGE), "RAPIDPIPE_OUTPUTS_ROOT is not set")
+        result = run_stop.cleanup(lambda: connect(application_name="rapidpipe-run-cleanup"), args.run, root,
+                                  launch.batch_client, delete=args.delete)
+        _print_json(result)
+        if result.get("kept") or result.get("failed"):
+            sys.stderr.write(f"rapidpipe run cleanup: run {args.run}: {len(result['kept'])} attempts kept and "
+                             f"{len(result['failed'])} files not removed, named above\n")
+            return int(ExitCode.FAILURE)
     elif command in (("job", "local"), ("job", "run"), ("job", "submit")):
         return _run_job(args)
     elif command == ("job", "wait"):

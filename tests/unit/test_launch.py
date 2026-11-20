@@ -58,7 +58,11 @@ class _Conn:
         return False
 
     def execute(self, sql, params):
-        self.statements.append((sql, params))
+        if not sql.startswith("SELECT"):        # the stopped-run gate's two reads are not recorded
+            self.statements.append((sql, params))
+
+    def fetchone(self):
+        return (None, None, None)               # the gate's reads: the job's run, and that run not stopped
 
     def commit(self):
         self.committed = True
@@ -95,6 +99,8 @@ def test_a_raising_batch_request_leaves_the_row_failed_with_the_reason_and_propa
 def test_a_failing_id_write_after_an_accepted_request_does_not_mark_the_row_failed(batch_env):
     class Unwritable(_Conn):
         def execute(self, sql, params):
+            if sql.startswith("SELECT"):        # the gate's reads, before the request, still answer
+                return
             self.statements.append((sql, params))
             raise RuntimeError("the database went away")
 

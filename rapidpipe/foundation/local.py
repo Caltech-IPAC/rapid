@@ -46,6 +46,7 @@ from psycopg2.extras import Json, RealDictCursor
 from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation import attempts as submissions
 from rapidpipe.foundation import steps
+from rapidpipe.foundation.bookkeeping import Stopped, admit
 from rapidpipe.foundation.official import NotFound
 from rapidpipe.foundation.prefix import attempts, local_path, put
 from rapidpipe.foundation.publish import publish
@@ -162,7 +163,10 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
     so the host's, never the job's reservation); after publication, the publisher's own
     lock and hold timings (:mod:`rapidpipe.foundation.publish`, ``publish_lock_*`` and
     ``publish_hold_*``). A job already published returns at once with
-    ``published`` false and no file touched. The job row records
+    ``published`` false and no file touched. A job of a stopped run does not
+    start (:func:`_start`): its row is left ``failed`` with the stop as its
+    ``refusal`` and :class:`~rapidpipe.foundation.bookkeeping.Stopped` is
+    raised, no file touched. The job row records
     ``running``, ``started``, the image digest (``RAPID_IMAGE_DIGEST``,
     which the job definition sets; none for a checkout) and the instance
     type (:func:`instance_type`) before the stage, and its Batch attempt entry
@@ -197,29 +201,23 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
                         " WHERE job = %s ORDER BY kind, product, source_job", (job_id,))
             inputs = [dict(r) for r in cur.fetchall()]
         conn.commit()
+        _start(conn, job_id, job["run"], exit_code)
+
+    workdir = None
+    try:
         job_prefix = f"{outputs_root.rstrip('/')}/{job['run']}/{job['stage']}/{job_id}"
         if urlparse(job_prefix).scheme == "file":
             job_root = local_path(job_prefix)
             attempt = _claim_attempt(job_root)
-            prefix, workdir = (job_root / str(attempt)).as_uri() + "/", None
+            prefix = (job_root / str(attempt)).as_uri() + "/"
         else:
             attempt = 1 + max(attempts(job_prefix), default=0)
             prefix = f"{job_prefix}/{attempt}/"
             workdir = Path(tempfile.mkdtemp(prefix=f"rapidpipe-job-{job_id}-{attempt}-"))
-        machine = instance_type()
-        _record(conn, job_id, "state = 'running', started = now(), ended = NULL, exit_code = NULL,"
-                " refusal = NULL, image_digest = %s, instance_type = %s",
-                (os.environ.get("RAPID_IMAGE_DIGEST"), machine))
-        _record_attempt(conn, job_id, {"started": submissions.now(), "instance_type": machine,
-                                       "instance_id": instance_id(),
-                                       "availability_zone": availability_zone(),
-                                       "batch_attempt": os.environ.get("AWS_BATCH_JOB_ATTEMPT")})
-
-    context = JobContext(
-        job=job_id, run=job["run"], stage=job["stage"], scope=job["scope"],
-        survey=job["survey"], dataset=job["dataset"], settings=job["settings"],
-        inputs=inputs, attempt=attempt, prefix=prefix, connect=connect, workdir=workdir)
-    try:
+        context = JobContext(
+            job=job_id, run=job["run"], stage=job["stage"], scope=job["scope"],
+            survey=job["survey"], dataset=job["dataset"], settings=job["settings"],
+            inputs=inputs, attempt=attempt, prefix=prefix, connect=connect, workdir=workdir)
         cpu = CgroupCpu()
         with CgroupMemory() as memory:
             stage_run(context)  # no connection held while the stage computes
@@ -260,6 +258,39 @@ def run_job(connect: Callable[[], Any], job_id: int, outputs_root: str,
                 "job %d: its failure (exit %d, %s) could not be recorded on its row", job_id, code, reason)
         raise
     return {**result, "peak_rss_kib": _peak_rss_kib()}
+
+
+def _start(conn, job_id: int, run: int, exit_code: Callable[[BaseException], int]) -> None:
+    """Record the attempt as started, in one transaction with the run's gate, before any file is touched.
+
+    The row becomes ``running`` and, in a Batch container, the Batch job's entry in ``jobs.attempts``
+    records its start, under :func:`~rapidpipe.foundation.bookkeeping.admit`'s share lock: an attempt
+    is either started before a stop of its run, where the stop finds it running under its Batch job,
+    or refused. A refused one leaves the row ``failed`` (a published row as it is) with the stop as
+    its ``refusal`` and its entry ended, and raises :class:`~rapidpipe.foundation.bookkeeping.Stopped`.
+    """
+    machine = instance_type()
+    batch_job_id = os.environ.get("AWS_BATCH_JOB_ID")
+    conn.rollback()
+    try:
+        with conn.cursor() as cur:
+            admit(cur, run)
+            cur.execute("UPDATE jobs SET state = 'running', started = now(), ended = NULL, exit_code = NULL,"
+                        " refusal = NULL, image_digest = %s, instance_type = %s"
+                        " WHERE id = %s AND state <> 'published'",
+                        (os.environ.get("RAPID_IMAGE_DIGEST"), machine, job_id))
+            if batch_job_id:
+                submissions.record(cur, job_id, batch_job_id, {
+                    "started": submissions.now(), "instance_type": machine, "instance_id": instance_id(),
+                    "availability_zone": availability_zone(),
+                    "batch_attempt": os.environ.get("AWS_BATCH_JOB_ATTEMPT")})
+        conn.commit()
+    except Stopped as exc:
+        code = exit_code(exc)
+        _record(conn, job_id, "state = 'failed', ended = now(), exit_code = %s, refusal = %s",
+                (code, failure_reason(exc)))
+        _record_attempt(conn, job_id, {"ended": submissions.now(), "outcome": "failed", "exit_code": code})
+        raise
 
 
 def _peak_rss_kib() -> dict[str, int]:

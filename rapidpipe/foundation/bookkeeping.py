@@ -18,6 +18,13 @@ it at launch recorded in ``job_inputs`` in two kinds (statement 4):
 
 Keys are dicts whose names are the product table's column names
 (``schema.sql``'s header).
+
+A stopped run (``runs.stopped``, set by :func:`rapidpipe.foundation.stop.stop`)
+takes no further job. :func:`admit` is the one gate: every path that records a
+job, submits one or starts one calls it inside the transaction that does so, and
+it holds a share lock on the run's row until that transaction ends, which the
+stop's own update waits for. So a job is either recorded, submitted or started
+before the stop, where the stop sees it, or refused (:class:`Stopped`).
 """
 
 from __future__ import annotations
@@ -26,7 +33,31 @@ from typing import Any, Iterable
 
 from psycopg2.extras import Json, RealDictCursor
 
-from rapidpipe.foundation.official import NotFound
+from rapidpipe.foundation.official import NotFound, Refused
+
+
+class Stopped(Refused):
+    """Work refused because its run was stopped: exit 1 at the CLI, the message saying who, when and why."""
+
+
+def admit(cur, run_id: int) -> None:
+    """Raise :class:`Stopped` if run ``run_id`` is stopped; otherwise hold a share lock on its row.
+
+    On the caller's transaction: the lock lasts until it commits or rolls back, and a stop of the
+    run waits for it. ``NotFound`` when the run does not exist.
+    """
+    cur.execute("SELECT stopped, stopped_by, stopped_why FROM runs WHERE id = %s FOR SHARE", (run_id,))
+    row = cur.fetchone()
+    if row is None:
+        raise NotFound(f"run {run_id} does not exist")
+    if row[0] is not None:
+        raise Stopped(stopped_message(run_id, *row))
+
+
+def stopped_message(run_id: int, stopped: Any, by: str, why: str) -> str:
+    """What every refusal under a stopped run says."""
+    return (f"run {run_id} was stopped by {by} at {stopped:%Y-%m-%dT%H:%M:%SZ} ({why}) and takes no "
+            "further job; a new run takes the work on (rapidpipe run create)")
 
 
 def create_run(conn, who: str, why: str, revision: str, settings: dict,
@@ -53,12 +84,14 @@ def create_run(conn, who: str, why: str, revision: str, settings: dict,
 
 def create_job(conn, run_id: int, stage: str, scope: dict,
                inputs: Iterable[dict] = (), expects: Iterable[dict] = ()) -> int:
-    """Record a job in state ``launched`` with its inputs; return its id."""
+    """Record a job in state ``launched`` with its inputs; return its id. A stopped run takes none
+    (:func:`admit`)."""
     rows = (
         [("input", i["product"], i["key"], i.get("source_job"), i.get("binding")) for i in inputs]
         + [("expects", e["product"], e["key"], None, e["binding"]) for e in expects])
     try:
         with conn.cursor() as cur:
+            admit(cur, run_id)
             cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, %s, %s) RETURNING id",
                         (run_id, stage, Json(scope)))
             job_id = cur.fetchone()[0]

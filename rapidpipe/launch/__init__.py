@@ -30,6 +30,7 @@ from typing import Any
 
 from rapidpipe.db.connection import parameter_tree_environment
 from rapidpipe.foundation import attempts, publish_kafka
+from rapidpipe.foundation.bookkeeping import admit
 from rapidpipe.foundation.local import failure_reason
 
 __all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "spot", "submit", "vcpus"]
@@ -68,6 +69,10 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     When the Batch request itself raises, the row (with ``conn``) is marked
     ``failed`` with the error as its ``refusal`` and the error propagates; a
     failure recording the id after an accepted request is not caught here.
+    With ``conn``, a job of a stopped run is refused the same way, nothing sent
+    (:func:`rapidpipe.foundation.bookkeeping.admit`): its share lock on the run's
+    row is held from before the request until the id is recorded, so a stop of the
+    run waits for a submission in flight and then finds its Batch job on the row.
     """
     queue = queue or os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
     if not queue:
@@ -90,6 +95,10 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     if one_attempt:
         request["retryStrategy"] = {"attempts": 1}
     try:
+        if conn is not None:
+            with conn.cursor() as cur:
+                cur.execute("SELECT run FROM jobs WHERE id = %s", (job_id,))
+                admit(cur, cur.fetchone()[0])
         response = (client or batch_client()).submit_job(**request)
     except Exception as exc:
         if conn is not None:                # never left ``launched`` with nothing on Batch

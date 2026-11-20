@@ -401,3 +401,61 @@ def test_run_show_toml_writes_a_base_that_run_create_stores_as_the_same_body_and
     assert body["reference"]["selection"]["before_mjd"] == 61591.0
     code, out, err = _run(capsys, "run", "show", "999999", "--toml", str(tmp_path / "none.toml"))
     assert code == ExitCode.USAGE and not (tmp_path / "none.toml").exists()
+
+
+def _never_batch():
+    raise AssertionError("Batch was asked")
+
+
+def test_a_stopped_runs_loop_and_job_verbs_submit_nothing_and_say_who_stopped_it_and_why(
+        capsys, conn, tmp_path, monkeypatch):
+    run = new_run(conn)
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", tmp_path.as_uri())
+    monkeypatch.setattr("rapidpipe.launch.batch_client", _never_batch)
+    monkeypatch.setattr("rapidpipe.cli.main._stage_run", lambda stage: _never_batch)
+    code, out, err = _run(capsys, "run", "stop", "--run", str(run), "--who", "tester", "--why", "wrong overlay")
+    stopped = json.loads(out)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    assert (stopped["stopped_by"], stopped["stopped_why"], stopped["already"]) == ("tester", "wrong overlay", False)
+
+    for argv in (["loop", "--run", str(run), "--job-definition", "definition:1"],
+                 ["loop", "--run", str(run), "--local"],
+                 ["job", "local", "--run", str(run), "--stage", "import", "--scope", "{}"],
+                 ["job", "submit", "--run", str(run), "--stage", "import", "--scope", "{}",
+                  "--job-definition", "definition:1"]):
+        code, out, err = _run(capsys, *argv)
+        assert (code, out) == (ExitCode.FAILURE, ""), argv
+        assert f"refused: run {run} was stopped by tester" in err and "(wrong overlay)" in err, argv
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM jobs WHERE run = %s", (run,))
+        assert cur.fetchone()[0] == 0
+    conn.commit()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_run_cleanup_lists_without_removing_and_removes_with_delete(capsys, conn, tmp_path, monkeypatch):
+    run = new_run(conn)
+    job = new_job(conn, run)
+    with conn.cursor() as cur:          # a job that ended failed, with a file under its attempt
+        cur.execute("UPDATE jobs SET state = 'failed', ended = now() WHERE id = %s", (job,))
+    conn.commit()
+    left = tmp_path / str(run) / "difference" / str(job) / "1" / "diff.fits"
+    left.parent.mkdir(parents=True)
+    left.write_text("left behind")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", tmp_path.as_uri())
+    monkeypatch.setattr("rapidpipe.launch.batch_client", _never_batch)
+
+    code, out, err = _run(capsys, "run", "cleanup", "--run", str(run))
+    assert (code, out) == (ExitCode.FAILURE, "") and f"refused: run {run} is not stopped" in err
+    assert _run(capsys, "run", "stop", "--run", str(run), *WHO_WHY)[0] == ExitCode.SUCCESS
+
+    code, out, err = _run(capsys, "run", "cleanup", "--run", str(run))
+    listed = json.loads(out)
+    assert (code, err, listed["files"]) == (ExitCode.SUCCESS, "", 1)
+    assert [(a["job"], a["attempt"], a["prefix"]) for a in listed["attempts"]] == [
+        (job, 1, left.parent.as_uri() + "/")]
+    assert left.is_file()
+
+    code, out, err = _run(capsys, "run", "cleanup", "--run", str(run), "--delete")
+    assert (code, err, json.loads(out)["deleted"]) == (ExitCode.SUCCESS, "", 1)
+    assert not left.exists() and not (tmp_path / str(run)).exists()
