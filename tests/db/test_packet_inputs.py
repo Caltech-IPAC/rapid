@@ -84,7 +84,8 @@ def image_rows(directory) -> dict[str, list[dict]]:
                      "dateobs": datetime(2026, 8, 21), "mjdobs": MJD[1], "exptime": 60.0,
                      "filename": (directory / "l2.fits").as_uri(), "checksum": "0" * 32,
                      "crval1": ra, "crval2": dec, "crpix1": 50.0, "crpix2": 50.0,
-                     "cd11": 1.0, "cd12": 0.0, "cd21": 0.0, "cd22": 1.0, "ra": ra, "dec": dec}],
+                     "cd11": 1.0, "cd12": 0.0, "cd21": 0.0, "cd22": 1.0, "ra": ra, "dec": dec,
+                     "zptmag": 31.4}],  # 1 DN/s is 1 nJy: the fluxes below read the same in both
         "diffimages": [{**image, **footprint, "pid": 601, "rid": 501, "infobitssci": 0,
                         "infobitsref": 0,
                         "filename": (directory / "zogy_diffimage_masked.fits").as_uri()}],
@@ -484,6 +485,8 @@ def test_an_xsources_packet_set_is_made_from_the_xsources_their_xobjects_and_xme
     source = fitted["diaSource"]
     assert (source["psfFlux"], source["psfFluxErr"], source["snr"]) == (400.0, 10.0, 40.0)
     assert (source["apFlux"], source["apFluxErr"]) == (380.0, 12.0)
+    # the zero point is the L2 row's, through the source's difference image; the row names no map
+    assert source["zeroPoint"] == pytest.approx(31.4) and source["pixelAreaFactor"] is None
     assert (source["x"], source["y"], source["psfFitFlags"]) == (49.0, 49.0, 0)
     assert (source["psfRChi2"], source["psfNdata"], source["sharpness"]) == (1.25, 49, 0.25)
     assert (source["psfQfit"], source["peak"], source["xErr"]) == (None, None, None)
