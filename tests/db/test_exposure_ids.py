@@ -8,7 +8,8 @@ keeps its id on a later pass and under another connection, and a second
 row for one ``(dataset, name)`` is refused by the table; one identity
 serves every dataset, so the same name in two datasets gets two ids; an id
 stored before the table existed, which the dated file records as it stands,
-may repeat across datasets and never within one. Run by foundation.yml
+may repeat across datasets and never within one; resolving a name the table
+already holds consumes no id. Run by foundation.yml
 against database/schema.sql.
 """
 
@@ -89,3 +90,12 @@ def test_an_id_stored_before_the_serial_may_repeat_across_datasets_and_never_wit
         with conn.cursor() as cur:
             cur.execute(packed, (1040101, DATASET, PLAN_2))
     conn.rollback()
+
+
+def test_resolving_names_the_table_holds_consumes_no_id(connect):
+    """PostgreSQL takes the identity's next value before it finds a conflict, so a held name is never offered."""
+    conn = connect()
+    (last,) = loop.exposure_ids(conn, DATASET, [PLAN_1]).values()
+    for _ in range(5):
+        assert loop.exposure_ids(conn, DATASET, [PLAN_1]) == {PLAN_1: last}
+    assert loop.exposure_ids(conn, DATASET, [PLAN_2]) == {PLAN_2: last + 1}

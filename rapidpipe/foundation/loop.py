@@ -452,7 +452,11 @@ def exposure_ids(conn, dataset: str, names: Iterable[str]) -> dict[str, int]:
 
     One operation of two SQL commands under ``READ COMMITTED``, committed
     before it returns: ``INSERT ... ON CONFLICT (dataset, name) DO NOTHING``
-    for every name, then a ``SELECT`` of the names' rows. Two resolutions of
+    for every name the table does not already hold for the dataset, then a
+    ``SELECT`` of the names' rows. A name already held is left out of the
+    insert because PostgreSQL takes the identity's next value before it finds
+    the conflict, so offering it would consume an id for nothing on every
+    pass. Two resolutions of
     one name at once agree: the second's insert waits on the first's
     uncommitted row and then does nothing, and its select, a new snapshot,
     reads the row the first committed. Never one statement that inserts and
@@ -480,8 +484,10 @@ def exposure_ids(conn, dataset: str, names: Iterable[str]) -> dict[str, int]:
         return {}
     try:
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO exposure_ids (dataset, name) SELECT %s, unnest(%s::text[])"
-                        " ON CONFLICT (dataset, name) DO NOTHING", (dataset, wanted))
+            cur.execute("INSERT INTO exposure_ids (dataset, name)"
+                        " SELECT %s, n FROM unnest(%s::text[]) AS n"
+                        " WHERE NOT EXISTS (SELECT 1 FROM exposure_ids e WHERE e.dataset = %s AND e.name = n)"
+                        " ON CONFLICT (dataset, name) DO NOTHING", (dataset, wanted, dataset))
             cur.execute("SELECT name, expid FROM exposure_ids WHERE dataset = %s AND name = ANY(%s)",
                         (dataset, wanted))
             found = {name: int(expid) for name, expid in cur.fetchall()}
