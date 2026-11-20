@@ -114,6 +114,7 @@ centre (``metrics.wcs_shift_dx_px`` and ``_dy_px``).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import tempfile
@@ -133,7 +134,7 @@ from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.foundation.steps import step
-from rapidpipe.science import intake_openuniverse, intake_rimtimsim
+from rapidpipe.science import crds, intake_openuniverse, intake_rimtimsim
 from rapidpipe.science.alerts.crossmatch import (
     GAIA_DEFAULT_REF_EPOCH, GAIA_PM_MAX_ARCSEC_PER_YEAR, epoch_offset_years, propagate_positions)
 from rapidpipe.science.catalogs.readers import cone_of_corners, gaia_reader
@@ -190,6 +191,11 @@ def run(job: JobContext) -> None:
         raise ValueError(f"[intake] gw_ghost needs a guide window, which only soc-l2 files carry, "
                          f"not {reader!r}'s")
     ghost_setting = {"gw_ghost": gw_ghost} if gw_ghost else {}
+    # A run made before the [pixel_area_map] table has none in its settings: no lookup, as before.
+    area_settings = job.settings.get("pixel_area_map", {"lookup": False})
+    if area_settings["lookup"] and reader != "soc-l2":
+        raise ValueError(f"[pixel_area_map] lookup asks CRDS by a file's detector and start time, "
+                         f"which only soc-l2 files carry, not {reader!r}'s")
     ids = READERS[reader]["parse_stem"](stem)
     timings: dict[str, float] = {}
     mark = time.monotonic()
@@ -203,6 +209,11 @@ def run(job: JobContext) -> None:
     source = settings["source_root"].rstrip("/") + "/" + READERS[reader]["source_key"](stem)
     asdf_path = get(source, unsigned=bool(settings["unsigned"]))
     lap("fetch")
+    area_map = area_source = None
+    if area_settings["lookup"]:
+        with step("pixel_area_map"):
+            area_map, area_source = pixel_area_map(asdf_path, area_settings)
+        lap("pixel_area_map")
 
     fits_name = f"{stem}_cal.fits.gz"
     with tempfile.TemporaryDirectory(prefix="rapidpipe-intake-") as scratch:
@@ -225,6 +236,8 @@ def run(job: JobContext) -> None:
         shift = [float(v) for v in settings["crpix_shift"]]
         if any(shift):
             _shift_crpix(fits_path, shift)
+        if area_map is not None:
+            _write_pamref(fits_path, area_map)
         with step("gzip"):
             gzip_file(fits_path, job.path / fits_name, int(settings["gzip_level"]))
         lap("gzip")
@@ -248,6 +261,7 @@ def run(job: JobContext) -> None:
 
     key = {"dataset": job.dataset, "expid": READERS[reader]["expid"](ids), "sca": ids["sca"], "fid": fid}
     l2file = _l2file(job, header, key, fits_name, limmag)
+    l2file["pixel_area_map"] = area_map
     dateobs = datetime.fromisoformat(header["DATE-OBS"])
     exposure = {"dataset": job.dataset, "expid": key["expid"], "dateobs": dateobs,
                 "exptime": float(header["EXPTIME"]),
@@ -276,13 +290,14 @@ def run(job: JobContext) -> None:
         dx, dy = conversion["wcs_shift_px"]
         wcs |= {"distortion": distortion.name, "shift_px": [round(dx, 4), round(dy, 4)]}
         metrics |= {"wcs_shift_dx_px": dx, "wcs_shift_dy_px": dy}
+    area = {"pixel_area_map": {"name": area_map, "source": area_source}} if area_settings["lookup"] else {}
     job.write_manifest(
         outputs, source=source,
         provenance={**ids,
                     "romancal": primary.get("HIERARCH meta calibration_software_version"),
                     "wcs_fit_results": fit},
         dq=dq, wcs=wcs, metrics={**metrics, **(gaia or {})},
-        crpix_shift=shift,
+        crpix_shift=shift, **area,
         conversion={"hdus": conversion["hdus"], "asdf_bytes": asdf_path.stat().st_size,
                     "fits_bytes": fits_bytes, "fits_gz_bytes": (job.path / fits_name).stat().st_size,
                     "timings_s": timings})
@@ -318,6 +333,69 @@ def fetch_reference(server: str, name: str, directory: Path) -> Path:
     with urllib.request.urlopen(url, timeout=60) as reply, target.open("wb") as stream:
         stream.write(reply.read())
     return target
+
+
+def pixel_area_map(asdf_path: Path, table: dict) -> tuple[str | None, str | None]:
+    """The CRDS name of an L2 file's pixel area map, and which source gave it.
+
+    The first of three that gives a name: the file's own
+    ``meta.ref_file.area`` (``file``), CRDS's best ``area`` reference for the
+    file's detector and exposure start (``crds``), and the store's
+    ``index.json`` (``index``). No source failing raises: an intake never
+    fails for want of a map.
+
+    TODO(crds-area-keyword): flight L2 files carry ``INCOMPLETE`` in
+    ``meta.ref_file.area``, so the first source gives none today. If CRDS
+    fills it, the query and the index below can be retired.
+
+    Parameters
+    ----------
+    asdf_path : pathlib.Path
+        The L2 ASDF file.
+    table : dict
+        The run's ``[pixel_area_map]`` settings.
+
+    Returns
+    -------
+    tuple of (str or None, str or None)
+        The map's name, e.g. ``roman_wfi_area_0085.asdf``, and ``file``,
+        ``crds`` or ``index``; both None when no source gave a name.
+    """
+    with asdf.open(asdf_path, lazy_load=True, memmap=False) as af:
+        meta = af["roman"]["meta"]
+        named = PurePosixPath(str(meta["ref_file"].get("area", ""))).name
+        detector = str(meta["instrument"]["detector"])
+        start = meta["exposure"]["start_time"]
+    if named.endswith(".asdf"):
+        return named, "file"
+    start = str(getattr(start, "isot", start))[:19]
+    try:
+        return crds.best_reference(table["crds_server"], table["crds_context"], detector, start, "area"), "crds"
+    except crds.CRDSError as error:
+        log.warning("pixel area map: %s", error)
+    if table["store"]:
+        try:
+            index = json.loads(get(table["store"].rstrip("/") + "/index.json").read_text())
+            name = _latest_in_index(index, detector, start)
+        except Exception as error:  # a missing or unreadable index never fails an intake
+            log.warning("pixel area map: the store's index.json: %s: %s", type(error).__name__, error)
+        else:
+            if name is not None:
+                log.warning("pixel area map: %s from the store's index, not CRDS", name)
+                return name, "index"
+    log.warning("pixel area map: no name found for %s at %s; none recorded", detector, start)
+    return None, None
+
+
+def _latest_in_index(index: dict, detector: str, start: str) -> str | None:
+    """The name of ``detector``'s map with the latest ``useafter`` at or before ``start``, or None.
+
+    ``index`` is the store's ``index.json``: ``{"maps": [{"detector":
+    "WFI16", "useafter": "2026-10-13T00:00:00", "name": ...}, ...]}``.
+    """
+    usable = [(entry["useafter"][:19], entry["name"]) for entry in index["maps"]
+              if entry["detector"] == detector and entry["useafter"][:19] <= start]
+    return max(usable)[1] if usable else None
 
 
 def primary_fit(primary) -> dict:
@@ -435,6 +513,12 @@ def _shift_crpix(path: Path, shift: list[float]) -> None:
             for axis, delta in enumerate(shift, start=1):
                 if f"CRPIX{axis}" in hdu.header:
                     hdu.header[f"CRPIX{axis}"] += delta
+
+
+def _write_pamref(path: Path, name: str) -> None:
+    """Write the pixel area map's CRDS name as the FITS file's primary ``PAMREF`` keyword."""
+    with fits.open(path, mode="update") as hdul:
+        hdul[0].header["PAMREF"] = (name, "CRDS area reference (pixel area map)")
 
 
 def _gaia_metrics(job: JobContext, image, wcs, header) -> dict | None:
