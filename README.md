@@ -20,7 +20,7 @@ This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) 
 
 ### The image
 
-The team's images are in the SMDC account's private container registry, repository `rapid-pipeline`, tagged `rebuild-<sha>-<base8>` for each commit of `rebuild` built for Batch: the full 40-character sha, then the first eight hex of the base image's digest (`rapid_systems`' `containers/rapid-pipeline/build-rebuild.sh`), so one commit built on two bases has two tags. The tag is not a commit: the image's commit is its `org.opencontainers.image.revision` label, which [One epoch](#one-epoch) reads as `REV`. Pull one on a RAPID host, whose instance role carries the pull grant (`rapid_systems`' `cloudformation/rapid-ecr.yaml`); an SMDC login and `rapid_systems`' README, Setup, get you onto one. The newest tag, and the image:
+The team's images are in the SMDC account's private container registry, repository `rapid-pipeline`, tagged `rebuild-<sha>-<base8>` for each commit of `rebuild` built for Batch: the full 40-character sha, then the first eight hex of the base image's digest (`rapid_systems`' `containers/rapid-pipeline/build-rebuild.sh`), so one commit built on two bases has two tags. The tag is not a commit: the image's commit is its `org.opencontainers.image.revision` label (`scripts/dev.sh image rev`). [One epoch](#one-epoch) runs this checkout's code in the image, on the image's tools and libraries, so any recent image serves a branch that leaves `requirements.txt` alone. Pull one on a RAPID host, whose instance role carries the pull grant (`rapid_systems`' `cloudformation/rapid-ecr.yaml`); an SMDC login and `rapid_systems`' README, Setup, get you onto one. The newest tag, and the image:
 
 ```sh
 REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
@@ -71,7 +71,7 @@ It prints the ingest record: `"leaves_done": 1`, `"complete": false` (one leaf o
 The local values are set, and the team deployment's values are commented. The packet job sends its set to Kafka as its last act. Locally, the three `RAPIDPIPE_KAFKA_*` variables point that send at a closed local port. The send fails, the job still publishes and exits 0, and nothing reaches the team's topic.
 
 ```sh
-export IMAGE=<the pipeline image>                 # e.g. rapid-pipeline:rebuild-<sha>-<base8>
+# IMAGE is the image The image exported, e.g. <registry>/rapid-pipeline:rebuild-<sha>-<base8>
 export GAIA=$PWD/gaia                             # The Gaia catalog, above: the local mirror's directory
 export PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=rapid PGUSER=postgres PGPASSWORD=local
 export RAPIDPIPE_OUTPUTS_ROOT=file:///work/out    # ./rapid-local/out, as the container sees it
@@ -85,11 +85,11 @@ export RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9 RAPIDPIPE_KAFKA_TOPIC=local
 #   export RAPIDPIPE_BATCH_JOB_QUEUE=<the Batch job queue>
 #   export AWS_PROFILE=<your profile> AWS_DEFAULT_REGION=<the deployment's region>
 R=$PWD L=$PWD/rapid-local                         # this checkout and the run's working directory
-ctr() { podman run --rm --pod rapid-local -v "$L:/work:Z" -v "$R/scripts:/scripts:ro,z" \
+ctr() { podman run --rm --pod rapid-local -v "$R:/code:ro,z" -e PYTHONPATH=/code -v "$L:/work:Z" -v "$R/scripts:/scripts:ro,z" \
   -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e RAPIDPIPE_OUTPUTS_ROOT -e AWS_DEFAULT_REGION \
   -e RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS -e RAPIDPIPE_KAFKA_TOPIC -e RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES \
   --entrypoint "$1" "$IMAGE" "${@:2}"; }
-rp() { ctr /usr/local/bin/rapidpipe-entrypoint "$@"; }     # the rapidpipe command line, in the image
+rp() { ctr /usr/local/bin/rapidpipe-entrypoint "$@"; }     # the rapidpipe command line: this checkout's code, in the image
 job_id() { jq -e 'select(.published and .refusal == null) | .job'; }   # a published job's id, else nothing and exit 4
 sql() { podman exec rapid-local-db psql -U postgres -d rapid -X -tA -c "$1"; }
 ```
@@ -108,11 +108,11 @@ podman exec -i rapid-local-db psql -U postgres -d rapid -X -q -v ON_ERROR_STOP=1
 
 ### One epoch
 
-Your shell is at the top of this checkout, at the image's commit (`git checkout "$REV"`): `ctr` mounts its `scripts/`, and the image carries neither `scripts/` nor `schema.sql`. A run is the recipe, and it is made live for its dataset so that each job's products become official as it publishes. Each `job local` runs one stage in the container and prints its result as JSON. `job_id` keeps the job's id, or fails if the job did not publish; the stage's log goes to stderr. Dataset `r00342-local` is yours alone, and F146 is fid 8 (`W146` in `filters`).
+Your shell is at the top of this checkout: `ctr` mounts it at `/code` ahead of the `rapidpipe` installed in the image, as `scripts/dev.sh` does, so the commands below are this checkout's, and the run records its commit as `REV`. A run is the recipe, and it is made live for its dataset so that each job's products become official as it publishes. Each `job local` runs one stage in the container and prints its result as JSON. `job_id` keeps the job's id, or fails if the job did not publish; the stage's log goes to stderr. Dataset `r00342-local` is yours alone, and F146 is fid 8 (`W146` in `filters`).
 
 ```sh
 SRC=s3://stpubdata/roman/nexus/soc_simulations/r00342/l2/
-REV=$(podman image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")
+REV=$(git rev-parse HEAD)
 RUN=$(rp run create --who "$USER" --why "local quickstart" --revision "$REV" \
   --overlay /code/rapidpipe/settings/datasets/hlwas-r00342.toml --set "intake.source_root=\"$SRC\"" \
   --set packet.ned_match=false --set packet.lvs_match=false --set packet.ss_match=false \
