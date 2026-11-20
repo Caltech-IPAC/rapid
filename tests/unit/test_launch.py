@@ -195,6 +195,8 @@ def test_the_job_environment_stands_for_every_ssm_read_and_is_read_once(monkeypa
     ssm = _Ssm()
     monkeypatch.setenv("RAPID_PARAMETER_PATH", "/rapid/x")
     monkeypatch.delenv("PGHOST", raising=False)
+    for name in publish_kafka.ENVIRONMENT.values():   # a dev.sh container sets them
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(launch, "_environments", {})
     env = launch.job_environment({"kafka": KAFKA}, ssm)
     assert env == {"PGHOST": "db.example", "PGPORT": "6432", "PGDATABASE": "rapid", "RAPID_DB_SECRET_ID": "s-1",

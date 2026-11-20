@@ -37,8 +37,10 @@
 # first use. Its out/ is the pipeline's outputs root, written by jobs and
 # read by `job show`; nothing else belongs there.
 #
-# The local target (the default) talks to the throwaway database through PG*
-# and writes products under the work folder's out/; the deployed target sets
+# The local target (the default) talks to the throwaway database through PG*,
+# writes products under the work folder's out/ and points a packet job's
+# Kafka send at a closed local port, so nothing reaches the team's topic; the
+# deployed target sets
 # RAPID_PARAMETER_PATH to the rebuild tree, so the container reaches the
 # deployed database under the host's instance role (rapid_systems
 # docs/workstation-submission.md), and takes RAPIDPIPE_OUTPUTS_ROOT from the
@@ -268,7 +270,13 @@ container_args() {  # target -> the engine's run arguments, one per line
       printf '%s\n' "$(net_args)" -e PGHOST="$(db_host)" -e PGPORT=5432 -e PGDATABASE=rapid \
         -e PGUSER=postgres -e PGPASSWORD="$DB_PASSWORD" \
         -e RAPIDPIPE_OUTPUTS_ROOT="${RAPIDPIPE_OUTPUTS_ROOT:-file:///work/out}" \
-        -e RAPID_SOURCE_REVISION="$(checkout_revision)"   # every job runs here, on the checkout
+        -e RAPID_SOURCE_REVISION="$(checkout_revision)" \
+        -e AWS_DEFAULT_REGION="$REGION" \
+        -e RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9 -e RAPIDPIPE_KAFKA_TOPIC=local \
+        -e RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES=1048576
+      # RAPID_SOURCE_REVISION: every job runs here, on the checkout. The three Kafka values
+      # point a packet job's send at a closed port, so it fails, the job still publishes, and
+      # nothing reaches the team's topic (without them the job reads the topic from SSM).
       ;;
     deployed)
       [ -n "${RAPIDPIPE_OUTPUTS_ROOT:-}" ] || die "the deployed target: export RAPIDPIPE_OUTPUTS_ROOT (an s3:// scratch prefix) first"
