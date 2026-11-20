@@ -60,8 +60,9 @@ copies them) and the SExtractor catalog. Declared tables: ``refimages``
 (one row, its ``status`` and ``infobits`` the grade; ``rfid`` is drawn
 from the table's own identity sequence, so the child rows can carry it),
 ``refimimages`` (one row per coadded L2
-row) and ``refimcatalogs`` (the mosaic catalog, ``cattype`` 1, which the
-packet stage reads for reference-star matches). The manifest also records
+row), ``refimcatalogs`` (the mosaic catalog, ``cattype`` 1, which the
+packet stage reads for reference-star matches) and ``refimmeta`` (one row,
+`dev`'s RefImMeta columns: :func:`refimmeta_row`). The manifest also records
 `dev`'s refimmeta measurements under ``reference`` and ``metrics``, one
 flat dict of named numbers (the compact stars' width, the coverage
 histogram, the extremes, awaicgen's wall seconds; :func:`rapidpipe.science.reference.measure.quality_metrics`).
@@ -122,7 +123,7 @@ from rapidpipe.science.difference.sextractor import parse_ascii_text_sextractor_
 from rapidpipe.science.difference.tools import ToolRunner
 from rapidpipe.science.reference import awaicgen, catalog, header, infobits, measure, prep
 from rapidpipe.products import coverage
-from rapidpipe.science.spatial import field_center
+from rapidpipe.science.spatial import field_center, healpix_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,17 @@ REFIMIMAGES_SCHEMA = pa.schema([("rfid", pa.int32()), ("rid", pa.int32())])
 REFIMCATALOGS_SCHEMA = pa.schema([
     ("rfid", pa.int32()), ("cattype", pa.int16()), ("filename", pa.string()),
     ("checksum", pa.string()),
+])
+#: `dev`'s RefImMeta columns and types (``rapidOpsTables.sql``); ``npucatsources`` is null.
+REFIMMETA_SCHEMA = pa.schema([
+    ("rfid", pa.int32()), ("field", pa.int32()), ("hp6", pa.int32()), ("hp9", pa.int32()),
+    ("fid", pa.int16()), ("nframes", pa.int16()), ("mjdobsmin", pa.float64()),
+    ("mjdobsmax", pa.float64()), ("npixnan", pa.int32()), ("clmean", pa.float32()),
+    ("clstddev", pa.float32()), ("clnoutliers", pa.int32()), ("gmedian", pa.float32()),
+    ("datascale", pa.float32()), ("gmin", pa.float32()), ("gmax", pa.float32()),
+    ("cov5percent", pa.float32()), ("medncov", pa.float32()), ("medpixunc", pa.float32()),
+    ("fwhmmedpix", pa.float32()), ("fwhmminpix", pa.float32()), ("fwhmmaxpix", pa.float32()),
+    ("nsxcatsources", pa.int32()), ("npucatsources", pa.int32()),
 ])
 
 
@@ -432,6 +444,48 @@ def estimate_coverage(job: JobContext, frames: list[Frame], checked: _Checked,
 # ----------------------------------------------------------------------
 
 
+def refimmeta_row(*, rfid: int, field: int, fid: int, ra_center: float, dec_center: float,
+                  mjdobs: list[float], measurements: measure.MosaicMeasurements,
+                  fwhm: catalog.FwhmStatistics) -> dict[str, list]:
+    """The reference's one ``refimmeta`` row, as `dev`'s ``registerCompletedJobsInDB.py`` registers it.
+
+    Parameters
+    ----------
+    rfid : int
+        The reference's ``refimages`` id.
+    field : int
+        The reference's Roman tessellation field.
+    fid : int
+        The filter id.
+    ra_center, dec_center : float
+        The reference's centre [deg], whose NESTED HEALPix indexes are ``hp6``
+        and ``hp9``; any RA wraps (``healpix_indexes`` takes it modulo 360).
+    mjdobs : list of float
+        The coadded frames' ``mjdobs``, one per frame.
+    measurements : rapidpipe.science.reference.measure.MosaicMeasurements
+        The mosaic's coverage, uncertainty and clipped image statistics.
+    fwhm : rapidpipe.science.reference.catalog.FwhmStatistics
+        The SExtractor catalog's FWHM and source count.
+
+    Returns
+    -------
+    dict of str to list
+        One-element columns under :data:`REFIMMETA_SCHEMA`'s names;
+        ``npucatsources`` is ``None``, since no Photutils catalog of the
+        reference is made.
+    """
+    hp6, hp9 = healpix_indexes(ra_center, dec_center)
+    m = measurements
+    row = {"rfid": rfid, "field": field, "hp6": hp6, "hp9": hp9, "fid": fid, "nframes": len(mjdobs),
+           "mjdobsmin": min(mjdobs), "mjdobsmax": max(mjdobs), "npixnan": m.npixnan,
+           "clmean": m.clmean, "clstddev": m.clstddev, "clnoutliers": m.clnoutliers,
+           "gmedian": m.gmedian, "datascale": m.datascale, "gmin": m.gmin, "gmax": m.gmax,
+           "cov5percent": m.cov5percent, "medncov": m.medncov, "medpixunc": m.medpixunc,
+           "fwhmmedpix": fwhm.fwhmmedpix, "fwhmminpix": fwhm.fwhmminpix, "fwhmmaxpix": fwhm.fwhmmaxpix,
+           "nsxcatsources": fwhm.nsexcatsources, "npucatsources": None}
+    return {name: [value] for name, value in row.items()}
+
+
 def _md5_of_file(path: Path) -> str:
     digest = hashlib.md5()
     with path.open("rb") as fh:
@@ -614,6 +668,10 @@ def run(job: JobContext) -> None:
         "refimcatalogs": pa.table({
             "rfid": [rfid], "cattype": [CATALOG_TYPE], "filename": [url(catalog_name)],
             "checksum": [_md5_of_file(o(catalog_name))]}, schema=REFIMCATALOGS_SCHEMA),
+        "refimmeta": pa.table(refimmeta_row(
+            rfid=rfid, field=rtid, fid=int(job.scope["fid"]), ra_center=ra_center, dec_center=dec_center,
+            mjdobs=[f.header.mjdobs for f in coadded], measurements=measurements, fwhm=fwhm),
+            schema=REFIMMETA_SCHEMA),
     }
     for table, data in tables.items():
         pq.write_table(data, job.path / f"{table}.parquet")

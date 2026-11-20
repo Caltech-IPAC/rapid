@@ -40,7 +40,7 @@ BOOKKEEPING = ["runs", "jobs", "official", "job_inputs", "job_fields"]
 STATIC = ["filters", "scas", "surveys", "fields"]
 #: Sets whose child rows share one official binding (schema.sql's views).
 GROUPS = {
-    "refimages": ["refimages", "refimimages", "refimcatalogs"],
+    "refimages": ["refimages", "refimimages", "refimcatalogs", "refimmeta"],
     "sources": ["sources", "xsources", "memberships", "objects", "xmemberships", "xobjects"],
     "packets": ["packets", "forced", "external"],
 }

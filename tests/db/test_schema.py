@@ -21,7 +21,7 @@ SCHEMA = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
 BOOKKEEPING = ("runs", "jobs", "job_inputs", "official")
 STATIC = ("filters", "scas", "surveys", "fields")
 PRODUCT_TABLES = (
-    "exposures", "l2files", "refimages", "refimimages", "refimcatalogs",
+    "exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "refimmeta",
     "diffimages", "psfs", "sources", "xsources", "objects", "memberships", "packets",
     "forced", "external", "catalogs",
 )
