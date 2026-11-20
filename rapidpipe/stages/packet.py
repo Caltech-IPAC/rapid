@@ -156,8 +156,20 @@ transaction and the window's difference images and PSFs fetched);
 ``packet_forced_s``, the forced photometry measured on the window;
 ``packet_matching_s``, the catalog and reference-catalog matches;
 ``packet_cutouts_s``, the trigger's three images read and every stamp cut;
+``packet_calibration_s``, the fluxes converted to nJy and the pixel area
+maps loaded;
 ``packet_assembly_s``, the packets built and written, the stamps' seconds
-excluded. The last four are the ``packet`` summary's ``timing_s``.
+excluded. The last five are the ``packet`` summary's ``timing_s``.
+
+The packets' fluxes are in nJy (new, not `dev`'s; rapid_docs
+``decision-fluxes-in-njy``): each source and forced row is calibrated by
+the zero point and the pixel area map of its own image's ``l2files`` row
+(:func:`calibrate_fluxes`), each distinct map loaded once
+(:func:`area_map_loader`), before assembly, so the object's flux statistics
+are of calibrated fluxes. Each record carries its ``zeroPoint`` and
+``pixelAreaFactor``. The ``forced`` table and the source tables keep
+instrumental fluxes. The summary's ``calibration`` records the maps used
+and how many fluxes had no zero point (null) or no factor (zero point alone).
 """
 
 from __future__ import annotations
@@ -167,7 +179,10 @@ import gzip
 import logging
 import math
 import shutil
+import tempfile
 import time
+import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import fastavro
@@ -182,6 +197,7 @@ from rapidpipe.foundation.children import set_children
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import cache_dir, get, is_staged
 from rapidpipe.foundation.steps import step
+from rapidpipe.science.alerts import calibration
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
     VERSION, AlertContainer, assemble_alert, load_schema, sync_marker_for)
@@ -236,15 +252,20 @@ EXTERNAL_SCHEMA = pa.schema([
 EXPOSURE_COLUMNS = (
     ", f.filter AS band, e.job AS exposure_job, e.exptime,"
     " e.program_id, e.execution_plan, e.pass AS obs_pass, e.segment, e.observation, e.visit,"
-    " e.exposure, e.observation_id, sv.program_title AS survey")
+    " e.exposure, e.observation_id, sv.program_title AS survey,"
+    " lf.zptmag, lf.pixel_area_map")
 #: The exposure is the official ``exposures`` row of the source's (dataset, expid), the one intake
 #: wrote; the survey is a LEFT JOIN, as `dev`'s, so a program not in ``surveys`` drops nothing.
+#: The zero point and the pixel area map's name are those of the L2 row the source's difference
+#: image was made from (rapid_docs ``decision-fluxes-in-njy``; not `dev`'s).
 SOURCE_JOINS = (
     " JOIN filters f ON f.fid = s.fid"
     " LEFT JOIN official oe ON oe.closed_at IS NULL AND oe.product = 'exposures'"
     " AND oe.key = jsonb_build_object('dataset', s.dataset, 'expid', s.expid)"
     " LEFT JOIN exposures e ON e.job = oe.job AND e.dataset = s.dataset AND e.expid = s.expid"
-    " LEFT JOIN surveys sv ON sv.program_id = e.program_id")
+    " LEFT JOIN surveys sv ON sv.program_id = e.program_id"
+    " LEFT JOIN diffimages di ON di.job = s.job AND di.pid = s.pid"
+    " LEFT JOIN l2files lf ON lf.rid = di.rid")
 
 #: The trigger set's xmemberships: its xsources' xobjects and their fields, from the children of
 #: ``xmemberships`` its difference job wrote (``xmemberships_of``), never the parent (``{aid}``
@@ -391,7 +412,7 @@ def xsource_fields(row: dict) -> dict:
 WINDOW_SQL = (
     "SELECT d.job, d.pid, d.rid, d.dataset, d.expid, d.sca, d.fid, d.filename,"
     " d.ra1, d.dec1, d.ra2, d.dec2, d.ra3, d.dec3, d.ra4, d.dec4, f.filter,"
-    " l.mjdobs, l.exptime, l.job AS l2_job, l.filename AS l2file"
+    " l.mjdobs, l.exptime, l.job AS l2_job, l.filename AS l2file, l.zptmag, l.pixel_area_map"
     " FROM diffimages d JOIN filters f ON f.fid = d.fid JOIN l2files l ON l.rid = d.rid"
     " WHERE d.dataset = %(dataset)s"
     " AND 2 * asin(sqrt(power(sin(radians(d.dec0 - %(dec0)s) / 2), 2) + cos(radians(d.dec0))"
@@ -442,6 +463,8 @@ class WindowImage:
     sci_psf: Path | None                          # None: no psfs row for the image; science not measured
     l2: str | None = None                         # the L2 file's URL: the trigger's header holds the ephemeris
     exptime: float | None = None                  # the L2 row's EXPTIME: the forced record's mid-time
+    zptmag: float | None = None                   # the L2 row's AB zero point: its forced fluxes in nJy
+    pixel_area_map: str | None = None             # the L2 row's pixel area map, by its CRDS name
 
 
 @dataclasses.dataclass
@@ -696,7 +719,7 @@ def _read(job: JobContext) -> Read:
                 diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[plain]),
                 diff_uncert=_beside(d["filename"], uncert) if uncert else None,
                 sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf, l2=d["l2file"],
-                exptime=d["exptime"]))
+                exptime=d["exptime"], zptmag=d["zptmag"], pixel_area_map=d["pixel_area_map"]))
 
         reuse: dict[int, dict] = {}
         reused_sets = {}
@@ -937,19 +960,133 @@ def measure_forced(images: list[WindowImage], positions: list[fp.Position],
     return rows, measured
 
 
-def _forced_phot(row: dict, exptime: float | None) -> ForcedPhot:
-    """The forced record of a ``forced`` row, with its image's exposure time (its mid-time's).
+def _forced_phot(row: dict, exptime: float | None, zptmag: float | None = None,
+                 factor: float | None = None) -> ForcedPhot:
+    """The forced record of a ``forced`` row, its fluxes in nJy, with its image's exposure time.
+
+    The row's fluxes are instrumental and stay so; the record's are
+    calibrated by the measured image's zero point ``zptmag`` and its pixel
+    area map's ``factor`` at the row's position (:func:`calibrate_fluxes`),
+    null without a zero point.
 
     TODO (Emily, 2026-11-16): the ``forced`` row should store the exposure
     time; until it does the window image's ``l2files`` row supplies it.
     """
+    scale = calibration.njy_per_dn_s(zptmag)
+    fluxes = {name: calibration.calibrate(row[column], scale, factor)
+              for name, column in (("flux", "psf_flux"), ("fluxerr", "psf_fluxerr"),
+                                   ("science_flux", "science_flux"),
+                                   ("science_fluxerr", "science_fluxerr"))}
     return ForcedPhot(forced_id=row["forced_id"], aid=row["aid"], expid=row["expid"],
                       sca=row["sca"], ra=row["ra"], dec=row["dec"], mjdobs=row["mjdobs"],
                       exptime=exptime,
                       time_proc=row["time_proc"], band=row["band"] or None,
-                      flux=row["psf_flux"], fluxerr=row["psf_fluxerr"],
-                      science_flux=row["science_flux"],
-                      science_fluxerr=row["science_fluxerr"], flags=row["flags"])
+                      flags=row["flags"], zptmag=zptmag, pixel_area_factor=factor, **fluxes)
+
+
+def calibrate_fluxes(read: Read, forced_rows: list[dict],
+                     load_map: Callable[[str], np.ndarray | None]) -> tuple[dict[int, tuple], dict]:
+    """Convert the set's sources to nJy in place and give each forced row's calibration.
+
+    Every flux a packet carries is calibrated by its own image's zero point
+    and pixel area map (rapid_docs ``decision-fluxes-in-njy``). The
+    triggers and their objects' members, each once: ``fluxfit``,
+    ``fluxerr``, ``apflux`` and ``apfluxerr`` become nJy and
+    ``pixel_area_factor`` the map's value at (``xfit``, ``yfit``), so the
+    object statistics computed from them at assembly are calibrated too. A
+    source whose image has no zero point gets null fluxes. Call it once
+    per :class:`Read`.
+
+    Parameters
+    ----------
+    read : Read
+        What the job read; its sources are changed in place.
+    forced_rows : list of dict
+        The set's ``forced`` rows, unchanged: the table keeps instrumental
+        fluxes.
+    load_map : callable
+        A pixel area map's CRDS name to its array, or None when it cannot
+        be had (:func:`area_map_loader`).
+
+    Returns
+    -------
+    dict
+        ``forced_id`` to ``(zptmag, factor)`` of the row's image and
+        position, for :func:`_forced_phot`.
+    dict
+        The manifest's record: the maps used and the counts calibrated
+        without a zero point or a factor.
+    """
+    image_of = {i.rid: i for i in read.images}
+    sources = {id(s): s for s in read.triggers}
+    for members in read.members.values():
+        for _, member in members:
+            sources.setdefault(id(member), member)
+    positions = {("source", key): (s.pixel_area_map, s.xfit, s.yfit) for key, s in sources.items()}
+    for row in forced_rows:
+        image = image_of.get(row["rid"])
+        # a forced row's x and y are 1-based (FITS); a source's xfit and yfit are zero-based
+        positions["forced", row["forced_id"]] = (image.pixel_area_map if image else None,
+                                                 row["x"] - 1.0, row["y"] - 1.0)
+    factors = calibration.area_factors(positions, load_map)
+    no_zero_point = 0
+    for key, s in sources.items():
+        scale = calibration.njy_per_dn_s(s.zptmag)
+        no_zero_point += scale is None
+        s.pixel_area_factor = factors.get(("source", key))
+        for name in ("fluxfit", "fluxerr", "apflux", "apfluxerr"):
+            setattr(s, name, calibration.calibrate(getattr(s, name), scale, s.pixel_area_factor))
+    forced = {row["forced_id"]: (getattr(image_of.get(row["rid"]), "zptmag", None),
+                                 factors.get(("forced", row["forced_id"]))) for row in forced_rows}
+    record = {"maps": sorted({name for name, _, _ in positions.values() if name}),
+              "sources": len(sources), "sources_without_zero_point": no_zero_point,
+              "sources_without_area_factor": sum(1 for s in sources.values()
+                                                 if s.pixel_area_factor is None),
+              "forced_without_zero_point": sum(1 for z, _ in forced.values()
+                                               if calibration.njy_per_dn_s(z) is None),
+              "forced_without_area_factor": sum(1 for _, f in forced.values() if f is None)}
+    if no_zero_point or record["forced_without_zero_point"]:
+        logger.warning("calibration: %d sources and %d forced rows have no zero point; their fluxes"
+                       " are null", no_zero_point, record["forced_without_zero_point"])
+    return forced, record
+
+
+def area_map_loader(settings: dict) -> Callable[[str], np.ndarray | None]:
+    """A loader of pixel area maps by CRDS name, for :func:`calibrate_fluxes`.
+
+    A map is read from ``[pixel_area_map] store`` when the run names one,
+    else, or when the store lacks it, fetched by name from ``crds_server``.
+    When neither gives it the loader warns and returns None, and the fluxes
+    on that map's images are calibrated by their zero points alone: a
+    missing map never fails a packet job. A run whose settings predate the
+    ``[pixel_area_map]`` table has neither and loads none.
+    """
+    table = settings.get("pixel_area_map", {})
+    store, server = table.get("store", ""), table.get("crds_server", "")
+
+    def load(name: str) -> np.ndarray | None:
+        if store:
+            try:
+                return calibration.load_area_map(get(store.rstrip("/") + "/" + name))
+            except Exception as error:  # noqa: BLE001 - a missing map never fails a packet job
+                logger.warning("pixel area map %s: not read from the store: %s: %s",
+                               name, type(error).__name__, error)
+        if server:
+            try:
+                with tempfile.TemporaryDirectory(prefix="rapidpipe-area-map-") as scratch:
+                    path = Path(scratch) / name
+                    url = server.rstrip("/") + "/unchecked_get/references/roman/" + name
+                    with urllib.request.urlopen(url, timeout=120) as reply, path.open("wb") as stream:
+                        shutil.copyfileobj(reply, stream, 1 << 20)
+                    return calibration.load_area_map(path)
+            except Exception as error:  # noqa: BLE001
+                logger.warning("pixel area map %s: not fetched from CRDS: %s: %s",
+                               name, type(error).__name__, error)
+        logger.warning("pixel area map %s: not available; its images' fluxes are calibrated by"
+                       " their zero points alone", name)
+        return None
+
+    return load
 
 
 def history(trigger: tuple[int, Source], members: list[tuple[int, Source]],
@@ -1097,7 +1234,8 @@ def run(job: JobContext) -> None:
     with step("write_set"):
         summary = write_set(read, job.settings["packet"], job.path, job.prefix, job.dataset,
                             sync_seed=f"{job.job}/{job.attempt}",
-                            reliability=reliability(job.settings))
+                            reliability=reliability(job.settings),
+                            load_map=area_map_loader(job.settings))
     # A source set with no triggers is a set of no packets, validly; one with triggers is not.
     with step("manifest"):
         job.write_manifest([("packets", "packets.parquet"), ("forced", "forced.parquet"),
@@ -1123,11 +1261,14 @@ def reliability(settings: dict) -> tuple[float, str]:
 
 
 def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
-              sync_seed: str, reliability: tuple[float | None, str | None] = (None, None)) -> dict:
+              sync_seed: str, reliability: tuple[float | None, str | None] = (None, None),
+              load_map: Callable[[str], np.ndarray | None] = lambda name: None) -> dict:
     """Build the packet set from what was read; write its files under ``path``.
 
     ``prefix`` is ``path``'s URL, recorded in the index. ``reliability`` is
-    stamped on every scored trigger (:func:`reliability`). Returns the
+    stamped on every scored trigger (:func:`reliability`). ``load_map``
+    gives a pixel area map by its CRDS name (:func:`area_map_loader`; the
+    default loads none, so fluxes are calibrated by zero point alone). Returns the
     manifest's ``packet`` summary: counts, the Avro size and the timing.
     """
     trigger_mjd = read.trigger_image.mjdobs
@@ -1181,6 +1322,11 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                 raise ValueError(f"the trigger's {kind} image {stamp_path} could not be read")
     timing["cutouts_s"] = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
+    with step("calibration"):  # every flux a packet carries to nJy; the forced rows stay instrumental
+        forced_calibration, calibrated = calibrate_fluxes(read, forced_rows, load_map)
+    timing["calibration_s"] = time.perf_counter() - t0
+
     exptime_of = {i.rid: i.exptime for i in read.images}  # each forced row's image, by rid
     forced_by_aid: dict[int, list[dict]] = {}
     for row in forced_rows:
@@ -1215,7 +1361,8 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
                                          for kind, (pixels, header) in stamps.items()})
                 cutout_s += time.perf_counter() - c0
                 lo = trigger_mjd - float(settings["forced_window_days"])
-                forced = [_forced_phot(r, exptime_of.get(r["rid"])) for r in forced_by_aid.get(aid, [])
+                forced = [_forced_phot(r, exptime_of.get(r["rid"]), *forced_calibration[r["forced_id"]])
+                          for r in forced_by_aid.get(aid, [])
                           if lo <= r["mjdobs"] <= source.mjdobs + TRIGGER_EPSILON_DAYS]
                 alert = assemble_alert(source, obj, prv, ss_matches=ss_matches, ref_matches=ref_matches,
                                        ned_matches=ned_matches, lvs_matches=lvs_matches,
@@ -1274,6 +1421,7 @@ def write_set(read: Read, settings: dict, path: Path, prefix: str, dataset: str,
             "window_without_science_psf": sum(1 for i in window if i.sci_psf is None),
             "forced_rows": len(forced_rows),
             "forced_measured": measured, "forced_reused": len(forced_rows) - measured,
+            "calibration": calibrated,
             **{f"{kind}_matches": sum(len(m) for m in matches[kind] if m) for kind in CATALOG_KINDS},
             "catalogs": records,
             "catalogs_failed": sorted(kind for kind, r in records.items() if "error" in r),

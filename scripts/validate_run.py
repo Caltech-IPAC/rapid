@@ -445,8 +445,10 @@ def packet_set_failures(job: int) -> tuple[list[str], Counter]:
         return [f"packet job {job}: {len(sources_in)} source sets of its key among its inputs"], counts
     forced = {r["forced_id"]: r for r in read_output(job, "forced").to_pylist()}
     rids = sorted({r["rid"] for r in forced.values()})
-    exptime = {r["rid"]: r["exptime"] for r in q("SELECT rid, exptime FROM l2files WHERE rid = ANY(%s)",
-                                                 (rids,))} if rids else {}
+    l2 = {r["rid"]: r for r in q("SELECT rid, exptime, zptmag FROM l2files WHERE rid = ANY(%s)",
+                                 (rids,))} if rids else {}
+    exptime = {rid: r["exptime"] for rid, r in l2.items()}
+    zptmag = {rid: r["zptmag"] for rid, r in l2.items()}
     (run_row,) = q("SELECT r.settings FROM jobs j JOIN runs r ON r.id = j.run WHERE j.id = %s", (job,))
     size = 2 * int(run_row["settings"]["packet"]["stamp_half_width"]) + 1
     # The index's aid and sid name xobjects and xsources (rapid_docs decision-packets-from-xsources;
@@ -502,8 +504,7 @@ def packet_set_failures(job: int) -> tuple[list[str], Counter]:
             expected_mid = stored["mjdobs"] + (exptime.get(stored["rid"]) or 0.0) / 2.0 / 86400.0
             if abs(entry["midpointMjd"] - expected_mid) > 1.0e-8:   # the row's start plus half its exposure
                 differ.append("midpointMjd")
-            differ += [f for f, c in rpk.FORCED_FLOAT32.items()
-                       if not rpk._same(entry[f], rpk._float32(stored[c]))]
+            differ += rpk.forced_flux_differences(entry, stored, zptmag.get(stored["rid"]))
             if differ:
                 bad.append(f"{where}: forced {entry['diaForcedSourceId']} differs in {', '.join(differ)}")
     if counts["packets"] != len(index):
