@@ -95,7 +95,9 @@ the pipeline imports.
   `2026-11-20-exposure-ids.sql` (the last after the other two; it records
   every exposure already stored under the id it has and refuses, changing
   nothing, where it cannot), then `2026-11-20-run-stopped.sql` (three
-  nullable columns on `runs`, which `rapidpipe run stop` writes).
+  nullable columns on `runs`, which `rapidpipe run stop` writes), then
+  `2026-11-23-pixel-area-map.sql` (one nullable column on `l2files`,
+  which intake writes).
 
   Applying one is one command, run by whoever merges the pull request that
   adds it, from their own workstation under its instance role, with no

@@ -204,13 +204,15 @@ def run_intake(tmp_path: Path, source: Path, stem: str = STEM, *,
                crpix_shift: tuple[float, float] = (0.0, 0.0),
                rederive_wcs: bool = False, program_id: int | str = -1,
                surveys: tuple[int, ...] = (-1, -4), expid: int = EXPID, exposure_ids=None,
-               gw_ghost=()) -> Path:
+               gw_ghost=(), pixel_area_map: dict | None = None) -> Path:
     prefix = tmp_path / "outputs"
     prefix.mkdir(parents=True)
     settings = {**SETTINGS, "intake": {**SETTINGS["intake"], "source_root": source.as_uri() + "/",
                                        "dq_mask_bits": dq_mask_bits, "crpix_shift": list(crpix_shift),
                                        "gw_ghost": list(gw_ghost),
                                        "rederive_wcs": rederive_wcs, "program_id": program_id}}
+    if pixel_area_map is not None:
+        settings["pixel_area_map"] = pixel_area_map
     expects = [{"kind": "expects", "product": "l2files", "key": {}, "source_job": None,
                 "binding": None}]
     if expects_exposure:
@@ -691,3 +693,107 @@ def test_an_unreadable_masked_node_fails_intake_and_an_unknown_extra_is_skipped(
             read(_Nodes(nodes, {"err"}))
     assert [name for name, _ in asdf_image_nodes(_Nodes(nodes, {"extra"}))] == ["data", "err"]
     assert asdf_table_nodes(_Nodes(nodes, {"extra"})) == []
+
+
+# The pixel area map's name: the file's own, else CRDS's best reference, else the store's index.
+
+AREA_MAP = "roman_wfi_area_0085.asdf"
+AREA_SETTINGS = {"lookup": True, "store": "", "crds_server": "https://crds.invalid",
+                 "crds_context": "roman-operational"}
+
+
+def crds_answers(monkeypatch, answer) -> list:
+    """Replace the CRDS query: it returns ``answer``, or raises it when it is an exception. Returns its calls."""
+    calls = []
+
+    def best_reference(*args):
+        calls.append(args)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(intake.crds, "best_reference", best_reference)
+    return calls
+
+
+def test_the_area_map_name_is_the_files_own_when_it_names_one_and_crds_is_not_asked(
+        tmp_path, source, monkeypatch):
+    from roman_datamodels import datamodels
+
+    named = tmp_path / "named.asdf"
+    with datamodels.open(source / f"{STEM}_cal.asdf") as model:
+        model.meta.ref_file.area = f"crds://{AREA_MAP}"
+        model.save(named)
+    calls = crds_answers(monkeypatch, AssertionError("CRDS was asked"))
+    assert intake.pixel_area_map(named, AREA_SETTINGS) == (AREA_MAP, "file")
+    assert calls == []
+
+
+def test_a_file_naming_no_area_map_asks_crds_by_its_detector_and_start_time(source, monkeypatch):
+    calls = crds_answers(monkeypatch, AREA_MAP)
+    assert intake.pixel_area_map(source / f"{STEM}_cal.asdf", AREA_SETTINGS) == (AREA_MAP, "crds")
+    assert calls == [("https://crds.invalid", "roman-operational", "WFI08", "2027-07-01T15:28:47", "area")]
+
+
+def test_when_crds_does_not_answer_the_stores_index_gives_the_detectors_latest_map_at_the_start(
+        tmp_path, source, monkeypatch):
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "index.json").write_text(json.dumps({"maps": [
+        {"detector": "WFI08", "useafter": "2026-10-13T00:00:00", "name": "roman_wfi_area_0080.asdf"},
+        {"detector": "WFI08", "useafter": "2027-03-01T00:00:00", "name": "roman_wfi_area_0101.asdf"},
+        {"detector": "WFI08", "useafter": "2027-09-01T00:00:00", "name": "roman_wfi_area_0120.asdf"},
+        {"detector": "WFI16", "useafter": "2027-06-01T00:00:00", "name": "roman_wfi_area_0116.asdf"}]}))
+    crds_answers(monkeypatch, intake.crds.CRDSError("no answer"))
+    found = intake.pixel_area_map(source / f"{STEM}_cal.asdf", {**AREA_SETTINGS, "store": store.as_uri()})
+    assert found == ("roman_wfi_area_0101.asdf", "index")
+
+
+@pytest.mark.parametrize("store", ["", "missing", "later"])
+def test_when_no_source_gives_a_name_none_is_returned_with_a_warning(
+        tmp_path, source, monkeypatch, caplog, store):
+    if store:
+        (tmp_path / "later").mkdir()
+        (tmp_path / "later" / "index.json").write_text(json.dumps({"maps": [
+            {"detector": "WFI08", "useafter": "2027-09-01T00:00:00", "name": "roman_wfi_area_0120.asdf"}]}))
+        store = (tmp_path / store).as_uri()
+    crds_answers(monkeypatch, intake.crds.CRDSError("no answer"))
+    with caplog.at_level("WARNING"):
+        found = intake.pixel_area_map(source / f"{STEM}_cal.asdf", {**AREA_SETTINGS, "store": store})
+    assert found == (None, None)
+    assert "no name found for WFI08" in caplog.text
+
+
+def test_under_lookup_the_name_is_the_pamref_keyword_the_l2files_column_and_in_the_manifest(
+        tmp_path, source, monkeypatch):
+    crds_answers(monkeypatch, AREA_MAP)
+    prefix = run_intake(tmp_path, source, pixel_area_map=AREA_SETTINGS)
+    with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
+        assert hdul[0].header["PAMREF"] == AREA_MAP
+    (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
+    assert l2file["pixel_area_map"] == AREA_MAP
+    manifest = json.loads((prefix / "manifest.json").read_text())
+    assert manifest["pixel_area_map"] == {"name": AREA_MAP, "source": "crds"}
+    assert "pixel_area_map" in manifest["conversion"]["timings_s"]
+
+
+@pytest.mark.parametrize("table", [None, {**AREA_SETTINGS, "lookup": False}])
+def test_without_lookup_or_its_settings_table_crds_is_not_asked_and_no_name_is_recorded(
+        tmp_path, source, monkeypatch, table):
+    calls = crds_answers(monkeypatch, AssertionError("CRDS was asked"))
+    prefix = run_intake(tmp_path, source, pixel_area_map=table)
+    with gzip.open(prefix / f"{STEM}_cal.fits.gz") as stream, fits.open(stream) as hdul:
+        assert "PAMREF" not in hdul[0].header
+    (l2file,) = pq.read_table(prefix / "l2files.parquet").to_pylist()
+    assert l2file["pixel_area_map"] is None
+    assert "pixel_area_map" not in json.loads((prefix / "manifest.json").read_text())
+    assert calls == []
+
+
+def test_lookup_under_a_reader_other_than_soc_l2_is_refused(tmp_path):
+    settings = {"intake": {**SETTINGS["intake"], "reader": "rimtimsim"}, "pixel_area_map": AREA_SETTINGS}
+    job = JobContext(job=1, run=1, stage="intake", scope={"dataset": "r00342", "file": STEM},
+                     survey="HLWAS", dataset="r00342", settings=settings, inputs=[], attempt=1,
+                     prefix=tmp_path.as_uri() + "/", connect=fake_connect(""))
+    with pytest.raises(ValueError, match="pixel_area_map"):
+        intake.run(job)
