@@ -1,12 +1,12 @@
 """The ``rapidpipe`` command-line tool.
 
-The five foundation verbs (foundation plan v5, milestone 0) wrap
+The foundation verbs (foundation plan v5, milestone 0, and those added since) wrap
 ``rapidpipe.foundation``:
 
 - ``run create [--who] --why [--revision] [--settings FILE] [--overlay FILE]
   [--set TABLE.key=value ...] --survey --dataset`` records a run and prints
-  its id; ``--who`` is the login name when left out (here and on
-  ``official change`` and ``official undo``; never ``root``, which names
+  its id; ``--who`` is the login name when left out (here, on ``run stop``
+  and on ``official change`` and ``official undo``; never ``root``, which names
   nobody), and ``--revision`` is ``RAPID_SOURCE_REVISION``, the commit of
   the code this process runs, where the environment sets it (the image
   does, to the commit it was built from; ``scripts/dev.sh`` does when its
@@ -50,8 +50,8 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   runs an existing job's next attempt. Both run the stage's ``run(job)``
   in this process under ``RAPIDPIPE_OUTPUTS_ROOT`` and publish it
   (``rapidpipe.foundation.run_job``), printing the publisher's result;
-- ``job submit`` takes ``job local``'s arguments and ``--job-definition``
-  (or ``--job <id>`` in their place, a new attempt of an existing job),
+- ``job submit`` takes ``job local``'s arguments (or ``--job <id>`` in their
+  place, a new attempt of an existing job) and ``--job-definition``, always,
   records the job and submits one Batch job running ``job run --job <id>``
   in the image (``rapidpipe.launch.submit``) asking for the run's
   ``[batch.memory_mib]`` memory and ``[batch.vcpus]`` vCPUs for the stage, recording the Batch job id
@@ -62,7 +62,8 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   states; exit 0 when every job published, 1 when one failed, 2 when the
   timeout passes first: one blocking waiter for hand-submitted jobs;
 - ``loop --run [--filters] [--scas] [--pointings] [--passes] [--exposures] [--programs] [--stems]
-  [--mjd LO-HI | --dates LO..HI] (--job-definition D | --local | --dry-run) [--stage NAME] [--once]``
+  [--mjd LO-HI | --dates LO..HI] (--job-definition D [--job-queue Q] | --local | --dry-run)
+  [--stage NAME] [--once] [--max-intake N] [--interval S]``
   carries the selection (every term ``all`` when left out, each term's
   help saying whether it bounds the files taken in, the official L2 rows,
   or both) one stage forward per pass on Batch and ends each

@@ -331,7 +331,9 @@ regression), run 158 (FAIL on the consumer only: the gate holds all but one of i
 
 What an operator runs at the tip of `rebuild`. rapid_docs' loop page,
 Starting a night, is the verbatim recipe for a night and its exit-code
-table; the README's Getting started runs one epoch locally.
+table; the README's Getting started is two worked examples, a local test
+(one HLWAS epoch by `scripts/dev.sh` and `loop --local`) and a flight
+program on SMDC (create, loop on Batch, check, stop, clean up).
 
 **The environment.** Account names come from rapid_systems, never from
 this repository. A night runs on a workstation under its own instance
