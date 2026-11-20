@@ -86,6 +86,22 @@ DEFAULT_BACKOFF_CAP_S = 8.0
 # placed seconds apart, could all fall inside one reboot.
 DEFAULT_CONNECT_RETRY_S = 300.0
 
+# The budget a Batch job (`job run`) and the loop's service (`serve`) pass
+# instead: the longest the database is closed by a central roll. A swap of
+# rapid-db's root closes the pooler from the old root's shutdown to the new
+# root's `db-fence open`: 197 s measured for a good swap, 269 s for a failed
+# proof and its way back; a silent root (one that never reports, so the roll
+# waits out its timeout before the way back) is estimated at about 1,170 s.
+# 1,800 s is that plus about ten minutes of headroom. A person at a terminal
+# keeps the default above. RAPIDPIPE_CONNECT_RETRY_S overrides it (the
+# continuity proof's live cases).
+SERVICE_CONNECT_RETRY_S = 1800.0
+
+
+def service_retry_seconds() -> float:
+    """The connect budget of a Batch job or the service: :data:`SERVICE_CONNECT_RETRY_S`, or its override."""
+    return float(os.environ.get("RAPIDPIPE_CONNECT_RETRY_S") or SERVICE_CONNECT_RETRY_S)
+
 # The maintenance lock a refused connect names in its log, once per connect():
 # an SSM String parameter, `<run_id> <state> <expires> <step> <target>`,
 # absent when no window holds it. RAPID_MAINTENANCE_SSM_ROOT names its tree,
@@ -630,7 +646,8 @@ def transaction(**kwargs: Any) -> Iterator[psycopg2.extensions.connection]:
         try:
             yield conn
         except BaseException:
-            conn.rollback()
+            if not conn.closed:     # a closed connection's rollback would replace the error
+                conn.rollback()
             raise
         else:
             conn.commit()

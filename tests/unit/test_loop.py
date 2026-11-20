@@ -315,7 +315,7 @@ def test_a_failed_chain_holds_only_its_own_work_and_the_loop_exits_1_once_the_re
     monkeypatch.setattr(loop, "snapshot", lambda conn, run: next(passes))
     monkeypatch.setattr(cli, "connect", lambda **kw: contextlib.nullcontext(None))
     monkeypatch.setattr(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
-    monkeypatch.setattr(cli.foundation, "create_job", lambda conn, run, stage, *a: submitted.append(stage) or 91)
+    monkeypatch.setattr(cli.foundation, "create_job", lambda conn, run, stage, *a, **kw: submitted.append(stage) or 91)
     monkeypatch.setattr(cli.launch, "submit", lambda *a, **kw: "batch-91")
     monkeypatch.setattr(cli.launch, "job_environment", lambda settings: {})
     monkeypatch.setattr(cli.storage, "s3_client",

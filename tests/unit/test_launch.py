@@ -45,6 +45,8 @@ def test_submit_runs_job_run_for_the_job_with_the_outputs_root(batch_env):
 class _Conn:
     """Records the statements a submission runs and whether it committed."""
 
+    closed = 0
+
     def __init__(self):
         self.statements, self.committed = [], False
 

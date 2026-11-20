@@ -973,3 +973,34 @@ def wait(conn_factory: Callable[[], Any], jobs: list[int], batch: Any, timeout: 
         if ended or seconds >= timeout:
             return {"states": states, "ended": ended, "seconds": seconds}
         sleep(min(interval, max(0.0, timeout - seconds)))
+
+
+def open_loop(conn, run: int, instruction: dict, who: str) -> int:
+    """Record a served loop of ``run`` (``loop --serve``): its ``instruction``, the loop's own
+    arguments, for ``rapidpipe serve``; return its id. A run's second open loop is refused by the
+    table's index (``psycopg2.errors.UniqueViolation``)."""
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO loops (run, instruction, opened_by) VALUES (%s, %s, %s) RETURNING id",
+                    (run, psycopg2.extras.Json(instruction), who))
+        loop_id = cur.fetchone()[0]
+    conn.commit()
+    return loop_id
+
+
+def open_loops(conn, job_definition: str) -> list[dict]:
+    """The open loops whose instruction names ``job_definition``, oldest first: ``id``, ``run``,
+    ``instruction`` and ``passed_at`` (``None`` before the loop's first pass)."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        rows = _rows(cur, "SELECT id, run, instruction, passed_at FROM loops WHERE closed_at IS NULL"
+                          " AND instruction ->> 'job_definition' = %s ORDER BY id", (job_definition,))
+    conn.commit()
+    return rows
+
+
+def record_pass(conn, loop_id: int, exit_code: int | None) -> None:
+    """Record a pass of a served loop, and close it with ``exit_code`` unless that is ``None``."""
+    with conn.cursor() as cur:
+        cur.execute("UPDATE loops SET passed_at = now(), closed_at = CASE WHEN %(code)s::integer IS NULL"
+                    " THEN NULL ELSE now() END, exit_code = %(code)s WHERE id = %(id)s",
+                    {"code": exit_code, "id": loop_id})
+    conn.commit()

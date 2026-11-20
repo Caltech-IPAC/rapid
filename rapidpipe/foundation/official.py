@@ -94,7 +94,8 @@ def change(conn, group: Iterable[dict], who: str, why: str) -> int:
             group_id = apply(cur, group, who, why)
         conn.commit()
     except BaseException:
-        conn.rollback()
+        if not conn.closed:     # a closed connection's rollback would replace the error
+            conn.rollback()
         raise
     return group_id
 

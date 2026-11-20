@@ -46,14 +46,19 @@ def create_run(conn, who: str, why: str, revision: str, settings: dict,
             run_id = cur.fetchone()[0]
         conn.commit()
     except BaseException:
-        conn.rollback()
+        if not conn.closed:     # a closed connection's rollback would replace the error
+            conn.rollback()
         raise
     return run_id
 
 
 def create_job(conn, run_id: int, stage: str, scope: dict,
-               inputs: Iterable[dict] = (), expects: Iterable[dict] = ()) -> int:
-    """Record a job in state ``launched`` with its inputs; return its id."""
+               inputs: Iterable[dict] = (), expects: Iterable[dict] = (), commit: bool = True) -> int:
+    """Record a job in state ``launched`` with its inputs; return its id.
+
+    With ``commit`` false the rows stay in the caller's transaction: the loop
+    commits them with the Batch job's id, once (``rapidpipe loop``'s submit).
+    """
     rows = (
         [("input", i["product"], i["key"], i.get("source_job"), i.get("binding")) for i in inputs]
         + [("expects", e["product"], e["key"], None, e["binding"]) for e in expects])
@@ -67,9 +72,11 @@ def create_job(conn, run_id: int, stage: str, scope: dict,
                     "INSERT INTO job_inputs (job, kind, product, key, source_job, binding)"
                     " VALUES (%s, %s, %s, %s, %s, %s)",
                     (job_id, kind, product, Json(key), source_job, binding))
-        conn.commit()
+        if commit:
+            conn.commit()
     except BaseException:
-        conn.rollback()
+        if not conn.closed:     # a closed connection's rollback would replace the error
+            conn.rollback()
         raise
     return job_id
 
