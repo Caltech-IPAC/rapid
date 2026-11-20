@@ -27,12 +27,19 @@ is dev's JSON shape, ``sinusoidal`` with ``amplitude`` 0 (dev has no
 constant type; a zero-amplitude sinusoid is one).
 
 The truth table, one row per source per injected epoch (``src_id, ra, dec,
-x, y, mag_ab, dnps, zp, expid, sca, fid, mjd, dataset``; ``x``, ``y`` the
-zero-based pixel the file's stored WCS gives, where the source was rendered;
-``dnps`` the injected DN/s from the file's own photometric zero point
-``zp``), is written to ``--truth`` and uploaded once to
-``<dest>catalog/<its file name>``, never rewritten; ``completeness.py``
-reads every file there.
+x, y, mag_ab, dnps, zp, exposure, sca, fid, mjd, dataset``; ``exposure`` the
+exposure's name, the stem without its detector and ``_cal``, which
+``completeness.py`` maps to the run's ``expid`` through ``exposure_ids``;
+``x``, ``y`` the zero-based pixel the file's stored WCS gives, where the
+source was rendered; ``dnps`` the injected DN/s from the file's own
+photometric zero point ``zp``), is written to ``--truth`` and uploaded once
+to ``<dest>catalog/<its file name>``, never rewritten; ``completeness.py``
+reads every file there. Each file's injection noise is seeded from
+``--seed``, the SHA-256 digest of the exposure's name and the SCA, so a new
+injection differs from one made under the packed id of the time before the
+serial (the footprint already written, ``r00342-inj1``, is not rewritten
+and its truth still carries packed ids, which ``completeness.py`` reads
+through its legacy mapping).
 
 Writes are one ``put-object`` per object with ``If-None-Match: *`` (the
 inputs bucket's policy refuses anything else): an object already there is
@@ -71,9 +78,10 @@ CRDS_SERVER = "https://roman-crds.stsci.edu"
 os.environ.setdefault("CRDS_SERVER_URL", CRDS_SERVER)
 os.environ.setdefault("CRDS_PATH", str(Path(os.environ.get("TMPDIR", ".")) / "inject-dataset" / "crds"))
 
-import numpy as np  # noqa: E402 - after the CRDS environment
+import hashlib  # noqa: E402 - after the CRDS environment
+import numpy as np  # noqa: E402
 
-from rapidpipe.foundation.loop import STEM, Selection, list_stems, stem_expid  # noqa: E402
+from rapidpipe.foundation.loop import STEM, Selection, list_stems, stem_ids  # noqa: E402
 from rapidpipe.stages.intake import FIDS  # noqa: E402
 from rapidpipe.products import storage  # noqa: E402
 
@@ -84,7 +92,7 @@ DEV_EDGE = 50.0
 #: The intake's filter names by the stem's ``fNNN``.
 FILTER_NAMES = {"f062": "R062", "f087": "Z087", "f106": "Y106", "f129": "J129", "f146": "W146",
                 "f158": "H158", "f184": "F184", "f213": "K213"}
-TRUTH_COLUMNS = ("src_id", "ra", "dec", "x", "y", "mag_ab", "dnps", "zp", "expid", "sca", "fid",
+TRUTH_COLUMNS = ("src_id", "ra", "dec", "x", "y", "mag_ab", "dnps", "zp", "exposure", "sca", "fid",
                  "mjd", "dataset")
 
 
@@ -124,7 +132,7 @@ def catalog_json(sources: list[dict]) -> dict:
 
 def truth_rows(sources: list[dict], image: dict, dataset: str) -> list[dict]:
     """One row per source dev's function places on ``image`` (its ``to_pixel``, ``shape``, ``mjd``,
-    ``zp``, ``expid``, ``sca``, ``fid``)."""
+    ``zp``, ``exposure``, ``sca``, ``fid``)."""
     ra = np.array([s["ra"] for s in sources])
     dec = np.array([s["dec"] for s in sources])
     x, y = image["to_pixel"](ra, dec)
@@ -135,14 +143,16 @@ def truth_rows(sources: list[dict], image: dict, dataset: str) -> list[dict]:
             continue
         rows.append({"src_id": s["src_id"], "ra": s["ra"], "dec": s["dec"], "x": float(xi), "y": float(yi),
                      "mag_ab": s["mag"], "dnps": float(10 ** (-0.4 * (s["mag"] - image["zp"]))),
-                     "zp": image["zp"], "expid": image["expid"], "sca": image["sca"], "fid": image["fid"],
+                     "zp": image["zp"], "exposure": image["exposure"], "sca": image["sca"], "fid": image["fid"],
                      "mjd": image["mjd"], "dataset": dataset})
     return rows
 
 
 def file_seed(seed: int, stem: str) -> int:
-    """The injection's noise seed for one file, from ``--seed`` and the file's expid and SCA."""
-    return int(np.random.SeedSequence([seed, stem_expid(stem), pointing_key(stem)[2]]).generate_state(1)[0])
+    """The injection's noise seed for one file, from ``--seed``, the SHA-256 digest of the exposure's name and
+    the SCA."""
+    digest = int.from_bytes(hashlib.sha256(stem_ids(stem)["name"].encode()).digest(), "big")
+    return int(np.random.SeedSequence([seed, digest, pointing_key(stem)[2]]).generate_state(1)[0])
 
 
 def put_once(client, url: str, body: Any) -> bool:
@@ -174,8 +184,9 @@ def open_image(path: Path, stem: str) -> dict:
 
 
 def keyed(image: dict, stem: str) -> dict:
+    """``image`` with the stem's keys: the exposure's name, the SCA and the fid."""
     m = STEM.match(stem)
-    return {**image, "expid": stem_expid(stem), "sca": int(m["sca"]), "fid": FIDS[FILTER_NAMES[m["filter"]]]}
+    return {**image, "exposure": stem_ids(stem)["name"], "sca": int(m["sca"]), "fid": FIDS[FILTER_NAMES[m["filter"]]]}
 
 
 def inject_file(path: Path, list_file: Path, out: Path, seed: int, context: str) -> None:
@@ -356,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
             rows += got
     a.truth.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(rows, schema=pa.schema(
-        [(c, pa.string() if c == "dataset" else pa.int64() if c in ("src_id", "expid", "sca", "fid")
+        [(c, pa.string() if c in ("dataset", "exposure") else pa.int64() if c in ("src_id", "sca", "fid")
           else pa.float64()) for c in TRUTH_COLUMNS]))
     pq.write_table(table, a.truth)
     with a.truth.open("rb") as body:

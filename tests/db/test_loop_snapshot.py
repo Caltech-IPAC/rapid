@@ -1,12 +1,15 @@
-"""The loop's snapshot reads each official L2 row's program from its exposure's official exposures row.
+"""The loop's snapshot reads each official L2 row's program and the stem its intake job read.
 
-Contract: :func:`rapidpipe.foundation.loop.snapshot` gives every official
+Contracts: :func:`rapidpipe.foundation.loop.snapshot` gives every official
 ``l2files`` row of the dataset the ``program_id`` of the official
 ``exposures`` row of its (dataset, expid), or ``None`` while that exposure
 has none; a ``--programs`` selection over a two-program dataset then plans
 a reference from the selected program's frames only, and, once the field
 has an official reference, differences only the selected program's rows.
-Run by foundation.yml against database/schema.sql.
+Each row carries the file its intake job's scope names (``stem``), ``None``
+for an imported row, so ``--passes`` and ``--pointings`` select rows by it
+and never by the id's digits (rapid_docs exposure-id). Run by
+foundation.yml against database/schema.sql.
 """
 
 from __future__ import annotations
@@ -39,8 +42,9 @@ def _l2file(expid: int) -> dict:
             **{f"{c}{n}": v for n in range(5) for c, v in (("ra", ra), ("dec", dec))}}
 
 
-def _intake(w: World, run: int, expid: int, program: int | None) -> None:
-    """Publish exposure ``expid``'s L2 row, and its exposures row of ``program`` unless ``None``."""
+def _intake(w: World, run: int, expid: int, program: int | None, stem: str | None = None) -> None:
+    """Publish exposure ``expid``'s L2 row, and its exposures row of ``program`` unless ``None``: an
+    ``intake`` job of ``stem`` when given, else an ``import``."""
     outputs = {"l2files": [_l2file(expid)]}
     expects = [{"product": "l2files", "key": _key(expid), "binding": CURRENT}]
     if program is not None:
@@ -48,7 +52,10 @@ def _intake(w: World, run: int, expid: int, program: int | None) -> None:
                                  "dateobs": datetime.datetime(2026, 10, 1)}]
         expects.append({"product": "exposures", "key": {"dataset": DATASET, "expid": expid},
                         "binding": CURRENT})
-    w.job(run, "import", {"expid": expid}, outputs, expects=expects)
+    if stem is None:
+        w.job(run, "import", {"expid": expid}, outputs, expects=expects)
+    else:
+        w.job(run, "intake", {"dataset": DATASET, "file": stem, "expid": expid}, outputs, expects=expects)
 
 
 def test_the_snapshot_reads_program_id_and_a_two_program_dataset_plans_only_the_selected_one(connect, tmp_path):
@@ -75,3 +82,23 @@ def test_the_snapshot_reads_program_id_and_a_two_program_dataset_plans_only_the_
     snap = dataclasses.replace(loop.snapshot(w.conn, run), psfs={(FID, SCA, "science"): (1, 1)})
     subs, _ = loop.plan(snap, [], sel)
     assert [s["stage"] for s in subs] == ["difference"] and subs[0]["scope"]["expid"] == 1
+
+
+def test_the_snapshot_reads_each_rows_intake_stem_and_the_selection_reads_the_row_by_it(connect, tmp_path):
+    w = World(connect(), tmp_path)
+    run = w.run("stems", SETTINGS, live=True)
+    pass_1 = "r0034201001001004001_0001_wfi01_f184"
+    pass_2 = "r0034201002001004001_0001_wfi01_f184"
+    _intake(w, run, 11, -4, stem=pass_1)
+    _intake(w, run, 12, -4, stem=pass_2)
+    _intake(w, run, 13, -4)                  # imported: its scope names no file
+    snap = loop.snapshot(w.conn, run)
+    assert {k[0]: v["stem"] for k, v in snap.l2.items()} == {11: pass_1, 12: pass_2, 13: None}
+
+    sel = loop.Selection.parse("F184", str(SCA), "all", "2")
+    subs, _ = loop.plan(snap, [], sel)
+    (ref,) = [s for s in subs if s["stage"] == "reference"]
+    assert [i["key"]["expid"] for i in ref["inputs"]] == [12]
+    everyone, _ = loop.plan(snap, [], loop.Selection.parse("F184", str(SCA), "all"))
+    (ref,) = [s for s in everyone if s["stage"] == "reference"]
+    assert [i["key"]["expid"] for i in ref["inputs"]] == [11, 12, 13]

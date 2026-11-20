@@ -21,10 +21,16 @@
 --   psfs                               dataset, fid, sca, kind
 --   catalogs                           dataset, name, version
 --
+-- An `expid` is the integer `exposure_ids` handed out for the producer's
+-- own name for the exposure within its dataset (rapid_docs exposure-id,
+-- Ben's ruling of 2026-11-14); it carries no meaning, and the name beside it
+-- says which exposure it is.
+--
 -- A set (a reference image, a source set, a packet set) is identified by its
--- job: its child rows (refimimages, refimcatalogs, sources, objects,
--- memberships, packets, forced, external) carry the set's job and their own
--- id, and their views join through the set's open binding on (product, job).
+-- job: its child rows (refimimages, refimcatalogs, refimmeta, sources,
+-- objects, memberships, packets, forced, external) carry the set's job and
+-- their own id, and their views join through the set's open binding on
+-- (product, job).
 -- The object catalog has no binding of its own (plan amendment 2026-10-24):
 -- a difference job's founded objects and memberships ride on its source
 -- set's binding.
@@ -60,7 +66,7 @@ CREATE TABLE surveys (
     created timestamp without time zone DEFAULT now() NOT NULL
 );
 
--- One negative id per simulation, and the commissioning programs (Azalee, 2026-11-10).
+-- One negative id per simulation, the commissioning programs (Azalee, 2026-11-10), and the calibration, core community (CCS) and general astrophysics (GAS) programs, titled from STScI's Roman program pages (Azalee, 2026-11-17).
 INSERT INTO surveys (program_id, program_title, category) VALUES
     (-1, 'SOCSIMS GBTDS', 'SIM'),
     (-2, 'OpenUniverse', 'SIM'),
@@ -77,7 +83,35 @@ INSERT INTO surveys (program_id, program_title, category) VALUES
     (1054, 'Early GBTDS observations', 'COM'),
     (1055, 'Time Series of a Second Crowded Field', 'COM'),
     (1062, 'Early Demonstration of HLTDS observation strategy and performance', 'COM'),
-    (1083, 'Ecliptic Plane Moving Object Study', 'COM');
+    (1083, 'Ecliptic Plane Moving Object Study', 'COM'),
+    (1064, 'WFI dark current calibration', 'CAL'),
+    (1065, 'WFI photometric and astrometric performance', 'CAL'),
+    (1066, 'WFI flat field and linearity calibration', 'CAL'),
+    (1067, 'WFI Photometric Stability', 'CAL'),
+    (1068, 'WFI Photometry Spatial Uniformity', 'CAL'),
+    (1069, 'Flux Calibration', 'CAL'),
+    (1070, 'CAL Bandpass Variation Characterization', 'CAL'),
+    (1071, 'Roman WFI Sub-pixel Response Calibration', 'CAL'),
+    (1072, 'Roman WFI Cross Calibration Program', 'CAL'),
+    (1073, 'Ice Characterization (Imaging)', 'CAL'),
+    (1074, 'Ice decontamination and rebaseline', 'CAL'),
+    (1075, 'Count-rate dependent nonlinearity (Direct)', 'CAL'),
+    (1076, 'Lamp-On/Lamp-Off (LOLO) Calibration', 'CAL'),
+    (1077, 'Dispersion Solution - Grism', 'CAL'),
+    (1078, 'Dispersion Solution - Prism', 'CAL'),
+    (1079, 'Edge/Trace mapping, Spectral PSF, and Relative flux - Grism', 'CAL'),
+    (1080, 'Edge/Trace mapping, Spectral PSF, and Relative flux - Prism', 'CAL'),
+    (1081, 'Absolute flux and spectrophotometric stability - Grism', 'CAL'),
+    (1082, 'Absolute flux and spectrophotometric stability - Prism', 'CAL'),
+    (1400, 'Roman High-Latitude Wide-Area Survey', 'CCS'),
+    (1410, 'Roman High Latitude Time Domain Survey', 'CCS'),
+    (1420, 'Galactic Bulge Time Domain Survey', 'CCS'),
+    (1430, 'Roman Galactic Plane Survey', 'GAS'),
+    (2000, 'The First Complete Census of Stars in Key Globular Clusters', 'GAS'),
+    (2001, 'Roman eXtreme Deep Field (RXDF): transformative science at Roman''s limit', 'GAS'),
+    (2002, 'A Legacy Survey of Andromeda and Triangulum with Roman', 'GAS'),
+    (2003, 'GRACE: The Grism Reionization And Cosmic Evolution Survey', 'GAS'),
+    (2004, 'The Roman-Kepler Legacy Survey', 'GAS');
 
 CREATE TABLE fields (
     field integer PRIMARY KEY,                       -- Roman tessellation index for (ra0,dec0)
@@ -203,6 +237,30 @@ CREATE TABLE job_inputs (
 CREATE INDEX job_inputs_job_idx ON job_inputs (job, kind);
 CREATE INDEX job_inputs_source_job_idx ON job_inputs (source_job);
 
+-- The exposure ids: the producer's own name for an exposure, unique within a
+-- dataset, and the integer the database handed out for it (rapid_docs
+-- exposure-id). Bookkeeping, as jobs and official are, not a product: no job
+-- writes it and nothing binds it. The loop resolves the names of the stems it
+-- is about to take in before it plans (rapidpipe.foundation.loop.exposure_ids:
+-- INSERT ... ON CONFLICT DO NOTHING, then SELECT, committed before any intake
+-- is submitted) and puts the id in each intake's scope; the intake checks its
+-- scope's id against this table; `rapidpipe exposure id` resolves one by hand.
+-- Rows are never changed or deleted, so a name keeps its id across passes,
+-- reruns and runs of its dataset; one identity serves every dataset, so no two
+-- exposures share an id the identity handed out, and the same exposure taken
+-- into two datasets has two. The key is (dataset, expid), not expid alone: an
+-- exposure a database stored before this table keeps the id it had
+-- (2026-11-20-exposure-ids.sql), and those ids are unique within a dataset and
+-- repeat across datasets, so every join to this table matches on dataset too.
+CREATE TABLE exposure_ids (
+    expid integer GENERATED ALWAYS AS IDENTITY,
+    dataset text NOT NULL,
+    name text NOT NULL,                              -- the producer's name for the exposure (loop.stem_ids)
+    created timestamp with time zone DEFAULT now() NOT NULL,
+    PRIMARY KEY (dataset, expid),
+    UNIQUE (dataset, name)
+);
+
 --------------------------------------------------------------------------------
 -- Scientific tables: every row names its job
 --------------------------------------------------------------------------------
@@ -210,7 +268,7 @@ CREATE INDEX job_inputs_source_job_idx ON job_inputs (source_job);
 CREATE TABLE exposures (
     job bigint NOT NULL REFERENCES jobs (id),
     dataset text NOT NULL,
-    expid integer NOT NULL,                          -- the exposure's scientific id, from its producer
+    expid integer NOT NULL,                          -- exposure_ids' id for the producer's name of the exposure
     dateobs timestamp without time zone NOT NULL,    -- DATE-OBS
     exptime real NOT NULL,                           -- EXPTIME
     program_id integer,                              -- the file's PROGRAM, or the dataset's [intake] program_id
@@ -315,6 +373,46 @@ CREATE TABLE refimcatalogs (
     checksum character varying(32) NOT NULL,
     UNIQUE (job, rfid, cattype)
 );
+
+-- dev's RefImMeta: a reference's quality measurements, dev's columns by name
+-- and type (child of refimages; rapid_docs decision-refimmeta). hp6 and hp9 are
+-- of the reference's centre, mjdobsmin and mjdobsmax of its coadded frames;
+-- npucatsources is null, since no Photutils catalog of the reference is made.
+CREATE TABLE refimmeta (
+    rfid integer PRIMARY KEY REFERENCES refimages (rfid),
+    job bigint NOT NULL REFERENCES jobs (id),        -- the reference's job
+    field integer NOT NULL,                          -- Roman tessellation index for (ra0,dec0)
+    hp6 integer NOT NULL,                            -- level-6 HEALPix index (NESTED) for (ra0,dec0)
+    hp9 integer NOT NULL,                            -- level-9 HEALPix index (NESTED) for (ra0,dec0)
+    fid smallint NOT NULL REFERENCES filters (fid),
+    nframes smallint NOT NULL,                       -- images in the stack
+    mjdobsmin double precision NOT NULL,             -- minimum MJD of the input images
+    mjdobsmax double precision NOT NULL,             -- maximum MJD of the input images
+    npixnan integer NOT NULL,                        -- NaN pixels in the reference image
+    clmean real NOT NULL,                            -- pixel mean after clipping
+    clstddev real NOT NULL,                          -- pixel standard deviation after clipping and reinflating
+    clnoutliers integer NOT NULL,                    -- pixels discarded in clipping
+    gmedian real NOT NULL,                           -- global pixel median
+    datascale real NOT NULL,                         -- global robust spread, 0.5*(p84-p16)
+    gmin real NOT NULL,                              -- global minimum pixel value
+    gmax real NOT NULL,                              -- global maximum pixel value
+    cov5percent real NOT NULL,                       -- coverage-depth QA metric (depth of at least 5)
+    medncov real NOT NULL,                           -- median of the depth-of-coverage image
+    medpixunc real NOT NULL,                         -- median of the uncertainty image
+    fwhmmedpix real NOT NULL,                        -- FWHM_IMAGE of the SExtractor catalog's point sources [pixels]
+    fwhmminpix real NOT NULL,                        -- minimum FWHM_IMAGE [pixels]
+    fwhmmaxpix real NOT NULL,                        -- maximum FWHM_IMAGE [pixels]
+    nsxcatsources integer NOT NULL,                  -- sources in the SExtractor catalog
+    npucatsources integer                            -- sources in the Photutils catalog (null: none is made)
+);
+
+CREATE INDEX refimmeta_job_idx ON refimmeta (job);
+CREATE INDEX refimmeta_field_idx ON refimmeta (field);
+CREATE INDEX refimmeta_hp6_idx ON refimmeta (hp6);
+CREATE INDEX refimmeta_hp9_idx ON refimmeta (hp9);
+CREATE INDEX refimmeta_fid_idx ON refimmeta (fid);
+CREATE INDEX refimmeta_nframes_idx ON refimmeta (nframes);
+CREATE INDEX refimmeta_cov5percent_idx ON refimmeta (cov5percent);
 
 CREATE TABLE diffimages (
     pid integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -997,6 +1095,12 @@ JOIN jobs j ON j.id = t.job;
 CREATE VIEW refimcatalogs_official AS
 SELECT t.*, o.id AS binding, j.run
 FROM refimcatalogs t
+JOIN official o ON o.closed_at IS NULL AND o.product = 'refimages' AND o.job = t.job
+JOIN jobs j ON j.id = t.job;
+
+CREATE VIEW refimmeta_official AS
+SELECT t.*, o.id AS binding, j.run
+FROM refimmeta t
 JOIN official o ON o.closed_at IS NULL AND o.product = 'refimages' AND o.job = t.job
 JOIN jobs j ON j.id = t.job;
 

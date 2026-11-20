@@ -87,7 +87,14 @@ the pipeline imports.
   fresh `schema.sql`; it fails there. The 2026-11-04 files apply in this
   order, which is not their names' order: `2026-11-04-a-retire-runs-1-68.sql`,
   `2026-11-04-sources-children.sql`, `2026-11-04-xsources.sql`,
-  `2026-11-04-field-children.sql`, `2026-11-04-xobjects.sql`.
+  `2026-11-04-field-children.sql`, `2026-11-04-xobjects.sql`. SMDC's
+  database was recreated from `schema.sql` on 2026-11-14, so the files before
+  that date are history; since then the database is brought forward by dated
+  files alone, its rows kept (Ben, 2026-11-20), applied in their names' order:
+  `2026-11-17-survey-programs.sql`, `2026-11-18-refimmeta.sql`,
+  `2026-11-20-exposure-ids.sql` (the last after the other two; it records
+  every exposure already stored under the id it has and refuses, changing
+  nothing, where it cannot).
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven
   statements: packet history three ways, lineage up and down) and the

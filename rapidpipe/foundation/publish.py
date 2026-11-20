@@ -95,7 +95,7 @@ from rapidpipe.foundation.prefix import get
 
 #: The tables a manifest may declare outputs for.
 PRODUCT_TABLES = frozenset({
-    "exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "diffimages",
+    "exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "refimmeta", "diffimages",
     "psfs", "sources", "xsources", "objects", "memberships", "xobjects", "xmemberships", "packets",
     "forced", "external", "catalogs",
 })

@@ -1,6 +1,8 @@
 """scripts/compare_runs.py's epoch intersection and null columns, on faked rows.
 
-Contracts: only epochs both runs have are compared, an epoch in one run only
+Contracts: two runs' epochs are paired by exposure name and SCA, each run
+keeping its own id for the epoch, since two datasets give one exposure two
+ids; only epochs both runs have are compared, an epoch in one run only
 is returned as unshared; one epoch's columns are its difference job's
 metrics, its packet count and the registration offset's hypotenuse, a metric
 the job did not record a dash, never zero; the drift gate calls a value outside
@@ -20,13 +22,17 @@ compare_runs = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(compare_runs)
 
 
-def test_only_shared_epochs_are_compared_and_the_rest_listed_unshared():
-    a = {(4040101, 8): 11, (5040101, 8): 12, (6010101, 8): 13}
-    b = {(5040101, 8): 21, (4040101, 8): 22, (4040101, 2): 23}
-    both, only_a, only_b = compare_runs.shared(a, b)
-    assert both == [(4040101, 8), (5040101, 8)]
-    assert only_a == [(6010101, 8)]
-    assert only_b == [(4040101, 2)]
+P4, P5, P6 = "r0034201004001004001_0001", "r0034201005001004001_0001", "r0034201006001004001_0001"
+
+
+def test_two_runs_epochs_pair_by_name_and_sca_each_with_its_own_id():
+    jobs_a, ids_a = compare_runs.by_name([(P4, 8, 11, 4001), (P5, 8, 12, 4002), (P6, 8, 13, 4003)])
+    jobs_b, ids_b = compare_runs.by_name([(P5, 8, 21, 9002), (P4, 8, 22, 9001), (P4, 2, 23, 9001)])
+    both, only_a, only_b = compare_runs.shared(jobs_a, jobs_b)
+    assert both == [(P4, 8), (P5, 8)]
+    assert only_a == [(P6, 8)]
+    assert only_b == [(P4, 2)]
+    assert [(jobs_a[e], ids_a[e], jobs_b[e], ids_b[e]) for e in both] == [(11, 4001, 22, 9001), (12, 4002, 21, 9002)]
 
 
 def test_one_epochs_columns_come_from_its_metrics_and_packets():
@@ -38,8 +44,8 @@ def test_one_epochs_columns_come_from_its_metrics_and_packets():
     assert row[6] == pytest.approx(0.005)   # hypot(dx, dy), the gate's registration offset
     sparse = compare_runs.null_row({"n_candidates": 271.0, "packets": 0})
     assert sparse[0] == 271.0 and sparse[3] == 0 and sparse[6] is None
-    table = compare_runs.null_table({113: {(4040101, 8): sparse}}, [(4040101, 8)])
-    assert "| 4040101 sca 8 | 113 | 271 | — | — | 0 | — | — | — | — |" in table.splitlines()
+    table = compare_runs.null_table({113: {(P4, 8): sparse}}, [(P4, 8)])
+    assert f"| {P4} sca 8 | 113 | 271 | — | — | 0 | — | — | — | — |" in table.splitlines()
 
 
 def test_a_value_outside_the_spread_is_red():

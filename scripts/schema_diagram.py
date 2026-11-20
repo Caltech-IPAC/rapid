@@ -36,11 +36,11 @@ from pathlib import Path
 from rapidpipe.exitcodes import ArgumentParser, ExitCode
 
 ROOT = Path(__file__).resolve().parents[1]
-BOOKKEEPING = ["runs", "jobs", "official", "job_inputs", "job_fields"]
+BOOKKEEPING = ["runs", "jobs", "official", "job_inputs", "job_fields", "exposure_ids"]
 STATIC = ["filters", "scas", "surveys", "fields"]
 #: Sets whose child rows share one official binding (schema.sql's views).
 GROUPS = {
-    "refimages": ["refimages", "refimimages", "refimcatalogs"],
+    "refimages": ["refimages", "refimimages", "refimcatalogs", "refimmeta"],
     "sources": ["sources", "xsources", "memberships", "objects", "xmemberships", "xobjects"],
     "packets": ["packets", "forced", "external"],
 }
