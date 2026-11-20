@@ -6,8 +6,9 @@ the difference job (the plan's amendment of 2026-10-24), so there are no
 field chains, no admission order and no pass interval per epoch: the
 loop's only waits are the reference's frames and the queue. One pass, :func:`run_pass`, reads the source root's listing of the
 selected filters' observations (:func:`list_stems`) and one snapshot of the
-tables (:func:`snapshot`), decides every submission from them
-(:func:`plan`, pure), submits each through the caller's ``submit``
+tables (:func:`snapshot`), resolves the exposure ids of the new stems' names
+(:func:`exposure_ids`, committed before anything is submitted), decides every
+submission from them (:func:`plan`, pure), submits each through the caller's ``submit``
 without waiting, and ends by producing the run's newly official packet sets
 to the Kafka topic. The verb repeats passes until one finds nothing new,
 nothing pending and nothing to submit (drained).
@@ -24,19 +25,22 @@ OpenUniverse ``simple_model`` files, ``<filter>/<pointing>/roman_tds_<filter>
 _<pointing>_wfi<sca>_simple.asdf`` with the filter in the RAPID spelling
 (``H158``): ``--filters`` stays in the pipeline's names (``F158``) and is
 mapped for the listing, a pointing is the survey's observing-sequence row
-(``1012``), which the intake writes as the ``expid``, and there are no
-passes. With ``rimtimsim`` the source root holds RimTimSim's lite files,
+(``1012``), and there are no passes. With ``rimtimsim`` the source root
+holds RimTimSim's lite files,
 ``rimtimsim_WFI_<filter>_SCA<NN>_<exposure>_lite.fits.gz``, flat; a pointing
-is GBTDS's exposure number (``411``), the ``expid``, and there are no passes.
+is GBTDS's exposure number (``411``), and there are no passes.
 With ``socsims-lite`` the source root holds `dev`'s socsims lite files,
 ``<SOC stem>_cal_lite.fits.gz``, flat, listed and selected as the SOC's.
 
-``--expids`` bounds the selection by the intake's ``expid``, inclusive
-ranges ``LO-HI`` (a single id is ``ID``), comma separated, a stem or row
-admitted when its ``expid`` is in any of them, with the other terms. A SOC
-``expid`` packs pass, observation, visit and exposure in that order, so a
-range is a contiguous stretch of a pass's observations (pass 2 whole and
-pass 5 observation 3 visits 61 to 64 are ``2000000-2999999,5036101-5036401``).
+``--exposures`` bounds the selection by the exposure's name, the stem with
+its detector and its file-kind suffix removed (:func:`stem_ids`):
+comma-separated prefixes, a stem or row admitted when its name starts with
+any of them, with the other terms. A SOC name runs program, plan, pass,
+segment, observation, visit and exposure in that order, so a prefix is a
+stretch of that hierarchy: pass 2 of r00342 whole is ``r0034201002``, and
+pass 5 observation 3 visit 61 is ``r0034201005001003061``. An exposure's
+``expid`` is the integer ``exposure_ids`` handed out for its name in the
+dataset and carries no meaning; nothing here reads one's digits.
 
 ``--programs`` selects programs within the dataset, comma-separated
 program numbers (``1049,1018``, or ``-2``), all by default. A stem's program
@@ -52,13 +56,15 @@ the dataset's objects of every run, whatever program founded them.
 
 Every term is ``all`` when left out (2026-11-17). ``--stems`` names files by
 stem, comma separated or ``@FILE`` with one per line: the listing is cut to
-them and an official row is selected when its expid, SCA and filter are a
-named stem's. ``--mjd LO-HI`` bounds the official rows by ``mjdobs``,
+them and an official row is selected when its exposure name, SCA and filter
+are a named stem's. ``--mjd LO-HI`` bounds the official rows by ``mjdobs``,
 inclusive; ``--dates LO..HI`` is the same window as UTC dates, both days
 included. Neither bounds the files to ingest, since a stem carries no date:
 intake takes every new file of the other terms and the window applies from
 the reference on. ``--dry-run`` (:func:`dry_run`) prints one pass's plan and
-does nothing; ``--local`` runs each planned submission here through ``job
+does nothing: it reads the ids ``exposure_ids`` already holds and assigns
+none, so an exposure never seen plans with ``expid`` null and is named under
+``unassigned``; ``--local`` runs each planned submission here through ``job
 local``'s path, in stage order, with no Batch, no reconcile, no rerun and
 no publish sweep (a packet job sends its own set), passes repeating at once
 until one drains; ``--stage NAME`` (:func:`cut_to_stage`) keeps one stage's
@@ -119,9 +125,11 @@ One pass, in order:
 - ``intake``: a job per listed ``_cal.asdf`` stem the selection admits for
   which no intake job of the dataset is published and no intake job of this
   run exists, and whose filter and SCA have official PSFs, at most
-  ``max_intake``; it names the science PSF of its filter and SCA, and
-  expects the ``exposures`` key only when nothing holds or claims it (the
-  18 SCAs of an exposure share it); with the dataset's ``gaia`` catalog
+  ``max_intake``; its scope carries its exposure's ``expid``, the id the
+  pass resolved for the stem's name before it planned; it names the science
+  PSF of its filter and SCA, and expects the ``exposures`` key only when
+  nothing holds or claims it (the 18 SCAs of an exposure share it, and
+  their intakes share the id); with the dataset's ``gaia`` catalog
   official, it names that too, for the intake's WCS offset metric.
 - ``reference``: a job per (field, filter) that a selected official L2
   row has as its own ``field`` (with the bound, a row at or after it), no
@@ -185,7 +193,7 @@ import dataclasses
 import re
 import time
 from collections import defaultdict
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 import psycopg2.extras
 
@@ -216,7 +224,7 @@ RIMTIMSIM = "rimtimsim"
 #: The ``[intake] reader`` of `dev`'s socsims lite files: SOC stems, :data:`LITE_SUFFIX`.
 SOCSIMS_LITE = "socsims-lite"
 LITE_SUFFIX = "_cal_lite.fits.gz"
-#: The readers whose data have no passes: a pointing is one integer, the row's ``expid``.
+#: The readers whose data have no passes: a pointing is one integer.
 PASSLESS = (OPENUNIVERSE, RIMTIMSIM)
 PENDING = ("launched", "running")
 #: Batch's job states before it ends one (``SUCCEEDED`` and ``FAILED`` end it).
@@ -228,19 +236,20 @@ STAGES = ("psf", "intake", "reference", "difference", "packet")
 class Selection:
     """Filters (``F146``), SCAs, pointings (``(visit, exposure)``, or the observing sequence's row for
     :data:`OPENUNIVERSE`) and the survey's passes, ``None`` for all of any of them; ``reader``
-    the run's ``[intake] reader``; ``expids`` inclusive ``(lo, hi)`` ranges of the ``expid``, ``None``
-    for all; ``programs`` the program numbers, ``None`` for all; ``fixed_program`` the run's
-    ``[intake] program_id`` when its dataset sets one, every stem's program then, ``None`` when unset;
-    ``stems`` the named stems, ``None`` for all, with ``stem_keys`` their ``(expid, sca, filter)``,
-    which select their official rows too; ``mjd`` an ``(lo, hi)`` window of the official rows'
-    ``mjdobs``, ``None`` for all, ``hi`` excluded when ``mjd_hi_exclusive`` (a window given as dates)."""
+    the run's ``[intake] reader``; ``exposures`` prefixes of the exposure's name (:func:`stem_ids`), a
+    stem or row admitted when its name starts with any, ``None`` for all; ``programs`` the program
+    numbers, ``None`` for all; ``fixed_program`` the run's ``[intake] program_id`` when its dataset
+    sets one, every stem's program then, ``None`` when unset; ``stems`` the named stems, ``None``
+    for all, with ``stem_keys`` their ``(exposure name, sca, filter)``, which select their official
+    rows too; ``mjd`` an ``(lo, hi)`` window of the official rows' ``mjdobs``, ``None`` for all,
+    ``hi`` excluded when ``mjd_hi_exclusive`` (a window given as dates)."""
 
     filters: frozenset[str] | None
     scas: frozenset[int] | None
     pointings: frozenset | None
     passes: frozenset[int] | None = None
     reader: str = "soc-l2"
-    expids: tuple[tuple[int, int], ...] | None = None
+    exposures: tuple[str, ...] | None = None
     programs: frozenset[int] | None = None
     fixed_program: int | None = None
     stems: frozenset[str] | None = None
@@ -250,15 +259,15 @@ class Selection:
 
     @classmethod
     def parse(cls, filters: str = "all", scas: str = "all", pointings: str = "all", passes: str = "all",
-              reader: str = "soc-l2", expids: str = "all", programs: str = "all",
+              reader: str = "soc-l2", exposures: str = "all", programs: str = "all",
               fixed_program: int | str = "", stems: str | Iterable[str] = "all", mjd: str = "all",
               mjd_hi_exclusive: bool = False) -> "Selection":
         """A selection from the ``loop`` verb's terms, each comma-separated or ``all``.
 
         Parameters
         ----------
-        filters, scas, pointings, passes, expids : str
-            The verb's ``--filters``, ``--scas``, ``--pointings``, ``--passes`` and ``--expids``.
+        filters, scas, pointings, passes, exposures : str
+            The verb's ``--filters``, ``--scas``, ``--pointings``, ``--passes`` and ``--exposures``.
         reader : str
             The run's ``[intake] reader``.
         programs : str
@@ -277,12 +286,11 @@ class Selection:
             The parsed selection; ``ValueError`` names a malformed term, a stem of another
             reader or no reader, or a window whose low end is above its high end.
         """
-        ranges = None
-        if expids != "all":
-            ranges = tuple(sorted((int(lo), int(hi or lo)) for lo, _, hi in
-                                  (r.strip().partition("-") for r in expids.split(","))))
-            if any(lo > hi for lo, hi in ranges):
-                raise ValueError(f"--expids {expids}: a range's low end is above its high end")
+        prefixes = None
+        if exposures != "all":
+            prefixes = tuple(sorted({p.strip() for p in exposures.split(",") if p.strip()}))
+            if not prefixes:
+                raise ValueError(f"--exposures {exposures!r}: no name prefix")
         if reader in PASSLESS:
             if passes != "all":
                 raise ValueError(f"a {reader} selection has no passes: select its pointings")
@@ -299,7 +307,7 @@ class Selection:
             bad = sorted(s for s, i in ids.items() if i is None or i["reader"] != wanted)
             if bad:
                 raise ValueError(f"--stems: not a {wanted} stem: {', '.join(bad)}")
-            keys = frozenset((i["expid"], i["sca"], i["filter"]) for i in ids.values())
+            keys = frozenset((i["name"], i["sca"], i["filter"]) for i in ids.values())
         window = None
         if mjd != "all":
             lo, _, hi = mjd.partition("-")
@@ -308,12 +316,13 @@ class Selection:
                 raise ValueError(f"--mjd {mjd}: the window's low end is above its high end")
         return cls(None if filters == "all" else frozenset(f.strip().upper() for f in filters.split(",")),
                    None if scas == "all" else frozenset(int(s) for s in scas.split(",")), points,
-                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader, ranges,
+                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader, prefixes,
                    None if programs == "all" else frozenset(int(p) for p in programs.split(",")),
                    None if fixed_program == "" else int(fixed_program), named, keys, window, mjd_hi_exclusive)
 
-    def admits_expid(self, expid: int) -> bool:
-        return self.expids is None or any(lo <= expid <= hi for lo, hi in self.expids)
+    def admits_name(self, name: str) -> bool:
+        """Whether an exposure's name is selected: it starts with one of ``exposures``, or there are none."""
+        return self.exposures is None or name.startswith(self.exposures)
 
     def admits_filter(self, name: str) -> bool:
         """Whether a filter, by its pipeline name (``F146``), is selected."""
@@ -330,7 +339,7 @@ class Selection:
         return mjdobs is not None and lo <= mjdobs and (mjdobs < hi if self.mjd_hi_exclusive else mjdobs <= hi)
 
     def admits_stem(self, stem: str) -> dict | None:
-        """The stem's SCA, filter and pointing when the selection admits it, else ``None``."""
+        """The stem's SCA, filter and exposure name when the selection admits it, else ``None``."""
         ids = stem_ids(stem)
         if ids is None or ids["reader"] != (self.reader if self.reader in PASSLESS else "soc-l2"):
             return None
@@ -340,13 +349,13 @@ class Selection:
             return None
         if self.passes is not None and ids["pass"] not in self.passes:
             return None
-        if not self.admits_expid(ids["expid"]):
+        if not self.admits_name(ids["name"]):
             return None
         if self.programs is not None and self.stem_program(ids) not in self.programs:
             return None
         if self.stems is not None and stem not in self.stems:
             return None
-        return {"sca": ids["sca"], "filter": ids["filter"], "expid": ids["expid"]}
+        return {"sca": ids["sca"], "filter": ids["filter"], "name": ids["name"]}
 
     def stem_program(self, ids: dict) -> int | None:
         """The program intake writes for a stem: the fixed program when the run sets one, else the stem's own.
@@ -363,27 +372,35 @@ class Selection:
         """
         return self.fixed_program if self.fixed_program is not None else ids["program"]
 
-    def admits_row(self, expid: int, sca: int, fid: int, fids: set[int], program: int | None = None,
-                   mjdobs: float | None = None, band: str | None = None) -> bool:
-        """Whether an L2 key is selected, ``fids`` the selected filters' fids; ``expid``
-        packs ``pass * 10**6`` and ``visit * 100 + exposure`` in its last digits, or is the
-        OpenUniverse pointing; ``program`` its official ``exposures`` row's ``program_id``,
-        ``None`` when the exposure has none, which a program selection never admits;
-        ``mjdobs`` the row's, for the window; ``band`` the row's filter by its pipeline
-        name (``F146``), for a stem selection."""
-        if not self.admits_sca(sca) or fid not in fids or not self.admits_expid(expid):
+    def admits_row(self, stem: str | None, sca: int, fid: int, fids: set[int],
+                   program: int | None = None, mjdobs: float | None = None) -> bool:
+        """Whether an official L2 row is selected.
+
+        ``stem`` is the file the row's intake job read (``jobs.scope ->> 'file'``, the snapshot's
+        ``stem``), whose terms give the pass, the pointing and the exposure name; ``None`` for an
+        imported row, which is admitted only when no pass, pointing, exposure or stem term is set.
+        ``fids`` are the selected filters' fids; ``program`` is the row's official ``exposures``
+        row's ``program_id``, ``None`` when the exposure has none, which a program selection never
+        admits; ``mjdobs`` is the row's, for the window. With ``stems``, the row is selected when
+        its exposure name, SCA and filter are a named stem's. The row's ``expid`` is not read: it
+        carries no meaning."""
+        if not self.admits_sca(sca) or fid not in fids:
             return False
         if self.programs is not None and program not in self.programs:
             return False
         if not self.admits_mjd(mjdobs):
             return False
-        if self.stem_keys is not None and (expid, sca, band) not in self.stem_keys:
+        ids = stem_ids(stem) if stem else None
+        if ids is None:
+            return (self.pointings is None and self.passes is None and self.exposures is None
+                    and self.stem_keys is None)
+        if self.stem_keys is not None and (ids["name"], ids["sca"], ids["filter"]) not in self.stem_keys:
             return False
-        if self.reader in PASSLESS:
-            return self.pointings is None or expid in self.pointings
-        if self.passes is not None and expid // 10**6 not in self.passes:
+        if self.pointings is not None and ids["pointing"] not in self.pointings:
             return False
-        return self.pointings is None or ((expid // 100) % 100, expid % 100) in self.pointings
+        if self.passes is not None and ids["pass"] not in self.passes:
+            return False
+        return self.admits_name(ids["name"])
 
     def summary(self) -> dict:
         points = "all" if self.pointings is None else sorted(self.pointings)
@@ -392,36 +409,123 @@ class Selection:
         return {"filters": "all" if self.filters is None else sorted(self.filters),
                 "scas": "all" if self.scas is None else sorted(self.scas), "pointings": points,
                 "passes": "all" if self.passes is None else sorted(self.passes),
-                "expids": "all" if self.expids is None else [f"{lo}-{hi}" for lo, hi in self.expids],
+                "exposures": "all" if self.exposures is None else list(self.exposures),
                 "programs": "all" if self.programs is None else sorted(self.programs),
                 "stems": "all" if self.stems is None else sorted(self.stems),
                 "mjd": "all" if self.mjd is None else
                        f"{self.mjd[0]}-{self.mjd[1]}" + ("(excluded)" if self.mjd_hi_exclusive else "")}
 
 
-def stem_expid(stem: str) -> int:
-    """The intake stage's expid packing, ``pass * 10**6 + observation * 10**4 + visit * 10**2 + exposure``."""
-    m = STEM.match(stem)
-    return (int(m["pass"]) * 10**6 + int(m["observation"]) * 10**4 + int(m["visit"]) * 10**2
-            + int(m["exposure"]))
-
-
 def stem_ids(stem: str) -> dict | None:
     """A SOC, OpenUniverse or RimTimSim stem's ``reader``, ``sca``, ``filter`` (the pipeline's name,
-    ``F158``), ``expid``, ``pointing``, ``pass`` and ``program`` (both ``None`` but for the SOC's);
-    ``None`` for any other name."""
+    ``F158``), ``name``, ``pointing``, ``pass`` and ``program`` (both ``None`` but for the SOC's);
+    ``None`` for any other name.
+
+    The ``name`` is the producer's own name for the exposure: the stem with its detector and its
+    file-kind suffix removed, the same for every SCA of an exposure and different for any two
+    exposures. A SOC stem's is the stem up to and including its exposure number, so it holds the
+    program, plan, pass, segment, observation, visit and exposure
+    (``r0034201001001004001_0001_wfi08_f146`` is ``r0034201001001004001_0001``); an OpenUniverse
+    stem's keeps the survey, the filter and the observing sequence's row (``roman_tds_H158_1012``);
+    a RimTimSim stem's the filter and GBTDS's exposure number (``rimtimsim_WFI_F213_000000411``).
+    ``exposure_ids`` keys an exposure's ``expid`` by it (:func:`exposure_ids`), so a change in a
+    producer's naming touches that reader's branch here and no key.
+    """
     if m := STEM.match(stem):
         return {"reader": "soc-l2", "sca": int(m["sca"]), "filter": m["filter"].upper(),
-                "expid": stem_expid(stem), "pointing": (int(m["visit"]), int(m["exposure"])),
+                "name": stem[: m.end("exposure")], "pointing": (int(m["visit"]), int(m["exposure"])),
                 "pass": int(m["pass"]), "program": int(m["program"])}
     if m := OU_STEM.match(stem):
         return {"reader": OPENUNIVERSE, "sca": int(m["sca"]),
                 "filter": RAPID_TO_ROMAN_FILTER_NAMES.get(m["filter"], m["filter"]),
-                "expid": int(m["pointing"]), "pointing": int(m["pointing"]), "pass": None, "program": None}
+                "name": stem[: m.end("pointing")], "pointing": int(m["pointing"]), "pass": None,
+                "program": None}
     if m := RTS_STEM.match(stem):
         return {"reader": RIMTIMSIM, "sca": int(m["sca"]), "filter": m["filter"],
-                "expid": int(m["exposure"]), "pointing": int(m["exposure"]), "pass": None, "program": None}
+                "name": f"rimtimsim_WFI_{m['filter']}_{m['exposure']}", "pointing": int(m["exposure"]),
+                "pass": None, "program": None}
     return None
+
+
+def exposure_ids(conn, dataset: str, names: Iterable[str]) -> dict[str, int]:
+    """The ``exposure_ids`` id of each name in ``dataset``, assigned where the table holds none.
+
+    One operation of two SQL commands under ``READ COMMITTED``, committed
+    before it returns: ``INSERT ... ON CONFLICT (dataset, name) DO NOTHING``
+    for every name, then a ``SELECT`` of the names' rows. Two resolutions of
+    one name at once agree: the second's insert waits on the first's
+    uncommitted row and then does nothing, and its select, a new snapshot,
+    reads the row the first committed. Never one statement that inserts and
+    returns: a conflicting row not yet visible to that statement's snapshot
+    returns nothing. The pass calls this before it plans, so every intake it
+    submits carries an id the intake's own check, on another connection,
+    will find.
+
+    Parameters
+    ----------
+    conn
+        A connection; the transaction is committed, or rolled back and the error raised.
+    dataset : str
+        The dataset the names belong to.
+    names : iterable of str
+        The producer's names (:func:`stem_ids`); duplicates are resolved once.
+
+    Returns
+    -------
+    dict
+        Name to ``expid``, every name present.
+    """
+    wanted = sorted(set(names))
+    if not wanted:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO exposure_ids (dataset, name) SELECT %s, unnest(%s::text[])"
+                        " ON CONFLICT (dataset, name) DO NOTHING", (dataset, wanted))
+            cur.execute("SELECT name, expid FROM exposure_ids WHERE dataset = %s AND name = ANY(%s)",
+                        (dataset, wanted))
+            found = {name: int(expid) for name, expid in cur.fetchall()}
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return found
+
+
+def known_exposure_ids(conn, dataset: str, names: Iterable[str]) -> dict[str, int | None]:
+    """The ``exposure_ids`` id of each name in ``dataset`` as the table stands, ``None`` where it
+    holds none: one ``SELECT``, nothing assigned and nothing written (a dry run's lookup).
+
+    Parameters
+    ----------
+    conn
+        A connection; its read transaction is ended before the return.
+    dataset : str
+        The dataset the names belong to.
+    names : iterable of str
+        The producer's names (:func:`stem_ids`).
+
+    Returns
+    -------
+    dict
+        Name to ``expid`` or ``None``, every name present.
+    """
+    wanted = sorted(set(names))
+    found: dict[str, int | None] = dict.fromkeys(wanted)
+    if wanted:
+        with conn.cursor() as cur:
+            cur.execute("SELECT name, expid FROM exposure_ids WHERE dataset = %s AND name = ANY(%s)",
+                        (dataset, wanted))
+            found.update((name, int(expid)) for name, expid in cur.fetchall())
+        conn.rollback()
+    return found
+
+
+def _new_names(snap: "Snapshot", stems: Iterable[str], selection: Selection) -> list[str]:
+    """The exposure names of the listing's admitted stems that no published intake holds: the
+    names a pass resolves before it plans."""
+    return [a["name"] for s in stems if s not in snap.published_stems
+            if (a := selection.admits_stem(s)) is not None]
 
 
 def list_stems(client: Any, source_root: str, selection: Selection) -> list[str]:
@@ -503,7 +607,7 @@ class Snapshot:
     jobs: list[dict]
     psfs: dict[tuple[int, int, str], tuple[int, int]]          # (fid, sca, kind) -> (job, binding)
     exposures: set[int]                                          # expids with an open binding
-    l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job, program, ra0, dec0, corners}
+    l2: dict[tuple[int, int, int], dict]                         # key -> {field, overlapfields, mjdobs, job, stem, program, ra0, dec0, corners}
     refs: dict[tuple[int, int], int]                             # (field, fid) -> job
     diffs: dict[tuple[int, int, int], int]                       # key -> difference job
     sources: dict[tuple[int, int, int], int]                     # key -> source set job
@@ -535,13 +639,17 @@ def snapshot(conn, run: int) -> Snapshot:
                           " ORDER BY id", (run, list(STAGES)))
         bound = _rows(cur, "SELECT id, product, key, job FROM official WHERE closed_at IS NULL"
                            " AND job IS NOT NULL AND key->>'dataset' = %s", (d,))
-        # A row's program is its exposure's official exposures row's, null while none is bound.
+        # A row's stem is the file its intake job read (null for an imported row), which the selection
+        # reads; its program is its exposure's official exposures row's, null while none is bound.
         l2 = {_l2key(r): {"field": r["field"], "overlapfields": r["overlapfields"], "mjdobs": r["mjdobs"],
-                          "job": r["job"], "program": r["program_id"], "ra0": r["ra0"], "dec0": r["dec0"],
+                          "job": r["job"], "stem": r["stem"], "program": r["program_id"], "ra0": r["ra0"],
+                          "dec0": r["dec0"],
                           "corners": ([r[f"ra{i}"] for i in range(1, 5)], [r[f"dec{i}"] for i in range(1, 5)])}
               for r in _rows(cur, "SELECT l.expid, l.sca, l.fid, l.field, l.overlapfields, l.mjdobs, l.job,"
                                   " l.ra0, l.dec0, l.ra1, l.dec1, l.ra2, l.dec2, l.ra3, l.dec3, l.ra4, l.dec4,"
-                                  " e.program_id FROM l2files_official l LEFT JOIN exposures_official e"
+                                  " ij.scope->>'file' AS stem, e.program_id"
+                                  " FROM l2files_official l JOIN jobs ij ON ij.id = l.job"
+                                  " LEFT JOIN exposures_official e"
                                   " ON e.dataset = l.dataset AND e.expid = l.expid WHERE l.dataset = %s", (d,))}
     conn.commit()
     by = defaultdict(list)
@@ -777,10 +885,19 @@ def select_by_coverage(reference: dict, pool: list[tuple[tuple, dict]],
 
 
 def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
-         max_intake: int = 100, max_submissions: int | None = None) -> tuple[list[dict], dict]:
+         max_intake: int = 100, max_submissions: int | None = None,
+         ids: Mapping[str, int | None] | None = None) -> tuple[list[dict], dict]:
     """Every submission one pass makes, and the pass's counts; reads nothing but its arguments.
 
     A submission is ``{"stage", "scope", "inputs", "expects"}``, ``job submit``'s arguments.
+    ``ids`` is the ``expid`` of every new admitted stem's exposure name (:func:`exposure_ids`,
+    resolved by the pass before it plans): each intake's scope carries its stem's, the 18 SCAs
+    of an exposure the same one, and the ``exposures`` expectation rides on the first intake
+    of an id that nothing holds (``snap.exposures``) or claims (a pending intake's scope).
+    A name absent from ``ids`` is a ``KeyError``; a name whose id is ``None`` (a dry run's, for
+    an exposure ``exposure_ids`` does not hold yet, :func:`known_exposure_ids`) plans with
+    ``expid`` null, its ``exposures`` expectation on its first intake, and is listed under the
+    counts' ``unassigned``.
     With ``max_submissions``, only the first that many are made, in stage order, and
     ``deferred`` counts the rest; the next pass plans them again. (An exposure's
     ``exposures`` expectation rides on its first SCA's intake, earlier in the order than
@@ -788,11 +905,11 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     (``refusal`` set) is reported under ``failed`` with a failed one, each with its
     ``refusal``, and like a failed one holds its key: neither is submitted again.
     """
+    ids = ids or {}
     d = snap.dataset
     # The selected filters' fids by pipeline name; every filter of the table when none is selected.
     names = selection.filters if selection.filters is not None else {"F" + n[1:] for n in snap.fids}
     fids = {name: _fid(name, snap.fids) for name in names}
-    bands = {fid: name for name, fid in fids.items()}
     run_jobs = defaultdict(list)
     for job in snap.jobs:
         run_jobs[job["stage"]].append(job)
@@ -819,14 +936,13 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     admitted = {s: a for s in stems if (a := selection.admits_stem(s)) is not None}
     known = snap.published_stems | {j["scope"]["file"] for j in run_jobs["intake"]}
     new = sorted(s for s in admitted if s not in known)
-    claimed = set(snap.exposures) | {ids["expid"] for j in pending["intake"]
-                                     if (ids := stem_ids(j["scope"]["file"])) is not None}
+    claimed: set = set(snap.exposures) | {int(j["scope"]["expid"]) for j in pending["intake"]}
 
     # PSF: per (filter, SCA) of the new stems without an official science row, one job; its stems wait.
     served = set()
     for job in run_jobs["psf"]:
-        ids = stem_ids(job["scope"]["file"])
-        served.add((_fid(ids["filter"], snap.fids), ids["sca"]))
+        of = stem_ids(job["scope"]["file"])
+        served.add((_fid(of["filter"], snap.fids), of["sca"]))
     unready = {}
     for stem in new:
         a = admitted[stem]
@@ -842,21 +958,22 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     ready_stems = [s for s in new if (fids[admitted[s]["filter"]], admitted[s]["sca"]) not in unready]
     for stem in ready_stems[:max_intake]:
         a = admitted[stem]
-        fid, expid = fids[a["filter"]], a["expid"]
+        fid, expid = fids[a["filter"]], ids[a["name"]]
+        claim = expid if expid is not None else a["name"]      # an unassigned exposure is claimed by its name
         expects = [{"product": "l2files", "key": key(expid, a["sca"], fid), "binding": None}]
-        if expid not in claimed:
+        if claim not in claimed:
             expects.insert(0, {"product": "exposures", "key": {"dataset": d, "expid": expid},
                                "binding": None})
-            claimed.add(expid)
+            claimed.add(claim)
         inputs = [psf(fid, a["sca"], "science")]
         if "gaia" in snap.catalogs:            # the intake measures the WCS against it
             inputs.append({"product": "catalogs", "key": snap.catalogs["gaia"]["key"],
                            "source_job": snap.catalogs["gaia"]["job"]})
-        out.append({"stage": "intake", "scope": {"dataset": d, "file": stem},
+        out.append({"stage": "intake", "scope": {"dataset": d, "file": stem, "expid": expid},
                     "inputs": inputs, "expects": expects})
 
     selected = {k: v for k, v in snap.l2.items()
-                if selection.admits_row(*k, set(fids.values()), v["program"], v["mjdobs"], bands.get(k[2]))}
+                if selection.admits_row(v.get("stem"), k[1], k[2], set(fids.values()), v["program"], v["mjdobs"])}
     intake_pending = bool(pending["intake"])
     bound = snap.settings["reference"]["selection"].get("before_mjd")
     after = {k: v for k, v in selected.items() if bound is None or v["mjdobs"] >= float(bound)}
@@ -956,6 +1073,10 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
               "failed": [{"job": j["id"], "stage": j["stage"], "scope": j["scope"],
                           "refusal": j.get("refusal")} for j in failed],
               "held": held}
+    unassigned = sorted({admitted[o["scope"]["file"]]["name"] for o in out
+                         if o["stage"] == "intake" and o["scope"]["expid"] is None})
+    if unassigned:
+        counts["unassigned"] = unassigned
     return out, counts
 
 
@@ -976,11 +1097,18 @@ def dry_run(conn_factory: Callable[[], Any], run: int, selection: Selection, ste
             max_intake: int = 100, stage: str | None = None) -> dict:
     """One pass's plan without the pass: the submissions it would make, as ``job submit``
     takes them, under ``submissions``, with the pass's counts; nothing is recorded or
-    submitted and Batch is not asked. ``stage`` keeps one stage's (:func:`cut_to_stage`)."""
+    submitted and Batch is not asked. ``stage`` keeps one stage's (:func:`cut_to_stage`).
+
+    No exposure id is assigned (:func:`known_exposure_ids`): an intake of an exposure
+    ``exposure_ids`` does not hold yet is planned with ``expid`` null in its scope and its
+    expected keys, and the exposure's name is listed under ``unassigned``. The pass itself
+    assigns each such name its id before it plans, so its submissions differ from these only in
+    those ids; ``rapidpipe exposure id --dataset D --name N`` assigns one by hand."""
     with conn_factory() as conn:
         snap = snapshot(conn, run)
+        ids = known_exposure_ids(conn, snap.dataset, _new_names(snap, stems, selection))
     cap = snap.settings.get("batch", {}).get("max_submissions_per_pass")
-    submissions, counts = plan(snap, stems, selection, max_intake, cap)
+    submissions, counts = plan(snap, stems, selection, max_intake, cap, ids)
     submissions = cut_to_stage(submissions, counts, stage)
     return {"run": run, "selection": selection.summary(), "submissions": submissions, **counts}
 
@@ -994,11 +1122,13 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     """One pass: reconcile with ``batch`` (a Batch client) when given, rerun once through ``rerun``
     (``(job, stage)``, on the prompt queue) each job whose container died for a reason not the
     code's, or whose Spot submission ended unpublished or was hedged (``spot``, the run's
-    ``[batch.spot]``), snapshot, plan at most ``[batch] max_submissions_per_pass`` submissions,
-    submit each without waiting (``submit(item)`` returns the job id), then publish; return the
-    summary, with ``held_sets``, the quality gate's held packet sets after the publish
-    (``held_sets()``), when given, and the run's ``attempts`` report. ``stage`` submits one
-    stage's alone (:func:`cut_to_stage`); such a pass never drains."""
+    ``[batch.spot]``), snapshot, resolve the exposure ids of the admitted stems' names that no
+    published intake holds (:func:`exposure_ids`, committed before anything is submitted), plan
+    at most ``[batch] max_submissions_per_pass`` submissions, submit each without waiting
+    (``submit(item)`` returns the job id), then publish; return the summary, with ``held_sets``,
+    the quality gate's held packet sets after the publish (``held_sets()``), when given, and the
+    run's ``attempts`` report. ``stage`` submits one stage's alone (:func:`cut_to_stage`); such a
+    pass never drains."""
     with conn_factory() as conn:
         if batch is not None:
             medians = median_seconds(conn, run) if spot and spot.get("hedge_factor") else None
@@ -1006,6 +1136,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
         else:
             checked = None
         snap = snapshot(conn, run)
+        ids = exposure_ids(conn, snap.dataset, _new_names(snap, stems, selection))
     rerunning = set()
     if checked and rerun is not None:
         for died in checked.get("rerun", []):
@@ -1015,7 +1146,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
         if checked and job["id"] in checked["retrying"] or job["id"] in rerunning:
             job["state"] = "running"            # Batch's retry or the rerun in flight: pending, not failed
     cap = snap.settings.get("batch", {}).get("max_submissions_per_pass")
-    submissions, counts = plan(snap, stems, selection, max_intake, cap)
+    submissions, counts = plan(snap, stems, selection, max_intake, cap, ids)
     submissions = cut_to_stage(submissions, counts, stage)
     queues = defaultdict(list)
     for item in submissions:

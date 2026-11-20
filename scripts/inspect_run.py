@@ -17,9 +17,12 @@ so lists none, the kept sources of highest S/N instead), science, reference and 
 cutouts, the difference divided by its star's reference flux (5 px
 aperture less the 8 to 12 px annulus median, the core fraction's) and
 shown at ±:data:`FLUX_STRETCH` per pixel, so every star's residual
-pattern is seen at the scale the core and ring fractions measure it. The sample is the first and last epoch of the run by ``expid``
+pattern is seen at the scale the core and ring fractions measure it. The sample is the first and last epoch of the run by
+``mjdobs`` (the difference's ``jd``; the ``expid`` is a serial that carries no meaning)
 and every epoch whose ``n_sources_snr_gt20`` is more than twice the run's
 median: run 17's hand-made pictures (rapid_docs measurements.md) made by code, not every job.
+A difference job's row is labelled by its epoch's id and SCA, the gallery's title by the id and
+the exposure's name beside it; an intake job's by its file.
 
 ``check_run.sh`` runs it first, so the numbers are read as soon as a run
 drains. The database is named as for every rapidpipe command.
@@ -43,13 +46,14 @@ FLUX_STRETCH = 3e-3
 #: Files beside a difference image that the gallery reads.
 SCIENCE, REFERENCE = "bkg_subbed_science_image.fits.gz", "awaicgen_output_mosaic_image_resampled_gainmatched.fits.gz"
 
-QUERY = ("SELECT job, stage, expid, sca, fid, field, file, metric, value FROM job_metrics"
-         " WHERE run = %s ORDER BY stage, job, metric")
+QUERY = ("SELECT m.job, m.stage, m.expid, m.sca, m.fid, m.field, m.file, m.metric, m.value, d.jd FROM job_metrics m"
+         " LEFT JOIN diffimages d ON d.job = m.job WHERE m.run = %s ORDER BY m.stage, m.job, m.metric")
 
 
 def label(row: dict) -> str:
-    """A job's row label: its epoch, field or file, from its scope columns."""
-    if row["expid"] is not None:
+    """A job's row label: its epoch (an image's id and SCA), its field, or its file (an intake's, whose
+    scope carries the exposure's id too), from its scope columns."""
+    if row["expid"] is not None and row["sca"] is not None:
         return f"{row['expid']} sca {row['sca']}"
     if row["field"] is not None:
         return f"field {row['field']}"
@@ -87,15 +91,16 @@ def tables(rows: list[dict]) -> dict[str, str]:
 
 
 def sample(rows: list[dict]) -> list[int]:
-    """The difference jobs the gallery renders: first and last by expid, and the bright outliers."""
+    """The difference jobs the gallery renders: first and last by ``jd`` (the difference's epoch), and the
+    bright outliers."""
     diffs = {}
     for r in rows:
         if r["stage"] == "difference":
-            diffs.setdefault(r["job"], {"expid": r["expid"]})
+            diffs.setdefault(r["job"], {"jd": r.get("jd")})
             diffs[r["job"]][r["metric"]] = r["value"]
     if not diffs:
         return []
-    order = sorted(diffs, key=lambda j: (diffs[j]["expid"] or 0, j))
+    order = sorted(diffs, key=lambda j: (diffs[j]["jd"] or 0, j))
     chosen = {order[0], order[-1]}
     bright = [d["n_sources_snr_gt20"] for d in diffs.values() if "n_sources_snr_gt20" in d]
     if bright:
@@ -166,9 +171,10 @@ def gallery(cur, run: int, job: int, out: Path) -> Path:
 
     from rapidpipe.foundation.prefix import get
 
-    cur.execute("SELECT d.filename, j.manifest -> 'difference' -> 'residual_stars', d.expid"
-                " FROM diffimages d JOIN jobs j ON j.id = d.job WHERE d.job = %s", (job,))
-    url, stars, expid = cur.fetchone()
+    cur.execute("SELECT d.filename, j.manifest -> 'difference' -> 'residual_stars', d.expid, x.name"
+                " FROM diffimages d JOIN jobs j ON j.id = d.job LEFT JOIN exposure_ids x ON x.expid = d.expid"
+                " WHERE d.job = %s", (job,))
+    url, stars, expid, name = cur.fetchone()
     base = url.rsplit("/", 1)[0] + "/"
     diff = fits.getdata(get(url), 0).astype(float)
     sci = fits.getdata(get(base + SCIENCE), 0).astype(float)
@@ -183,7 +189,7 @@ def gallery(cur, run: int, job: int, out: Path) -> Path:
     sigma = 1.4826 * float(np.median(np.abs(finite - np.median(finite))))
     fig, axes = plt.subplots(1 + len(stars), 3, figsize=(9, 3 * (1 + len(stars))), squeeze=False)
     axes[0][0].imshow(thumbnail(diff), origin="lower", cmap="gray", vmin=-5 * sigma, vmax=5 * sigma)
-    axes[0][0].set_title(f"job {job} expid {expid}: difference, {THUMB_BLOCK}x peak, ±5σ\n"
+    axes[0][0].set_title(f"job {job} expid {expid} ({name}): difference, {THUMB_BLOCK}x peak, ±5σ\n"
                          f" circled: {chosen}", fontsize=8)
     for s in stars:
         axes[0][0].plot(s["x"] / THUMB_BLOCK, s["y"] / THUMB_BLOCK, "o", mfc="none", mec="r", ms=6)
