@@ -184,7 +184,10 @@ One pass, in order:
   reported under ``sets_waiting`` and keeps the selection from draining.
   ``sets_late`` counts the run's sets a sweep sent after that window, so
   a failing container send shows in the pass line once the sweep has
-  sent its set (none in a healthy run whose gate held nothing).
+  sent its set (none in a healthy run whose gate held nothing). A sweep
+  that cannot send is reported as ``send_error`` and the pass goes on;
+  ``sets_unsent`` names the sets past that window neither stamped nor
+  held by the gate, whatever the sweep raised.
 """
 
 from __future__ import annotations
@@ -1165,7 +1168,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
              submit: Callable[[dict], Any], publish: Callable[[], dict] | None,
              max_intake: int = 100, batch: Any = None,
              rerun: Callable[[int, str], Any] | None = None,
-             held_sets: Callable[[], list[dict]] | None = None, spot: dict | None = None,
+             unsent_sets: Callable[[], list[dict]] | None = None, spot: dict | None = None,
              stage: str | None = None, queue: str = "prompt") -> dict:
     """One pass: reconcile with ``batch`` (a Batch client) when given, rerun once through ``rerun``
     (``(job, stage)``, on the prompt queue) each job whose container died for a reason not the
@@ -1173,9 +1176,12 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     ``[batch.spot]``), snapshot, resolve the exposure ids of the admitted stems' names that no
     published intake holds (:func:`exposure_ids`, committed before anything is submitted), plan
     at most ``[batch] max_submissions_per_pass`` submissions, submit each without waiting
-    (``submit(item)`` returns the job id), then publish; return the summary, with ``held_sets``,
-    the quality gate's held packet sets after the publish (``held_sets()``), when given, and the
-    run's ``attempts`` report. ``stage`` submits one stage's alone (:func:`cut_to_stage`); such a
+    (``submit(item)`` returns the job id), then publish; return the summary, with the run's
+    ``attempts`` report and, when ``unsent_sets`` is given (the gate's answer, with ``send``, for
+    each official set still unstamped after the publish and past its send window), ``held_sets``,
+    those the quality gate holds, and ``sets_unsent``, the jobs of the rest: sets a send failed
+    to deliver. A ``publish()`` that could not send returns its ``error``, reported as
+    ``send_error``. ``stage`` submits one stage's alone (:func:`cut_to_stage`); such a
     pass never drains. ``queue`` names, under ``queues``, the submissions no Spot queue took
     (``local`` for the loop's ``--local``, whose jobs run here)."""
     with conn_factory() as conn:
@@ -1206,10 +1212,14 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     counts["sets_produced"] = produced["sets"]
     counts["sets_waiting"] = produced.get("waiting", [])
     counts["sets_late"] = produced.get("late", 0)
+    if "error" in produced:
+        counts["send_error"] = produced["error"]
     counts["drained"] = (counts["new"] == 0 and not submissions and not counts.get("cut")
                          and not any(counts["pending"].values()) and not counts["sets_waiting"])
-    if held_sets is not None:
-        counts["held_sets"] = held_sets()
+    if unsent_sets is not None:
+        unsent = unsent_sets()
+        counts["held_sets"] = [{k: v for k, v in a.items() if k != "send"} for a in unsent if not a["send"]]
+        counts["sets_unsent"] = [a["job"] for a in unsent if a["send"]]
     if checked is not None:
         counts["batch"] = checked
         with conn_factory() as conn:
