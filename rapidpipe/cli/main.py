@@ -84,7 +84,11 @@ The foundation verbs (foundation plan v5, milestone 0, and those added since) wr
   rerun's container dies too, and a pass submits at most the run's
   ``[batch] max_submissions_per_pass``; every pass reports ``held_sets``,
   the run's unsent official packet sets the quality gate holds
-  (``rapidpipe.foundation.gate``), with the metric and value; ``--job-queue``
+  (``rapidpipe.foundation.gate``), with the metric and value; a sweep that
+  cannot send is reported in its pass (``send_error``, and ``sets_unsent``,
+  the sets past their send window neither stamped nor held) and logged as
+  one error while the loop goes on building, and the loop exits 1 when its
+  last pass still has a set in ``sets_unsent``; ``--job-queue``
   names the prompt queue, and a run whose ``[batch.spot]`` names a Spot queue
   sends a backlog there, one attempt each, with the next attempt and any
   hedged straggler on the prompt queue (``rapidpipe.foundation.loop``), each
@@ -298,6 +302,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     "Repeat every --interval seconds until a pass finds nothing new, pending or "
                     "to submit: exit 0, or 1 when a job of the run has failed or was published "
                     "with its binding refused; the work that does not depend on it drains first. "
+                    "A pass that cannot send reports the error and the sets left unsent and the "
+                    "loop goes on building: exit 1 when the last pass still has a set unsent "
+                    "that the quality gate does not hold. "
                     "Exit 64 when the first pass admits nothing, naming the term that admits no "
                     "file. With --local each planned job runs here instead, as 'job local' "
                     "runs one, passes repeating at once until one drains; with --dry-run one pass's "
@@ -657,19 +664,28 @@ def _loop(args: argparse.Namespace) -> int:
             if not publish_kafka.unpublished_sets(conn, args.run):
                 return {"packets": 0, "sets": [], "waiting": publish_kafka.settling_sets(conn, args.run),
                         "late": publish_kafka.late_sets(conn, args.run)}
+        from kafka.errors import KafkaError   # an unreachable broker raises it as the producer is made
         endpoint = publish_kafka.endpoint(settings["kafka"])
-        producer = publish_kafka.producer(endpoint["bootstrap_servers"], endpoint["max_request_bytes"])
         try:
-            return publish_kafka.publish(connect_loop, args.run, producer, endpoint["topic"])
-        finally:
-            producer.close(timeout=publish_kafka.ACK_TIMEOUT_S)
+            producer = publish_kafka.producer(endpoint["bootstrap_servers"], endpoint["max_request_bytes"])
+            try:
+                return publish_kafka.publish(connect_loop, args.run, producer, endpoint["topic"])
+            finally:
+                producer.close(timeout=publish_kafka.ACK_TIMEOUT_S)
+        except (publish_kafka.PublishError, KafkaError) as error:   # the send's own failure: said, and the loop goes on
+            logger.error("run %d: the sweep could not send (%s: %s); the loop goes on",
+                         args.run, type(error).__name__, error)
+            with connect_loop() as conn:
+                return {"packets": 0, "sets": [], "waiting": publish_kafka.settling_sets(conn, args.run),
+                        "late": publish_kafka.late_sets(conn, args.run),
+                        "error": f"{type(error).__name__}: {error}"}
 
-    def held_sets() -> list[dict]:
+    def unsent_sets() -> list[dict]:
         with connect_loop() as conn:
             answers = [{"job": job, **gate.decide(conn, job, settings.get("gate"))}
                        for job in publish_kafka.unpublished_sets(conn, args.run)]
-        return [{k: a[k] for k in ("job", "difference_job", "metric", "value", "bound", "reason")}
-                for a in answers if not a["send"]]
+        return [{k: a[k] for k in ("job", "difference_job", "metric", "value", "bound", "reason", "send")}
+                for a in answers]
 
     first = True
     while True:
@@ -677,10 +693,10 @@ def _loop(args: argparse.Namespace) -> int:
         stems = loop.list_stems(s3, intake["source_root"], selection)
         if args.local:                  # no Batch, no rerun, no sweep: a packet job sends its own set
             summary = loop.run_pass(connect_loop, args.run, selection, stems, submit_local, None,
-                                    args.max_intake, held_sets=held_sets, stage=args.stage, queue="local")
+                                    args.max_intake, unsent_sets=unsent_sets, stage=args.stage, queue="local")
         else:
             summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
-                                    args.max_intake, batch, rerun, held_sets, spot, args.stage)
+                                    args.max_intake, batch, rerun, unsent_sets, spot, args.stage)
         summary["seconds"] = round(time.monotonic() - started, 1)
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
@@ -688,11 +704,14 @@ def _loop(args: argparse.Namespace) -> int:
             raise CommandExit(int(ExitCode.USAGE), _nothing_admitted(args, intake, selection, s3))
         first = False
         if once or summary["drained"]:
+            unsent = [] if args.local else summary["sets_unsent"]      # --local has no sweep to have sent them
             if summary["failed"]:
                 sys.stderr.write(f"rapidpipe loop: failed or refused jobs of run {args.run}: "
                                  f"{', '.join(str(f['job']) for f in summary['failed'])}\n")
-                return int(ExitCode.FAILURE)
-            return int(ExitCode.SUCCESS)
+            if unsent:
+                sys.stderr.write(f"rapidpipe loop: packet sets of run {args.run} not sent and not held: "
+                                 f"{', '.join(map(str, unsent))}\n")
+            return int(ExitCode.FAILURE if summary["failed"] or unsent else ExitCode.SUCCESS)
         if not args.local:              # locally nothing is pending between passes: the next starts at once
             time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
 

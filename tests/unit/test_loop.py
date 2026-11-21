@@ -39,6 +39,12 @@ published with its binding refused is reported under ``failed`` with its
 reason and its key not resubmitted, and the loop exits 1 for it as for a
 failed job once the rest drains.
 A pass reports the quality gate's held sets when given the query.
+A sweep that cannot send (``PublishError``, or the client's error as the
+producer is made) is reported in its pass and logged once, and the loop goes
+on: a difference that ends later still gets its packet job; the loop exits 1
+when its last pass has a set unsent that the gate does not hold, and as it
+would have without the failure once a later sweep stamped the set; any other
+exception ends the loop.
 Spot, with ``[batch.spot]``: a stage's submissions go to the Spot queue
 while more than ``backlog`` remain, the rest to the prompt queue, and none
 without the table; a Spot job that ended unpublished for any reason is
@@ -85,12 +91,14 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import types
 
 import pytest
+from kafka.errors import KafkaTimeoutError
 
 from rapidpipe.cli import main as cli
 from rapidpipe.exitcodes import ExitCode
-from rapidpipe.foundation import loop
+from rapidpipe.foundation import loop, publish_kafka
 
 D = "r00342"
 SEL = loop.Selection.parse("F146", "8", "all")
@@ -800,10 +808,110 @@ def test_a_pass_reports_the_gates_held_sets_when_given(monkeypatch):
     held = [{"job": 5, "metric": "core_fraction", "value": 0.04}]
     monkeypatch.setattr(loop, "snapshot", lambda conn, run: snap())
     summary = loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [], lambda item: None, None,
-                            held_sets=lambda: held)
-    assert summary["held_sets"] == held
+                            unsent_sets=lambda: [{**held[0], "send": False}])
+    assert summary["held_sets"] == held and summary["sets_unsent"] == []
     assert "held_sets" not in loop.run_pass(lambda: contextlib.nullcontext(None), 12, SEL, [],
                                             lambda item: None, None)
+
+
+class Sweep:
+    """A Batch loop's Kafka side, faked: ``unstamped`` are the run's official sets past their send
+    window, the gate answers ``send`` for each, and each pass's sweep takes the next of ``acts``:
+    an exception ``publish_kafka.publish`` raises, one the producer's construction raises
+    (``at="producer"``), ``"stamps"``, a sweep that sends and stamps every set, or ``None``, one
+    that raises nothing and sends nothing."""
+
+    def __init__(self, monkeypatch, snaps, acts, send=True, at="publish"):
+        self.unstamped, self.submitted, acts, snaps = [90], [], iter(acts), iter(snaps)
+        k1, k2 = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 8, 8)
+        rows = {"published_stems": {stem(1, 1, 1), stem(2, 1, 1)}, "refs": {(7, 8): 30},
+                "l2": {k1: l2row(7, 1.0, 20, stem=stem(1, 1, 1)), k2: l2row(7, 1.1, 21, stem=stem(2, 1, 1))}}
+        running = {"id": 42, "stage": "difference", "state": "running", "scope": {"expid": k2[0], "sca": 8, "fid": 8}}
+        shapes = {"differencing": snap(jobs=[running], diffs={k1: 41}, sources={k1: 41}, packets={k1: 90}, **rows),
+                  "differenced": snap(diffs={k1: 41, k2: 42}, sources={k1: 41, k2: 42}, packets={k1: 90}, **rows),
+                  "done": snap(diffs={k1: 41, k2: 42}, sources={k1: 41, k2: 42}, packets={k1: 90, k2: 91}, **rows)}
+
+        def act(step):
+            if isinstance(step, Exception):
+                raise step
+            sent = list(self.unstamped) if step == "stamps" else []
+            if sent:
+                self.unstamped.clear()
+            return {"packets": len(sent), "sets": sent}
+
+        def producer(servers, size):
+            if at == "producer":
+                act(next(acts))
+            return types.SimpleNamespace(close=lambda timeout: None)
+
+        patch = monkeypatch.setattr
+        patch(loop, "snapshot", lambda conn, run: shapes[next(snaps)])
+        patch(cli, "connect", lambda **kw: contextlib.nullcontext(None))
+        patch(cli.foundation, "run_show", lambda conn, run: {"settings": SETTINGS})
+        patch(cli.foundation, "create_job", lambda conn, run, stage, *a: self.submitted.append(stage) or 91)
+        patch(cli.launch, "submit", lambda *a, **kw: "batch-91")
+        patch(cli.launch, "job_environment", lambda settings: {})
+        patch(cli.launch, "batch_client", lambda: Batch({}))
+        patch(cli.storage, "s3_client",
+              lambda unsigned=False: Pages([stem(1, 1, 1) + "_cal.asdf", stem(2, 1, 1) + "_cal.asdf"]))
+        patch(cli.publish_kafka, "unpublished_sets", lambda conn, run: list(self.unstamped))
+        patch(cli.publish_kafka, "settling_sets", lambda conn, run: [])
+        patch(cli.publish_kafka, "late_sets", lambda conn, run: 0)
+        patch(cli.publish_kafka, "endpoint",
+              lambda settings: {"bootstrap_servers": ["b:9098"], "max_request_bytes": 1, "topic": "t"})
+        patch(cli.publish_kafka, "producer", producer)
+        patch(cli.publish_kafka, "publish", lambda connect, run, producer, topic: act(
+            "stamps" if at == "producer" else next(acts)))
+        patch(cli.gate, "decide", lambda conn, job, settings: {
+            "send": send, "metric": None if send else "core_fraction", "value": None, "bound": None,
+            "reason": None, "difference_job": 41})
+        patch(loop, "reconcile", lambda conn, run, client, *a: {"retrying": []})
+        patch(loop.attempts, "run_entries", lambda conn, run: [])
+
+    def loop(self, capsys, *more):
+        code = cli.main(["loop", "--run", "12", "--filters", "F146", "--scas", "8", "--pointings", "001_0001",
+                         "--job-definition", "jd", "--interval", "0", *more])
+        return code, [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+UNSTAMPED = publish_kafka.PublishError("run 12: packet sets [90] left unstamped after a failed acknowledgement")
+
+
+@pytest.mark.parametrize("at, error", [("publish", UNSTAMPED),
+                                       ("producer", KafkaTimeoutError("Unable to bootstrap from ['b:9098']"))])
+def test_a_pass_whose_sweep_cannot_send_reports_the_error_and_the_sets_left_and_logs_it_once(
+        monkeypatch, capsys, caplog, at, error):
+    _, lines = Sweep(monkeypatch, ["done"], [error], at=at).loop(capsys, "--once")
+    assert str(error) in lines[0]["send_error"] and type(error).__name__ in lines[0]["send_error"]
+    assert lines[0]["sets_unsent"] == [90] and lines[0]["sets_produced"] == []
+    assert [r.levelname for r in caplog.records].count("ERROR") == 1
+
+
+def test_after_a_failed_sweep_a_difference_that_ends_later_still_gets_its_packet_job(monkeypatch, capsys):
+    sweep = Sweep(monkeypatch, ["differencing", "differenced", "done"], [UNSTAMPED] * 3)
+    _, lines = sweep.loop(capsys)
+    assert "send_error" in lines[0] and not lines[0]["queues"]            # the sweep failed before the difference ended
+    assert sweep.submitted == ["packet"] and len(lines) == 3
+
+
+@pytest.mark.parametrize("send, code", [(True, ExitCode.FAILURE), (False, ExitCode.SUCCESS)], ids=["unsent", "held"])
+def test_a_loop_that_ends_with_a_set_unsent_exits_1_unless_the_gate_holds_it(monkeypatch, capsys, send, code):
+    ended, lines = Sweep(monkeypatch, ["done"], [None], send=send).loop(capsys)   # this sweep raised nothing
+    assert ended == code and lines[-1]["drained"] and "send_error" not in lines[-1]
+    assert (lines[-1]["sets_unsent"], [h["job"] for h in lines[-1]["held_sets"]]) == (([90], []) if send else ([], [90]))
+
+
+def test_a_loop_whose_failed_set_a_later_sweep_stamped_exits_as_without_the_failure(monkeypatch, capsys):
+    ended, lines = Sweep(monkeypatch, ["differencing", "differenced", "done"],
+                         [UNSTAMPED, "stamps", None]).loop(capsys)
+    assert lines[0]["sets_unsent"] == [90] and lines[-1]["sets_unsent"] == []
+    assert ended == ExitCode.SUCCESS
+
+
+def test_an_exception_that_is_not_a_send_failure_still_ends_the_loop(monkeypatch, capsys):
+    broke = RuntimeError("the database went away")
+    ended, lines = Sweep(monkeypatch, ["differencing", "differenced", "done"], [broke]).loop(capsys)
+    assert ended == cli.exit_code(broke) != ExitCode.SUCCESS and lines == []
 
 
 SPOT = {"queue": "spot-q", "backlog": 2, "hedge_factor": 3.0}
