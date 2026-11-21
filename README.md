@@ -6,36 +6,183 @@ Repository for the RAPID (***R***oman ***A***lerts ***P***romptly from ***I***ma
 
 ## Getting started
 
-This takes one epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146) through the whole chain on your own machine: intake, PSF, a reference from two earlier passes, the difference, and the epoch's packet set. Every stage runs inside the pipeline image, which carries the tools (`sex`, `swarp`, `awaicgen`, `bkgest`), against a throwaway PostgreSQL 18. It took four and a half minutes on a 16 GB machine. To start a night on the team's database and Batch instead, read [Starting a night](https://roman-rapid.readthedocs.io/en/latest/system/loop.html#starting-a-night).
+Two worked examples, in plain commands, each ending in a result you can check: [a local test](#a-local-test) runs one epoch through the whole chain on your own machine against a throwaway database, and [a flight program on SMDC](#a-flight-program-on-smdc) runs one on the team's database and Batch, then stops and cleans up after it. Both use `scripts/dev.sh`, which runs `rapidpipe` from this checkout inside a container of the team's pipeline image, so nothing is installed and nothing is looked up by hand.
 
 ### What you need
 
-- `podman` (or `docker` under the same commands) and `jq`, and this checkout, with your shell at its top.
-- At least 16 GB of memory (the difference peaked at 15.2 GB) and 2 GB of disk.
-- Network access to the public bucket `s3://stpubdata` (read unsigned, no AWS account) and to `https://roman-crds.stsci.edu` (the PSF stage's reference).
-- The RuBR-AT model, which scores the SFFT difference's candidates: the difference job reads it as a Batch job does, the bucket from the SSM parameter `[difference.rubrat] model_bucket_parameter` names and the files under its `model_key`, so it runs on a RAPID host under the host's instance role (`rapid_systems`' `cloudformation/rapid-storage-buckets.yaml` carries the read).
-- The pipeline image: the team's `rapid-pipeline:rebuild-<sha>-<base8>`, pulled as [The image](#the-image) says, or one you build ([`containers/README.md`](containers/README.md)).
-- A Gaia DR3 mirror covering the field, in the layout the pipeline reads: [The Gaia catalog](#the-gaia-catalog) builds a local one from the one LINCC leaf the field is on.
-- PostgreSQL 18 as the public `docker.io/library/postgres:18` image, the one CI uses.
+- A RAPID workstation (an SMDC login and `rapid_systems`' README, Setup, get you one), with `podman` (or `docker` under the same commands) and this checkout, your shell at its top. Its instance role carries the image pull, the reads of the public buckets and the RuBR-AT model, and, for the flight example, the team's database and Batch.
+- At least 16 GB of memory (the difference peaked at 15.2 GB) and 3 GB of disk beside the image.
+- Network access to the public bucket `s3://stpubdata` (read unsigned) and to `https://roman-crds.stsci.edu` (the PSF stage's reference).
 
-### The image
+### A local test
 
-The team's images are in the SMDC account's private container registry, repository `rapid-pipeline`, tagged `rebuild-<sha>-<base8>` for each commit of `rebuild` built for Batch: the full 40-character sha, then the first eight hex of the base image's digest (`rapid_systems`' `containers/rapid-pipeline/build-rebuild.sh`), so one commit built on two bases has two tags. The tag is not a commit: the image's commit is its `org.opencontainers.image.revision` label (`scripts/dev.sh image rev`). [One epoch](#one-epoch) runs this checkout's code in the image, on the image's tools and libraries, so any recent image serves a branch that leaves `requirements.txt` alone. Pull one on a RAPID host, whose instance role carries the pull grant (`rapid_systems`' `cloudformation/rapid-ecr.yaml`); an SMDC login and `rapid_systems`' README, Setup, get you onto one. The newest tag, and the image:
+One epoch of the HLWAS simulation (pointing `001_0001`, SCA 8, F146, pass 4) against a reference built from passes 1 and 2: the loop runs the PSF, three intakes, the reference, the difference and the epoch's packet set here, one after another, with no Batch. It took five and a half minutes on a workstation with the image already pulled (2026-11-20). The work folder is `rapid-work/` beside this checkout (`RAPID_DEV_WORK` moves it), seen as `/work` inside the container; the run is the database's first, so its id is 1.
 
 ```sh
-REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
-aws ecr get-login-password --region us-east-1 | podman login --username AWS --password-stdin "$REGISTRY"
-TAG=$(aws ecr describe-images --region us-east-1 --repository-name rapid-pipeline --filter tagStatus=TAGGED \
-  --query 'reverse(sort_by(imageDetails[?imageTags[?starts_with(@, `rebuild-`)]], &imagePushedAt))[0].imageTags[0]' --output json | jq -r .)
-podman pull "$REGISTRY/rapid-pipeline:$TAG"
-export IMAGE=$REGISTRY/rapid-pipeline:$TAG
+scripts/dev.sh image pull
 ```
 
-The same host carries the rapid Python environment at `/opt/rapid/conda/envs/rapid` (`rapid_systems`' README, Python environments); the runbook's `$PY` is its `python3`.
+Logs in to the team's registry, pulls the newest `rebuild-` image and remembers it for the commands below; it prints the image's name.
 
-`scripts/dev.sh image pull` does the four lines above in one and remembers the image for the other `dev.sh` commands; `scripts/dev.sh image rev` says which commit and branches an image was built from.
+```sh
+scripts/dev.sh db start
+```
+
+Starts a throwaway PostgreSQL 18 beside the containers with this checkout's `database/schema.sql` applied (one NOTICE: `postgres:18` lacks q3c). The local target, every command's default below, points the pipeline at it, writes products under the work folder's `out/`, and points a packet job's Kafka send at a closed local port, so nothing reaches the team's topic.
+
+```sh
+scripts/dev.sh run -- python -m rapidpipe.science.catalogs.store ingest-gaia --dest /work/gaia --leaves 2/138 --jobs 1
+```
+
+Builds a local Gaia DR3 mirror of the one leaf the field is on, order-2 pixel 138 (a 212 MB download from `https://data.lsdb.io/hats/gaia_dr3/gaia/`), in the work folder. It prints its record, `"leaves_done": 1` and `"complete": false`: it is one leaf of 2,016, so it is registered below as partial, which the team's mirror never is.
+
+```sh
+scripts/dev.sh run -- rapidpipe run create --why "local test" \
+  --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
+  --set 'intake.source_root="s3://stpubdata/roman/nexus/soc_simulations/r00342/l2/"' \
+  --set reference.selection.before_mjd=61591.4056 \
+  --set packet.ned_match=false --set packet.lvs_match=false --set packet.ss_match=false \
+  --survey HLWAS --dataset r00342-local
+```
+
+Records the run, the settings resolved once from the shipped base, the HLWAS overlay and the `--set` terms, and prints its id, `1`. The source root and the reference bound (F146's, between its third and fourth passes) are the two keys the base leaves absent. The three matches switched off are NED, NED-LVS and the solar-system predictions, none of which is built locally, so the packets carry Gaia matches and null NED and solar-system fields. `--who` is your login name and `--revision` this checkout's commit, both by default.
+
+```sh
+cat > ../rapid-work/live.json <<'END'
+[{"open": {"survey": "HLWAS", "dataset": "r00342-local", "run": 1}}]
+END
+scripts/dev.sh run -- rapidpipe official change --group /work/live.json --why "run 1 live"
+```
+
+Makes run 1 the live run of its dataset, so each job's products become official as it publishes. It prints the change group's id, `1`.
+
+```sh
+scripts/dev.sh run -- rapidpipe job local --run 1 --stage import \
+  --scope '{"gaia": {"name": "gaia", "version": "DR3", "prefix": "/work/gaia", "partial": true}}' \
+  --expects '[{"product": "catalogs", "key": {"dataset": "r00342-local", "name": "gaia", "version": "DR3"}, "binding": null}]'
+```
+
+Registers the local mirror as the dataset's Gaia catalog, which the intake and the packet stage read. It prints the job's result, `"published": true` and `"refusal": null`.
+
+```sh
+scripts/dev.sh run -- rapidpipe loop --run 1 --local --filters F146 --scas 8 --pointings 001_0001 --passes 1,2,4
+```
+
+Runs the selection to the end here: each pass prints one JSON line and runs the jobs it planned, in stage order, until a pass finds nothing left, and exits 0. Passes 1 and 2 are before the bound, so they are the reference's frames; pass 4 is differenced and packeted. The packet job's send is refused on stderr, `packet set <job>: not produced (KafkaTimeoutError: ... Unable to bootstrap from ['127.0.0.1:9']); left unstamped`, with its traceback, then `job <job> (packet) published`: the redirect working. The last pass's line reads `"drained": true`.
+
+```sh
+scripts/dev.sh run -- python scripts/validate_run.py --run 1
+scripts/dev.sh run -- python scripts/read_packets.py
+```
+
+The result: `validate_run.py` ends `run 1: 6/6 checks PASS`, and `read_packets.py` reads the official packet set back and prints `Packet reader: 1 set(s), CLEAN`, both exiting 0. The products are under `../rapid-work/out/1/<stage>/<job>/1/`; `scripts/dev.sh run -- rapidpipe run show 1` prints the run and its jobs, and `scripts/dev.sh run -- rapidpipe job show <job>` one job's inputs and bindings.
+
+```sh
+scripts/dev.sh db stop
+```
+
+Removes the throwaway database, everything in it, and the pod it ran in. `../rapid-work/` stays until you delete it; a second test needs `db start` and the commands above again, or, on the same database, a dataset name of its own (`--dataset r00342-local2` in each command), since a dataset has one live run.
+
+### A flight program on SMDC
+
+One night of program 1049 (four F158 WFI02 epochs, observation 2 visit 1) on the team's database and Batch, under a dataset of your own: `flight` itself is one dataset, the team's, whose live run admits new files and is changed only on purpose ([datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html)). It differs from the local test in four ways: `--target deployed`, so the container reaches the team's database under the workstation's role; the jobs run on Batch, from the image, not from this checkout; the catalogs are the team's copies; and the run is stopped and cleaned up at the end. The values in angle brackets are the team's bucket and queue names, which this repository does not carry (it names no account, bucket or host): the scratch bucket, the Batch queue and the catalog copies' prefixes are in step 1 of [Starting a night](https://roman-rapid.readthedocs.io/en/latest/system/loop.html#starting-a-night), the inputs bucket on the [datasets page](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html).
+
+```sh
+scripts/dev.sh image pull
+scripts/dev.sh image rev
+scripts/dev.sh sync <the commit image rev printed>
+```
+
+Pulls the newest image, prints the commit and branches it was built from, and puts this checkout at that commit. A Batch job runs the image's commit, so with the checkout there too the run records that commit as its revision by itself; at any other commit `run create` refuses until you name `--revision`. This example needs an image built from `rebuild` after the serial exposure id and this command-line pass landed: at an older commit `--exposures`, `loop --dry-run`, `run stop` and `run cleanup` do not exist, so if `image rev` names no such commit, stop here until one is registered.
+
+```sh
+export RAPIDPIPE_OUTPUTS_ROOT=s3://<the scratch bucket>/rapidpipe/<your login>
+export RAPIDPIPE_BATCH_JOB_QUEUE=<the prompt queue>
+```
+
+Where the run's products go and the Batch queue the loop submits to; the deployed target passes both into the container. Put them in your shell profile once.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe run create --why "program 1049 trial" \
+  --overlay rapidpipe/settings/datasets/flight.toml \
+  --set 'intake.source_root="s3://<the inputs bucket>/flight-1049/"' \
+  --set reference.selection.before_mjd=61337.4594 \
+  --survey <the survey> --dataset flight-1049-<your initials>
+```
+
+Records the run under the flight overlay and prints its id, called `N` below. Every value is yours to choose but the overlay: the source root is the prefix `scripts/stream_l2_files.py 1049` filled ([The command line](#the-command-line)); the bound decides which epochs build the reference (before it) and which are differenced (at or after it), and 61337.4594 is program 1049's, the first three epochs building the reference for the fourth ([datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html)); the survey is the name the live binding is kept under with the dataset (whether `run create` should require one is an open question).
+
+```sh
+cat > ../rapid-work/live-N.json <<'END'
+[{"open": {"survey": "<the survey>", "dataset": "flight-1049-<your initials>", "run": N}}]
+END
+scripts/dev.sh run --target deployed -- rapidpipe official change --group /work/live-N.json --why "run N live"
+```
+
+Makes run `N` the live run of your dataset; it prints the change group's id.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe job local --run N --stage import \
+  --scope '{"gaia": {"version": "DR3", "prefix": "<the Gaia mirror>"}, "ned": {"version": "36.1_20260527_v2", "prefix": "<the NED copy>"}, "lvs": {"version": "20260424", "prefix": "<the NED copy>"}, "ss": {"version": "rolling", "prefix": "<the ss root>"}}' \
+  --expects '[{"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "gaia", "version": "DR3"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "ned", "version": "36.1_20260527_v2"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "lvs", "version": "20260424"}, "binding": null}, {"product": "catalogs", "key": {"dataset": "flight-1049-<your initials>", "name": "ss", "version": "rolling"}, "binding": null}]'
+```
+
+Registers the team's four catalog copies under your dataset, once; it names each copy's prefix and copies nothing. It prints `"published": true`. Without a copy whose `[packet] <name>_match` is on, the loop stops with exit 64 when the first packet job is due, naming the missing one.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 --dry-run
+```
+
+Prints the first pass's plan as JSON and does nothing: it submits nothing, records nothing and assigns no exposure id. On a fresh run the plan is one `psf` submission and `"new"`, the count of files the selection admits that no intake has taken in (4 here); the intakes are planned the pass after the PSF is published, so a dry run then lists them, and a new exposure under `unassigned`. Read it before spending Batch time; a selection that admits no file is refused, naming the term that admits none.
+
+```sh
+aws batch describe-job-definitions --job-definition-name rapid-rebuild --status ACTIVE \
+  --query 'sort_by(jobDefinitions, &revision)[-1].[revision, containerProperties.image]' --output text
+```
+
+Prints the newest revision of the scratch job definition, called `R` below, and the image it runs, `…/rapid-pipeline@sha256:<digest>`. Name the job definition by that number, `rapid-rebuild:R`: a bare `rapid-rebuild` is whatever revision is newest when Batch reads it, so a release registered while the run goes would change the build under it. `scripts/dev.sh image rev` and the `revision` that `rapidpipe run show N` prints should name the commit of that image.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 --job-definition rapid-rebuild:R
+```
+
+Submits the selection one stage forward per pass on Batch and prints one JSON line a pass, every two minutes, until a pass finds it drained: exit 0, or 1 when a job failed, named on stderr (`rapidpipe job show <id>` gives its `refusal`).
+
+A reference whose frames do not cover enough of its field is one such failure, and an expected one: the reference job is recorded `failed` with exit code 65 and a `refusal` naming the coverage, `estimated coverage <f> < <minimum>` or `measured coverage <f> < <minimum>` (the flight overlay's `[reference.selection] selection_type = "coverage"`), the field's differences wait for a reference, and the loop exits 1. That row is told from a fault by its reason: any other failed job of the run keeps its own exit code and reason, and is a fault to read.
+
+The digest the first command printed is what `promote` takes to put this build into production (`rapid_systems`' `cloudformation/release-hooks/promote <sha256:digest>`), so the build promoted is the build this run tested; promoting by the newest revision or tag at the time can be another build.
+
+```sh
+scripts/dev.sh run --target deployed -- scripts/check_run.sh --run N
+```
+
+The result: one line, `Check run N: CLEAN validate 6/6 <s> s reader M/M <s> s consumer M/M <s> s` (each check followed by its seconds), and exit 0. Any failure prints `FAIL` and exits non-zero.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe run stop --run N --why "trial checked"
+```
+
+Records the run as stopped (who, when, why), so no further job of it is admitted on any path (the loop, `job local`, `job submit`, `job run`), and asks Batch to end any job of it still queued or running. It prints what it did as JSON. Stop a run that is going wrong the same way, at any time.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe run cleanup --run N
+```
+
+Lists, as JSON with file counts, the run's attempt directories that hold no published product (failed attempts, and published jobs' other attempts), and removes nothing; published and official products are counted and never listed. It refuses, naming the job, while any job is not shown to have ended. `--delete` removes exactly that list; on S3 it needs `s3:DeleteObject` under the outputs root, which the workstation roles do not hold today, so ask for the removal until they do.
+
+A trial's live binding is closed once it is checked, so the live list names only what is running: `rapidpipe run show N` prints its id as `"live"`, and a group file `[{"close": <that id>}]` given to `official change` closes it.
+
+### Taking a run's products out of official
+
+`rapidpipe official undo <group> --why Y` applies the inverse of one change group: it closes every binding the group opened and opens again, as new rows, every binding it closed. A run's products became official in many groups, one per published job (the `"group"` each job's result printed, and the `opened_group` of each binding `rapidpipe job show <job>` lists), plus the group that made it live. To retract a run, undo those groups, the newest first; a group whose binding has since moved (a later run superseded it) is refused, naming that binding and the change group that closed it, which is undone first if the later run's binding is to go too; otherwise the later run's binding stands.
+
+A retracted run's dataset does not take its files in again. The loop plans an intake for a listed file only when no intake job of the dataset is published for it (in any run) and no intake job of this run exists; bindings do not enter that rule, so closing or undoing every binding of a dataset leaves its files taken in. To process the same files again today, create a run under a new dataset name.
+
+What it leaves in place: every row the run's jobs wrote (the `*_official` views stop showing the retracted ones, since they read through the open bindings), every file under the outputs root, the jobs and their attempts, and the closed bindings themselves, with who closed them, when and why. Work of other runs built on them stays as it is: a reference another run reused, an object a later difference joined. A packet already sent is not recalled: the packets are on the Kafka topic for its retention and consumers may have read them. `official undo` of the undo puts the products back.
 
 ### Working on a branch in a container
+
+The team's images are in the SMDC account's private registry, repository `rapid-pipeline`, tagged `rebuild-<sha>-<base8>` for each commit of `rebuild` built for Batch (the full sha, then the first eight hex of the base image's digest, so one commit built on two bases has two tags); the image's commit is its `org.opencontainers.image.revision` label, which `scripts/dev.sh image rev` prints. You can build one yourself ([`containers/README.md`](containers/README.md)). The same workstation carries the rapid Python environment at `/opt/rapid/conda/envs/rapid` (`rapid_systems`' README, Python environments).
 
 To run a branch of this checkout, its tests included, in a container of the team's image on your workstation, without building an image: `rapid dev <command>` from your laptop (`rapid_systems`' `bin/rapid`), which syncs the workstation's checkout to the commit your laptop's checkout is on and runs `scripts/dev.sh <command>` there. The commands are dev.sh's (`scripts/dev.sh --help`, or `rapid dev --help`). The container mounts the checkout at `/code` ahead of the `rapidpipe` installed in the image (`PYTHONPATH`), so `rapidpipe`, `python -m pytest` and the stages run the checkout's code on the image's dependencies and tools, and `work/` at `/work`. A branch that changes `requirements.txt` needs a rebuilt image, since the image's libraries are the ones that run. The target is what the container runs against:
 
@@ -55,133 +202,6 @@ rapid dev --ref rebuild shell                      # the integration branch inst
 
 On the workstation itself the same commands are `scripts/dev.sh image pull`, `scripts/dev.sh db start` and so on, with `scripts/dev.sh sync REF` as the sync `rapid dev` does first. The image carries no git: commit from the workstation, not the container. For a VS Code session in the same container, open the checkout over Remote-SSH (`rapid vscode`), export `RAPID_DEV_IMAGE=$(scripts/dev.sh image pull)` in your login shell, and "Reopen in Container" with `.devcontainer/rebuild-local` (starts the throwaway database itself) or `.devcontainer/rebuild-deployed`.
 
-### The Gaia catalog
-
-The pipeline reads Gaia DR3 from a mirror of LINCC's HATS catalog, one copy per release, read as a cone per chip ([the ruling](https://roman-rapid.readthedocs.io/en/latest/system/decisions.html#decision-gaia-mirror)); the team's is in the catalogs bucket under `gaia/DR3/` ([Datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html#hlwas-r00342)). A local one with only the leaf the HLWAS r00342 field is on, order-2 pixel 138 (a 212 MB download), is built in the image, in the current directory, from `https://data.lsdb.io/hats/gaia_dr3/gaia/`. Its record says it is not complete, and the import step below registers it as `"partial": true`, which the team's dataset must never be:
-
-```sh
-podman run --rm -v "$PWD:/out:Z" --entrypoint /opt/rapid/conda/envs/rapid/bin/python3 "$IMAGE" \
-  -m rapidpipe.science.catalogs.store ingest-gaia --dest /out/gaia --leaves 2/138 --jobs 1
-```
-
-It prints the ingest record: `"leaves_done": 1`, `"complete": false` (one leaf of 2,016), and the rows. `python -m rapidpipe.science.catalogs.store --help` lists the other builders (NED, NED-LVS, the whole Gaia mirror, and `gaia-from-table` for a catalog of your own on Gaia's columns). The packet stage also matches NED and NED-LVS from the team's copies ([the ruling](https://roman-rapid.readthedocs.io/en/latest/system/decisions.html#decision-catalog-matches)) and solar-system objects from the daily `ss` predictions; the run below switches those three off, since none is built locally, so its packets carry Gaia matches and null NED and solar-system fields. Without `packet.ss_match=false` the packet job stops at `[packet] switches on ['gaia', 'ss'] but the job names ['gaia']`.
-
-### The environment
-
-The local values are set, and the team deployment's values are commented. The packet job sends its set to Kafka as its last act. Locally, the three `RAPIDPIPE_KAFKA_*` variables point that send at a closed local port. The send fails, the job still publishes and exits 0, and nothing reaches the team's topic.
-
-```sh
-# IMAGE is the image The image exported, e.g. <registry>/rapid-pipeline:rebuild-<sha>-<base8>
-export GAIA=$PWD/gaia                             # The Gaia catalog, above: the local mirror's directory
-export PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=rapid PGUSER=postgres PGPASSWORD=local
-export RAPIDPIPE_OUTPUTS_ROOT=file:///work/out    # ./rapid-local/out, as the container sees it
-export AWS_DEFAULT_REGION=us-east-1               # the buckets' and SSM's region (boto3 reads this name, not AWS_REGION)
-export RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9 RAPIDPIPE_KAFKA_TOPIC=local RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES=1048576
-# The team's database and Batch instead:
-#   unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS RAPIDPIPE_KAFKA_TOPIC RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES
-#   export RAPID_PARAMETER_PATH=<the deployment's parameter tree>   # its db/* keys name the database and its secret
-#   (or keep PGHOST, PGPORT and PGDATABASE and export RAPID_DB_SECRET_ID=<the database secret> for the credential)
-#   export RAPIDPIPE_OUTPUTS_ROOT=s3://<bucket>/<prefix>
-#   export RAPIDPIPE_BATCH_JOB_QUEUE=<the Batch job queue>
-#   export AWS_PROFILE=<your profile> AWS_DEFAULT_REGION=<the deployment's region>
-R=$PWD L=$PWD/rapid-local                         # this checkout and the run's working directory
-ctr() { podman run --rm --pod rapid-local -v "$R:/code:ro,z" -e PYTHONPATH=/code -v "$L:/work:Z" -v "$R/scripts:/scripts:ro,z" \
-  -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD -e RAPIDPIPE_OUTPUTS_ROOT -e AWS_DEFAULT_REGION \
-  -e RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS -e RAPIDPIPE_KAFKA_TOPIC -e RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES \
-  --entrypoint "$1" "$IMAGE" "${@:2}"; }
-rp() { ctr /usr/local/bin/rapidpipe-entrypoint "$@"; }     # the rapidpipe command line: this checkout's code, in the image
-job_id() { jq -e 'select(.published and .refusal == null) | .job'; }   # a published job's id, else nothing and exit 4
-sql() { podman exec rapid-local-db psql -U postgres -d rapid -X -tA -c "$1"; }
-```
-
-### The database
-
-```sh
-mkdir -p "$L/out" && cp -r "$GAIA" "$L/gaia"
-podman pod create --name rapid-local
-podman run -d --pod rapid-local --name rapid-local-db -e POSTGRES_PASSWORD=local -e POSTGRES_DB=rapid docker.io/library/postgres:18
-until podman exec rapid-local-db pg_isready -h 127.0.0.1 -U postgres -d rapid; do sleep 1; done
-podman exec -i rapid-local-db psql -U postgres -d rapid -X -q -v ON_ERROR_STOP=1 < database/schema.sql
-```
-
-`schema.sql` builds a fresh database whole. It prints one NOTICE because `postgres:18` lacks q3c. Do not apply the dated `database/2026-*.sql` files here: each brought SMDC's existing database forward once, and none is applied after a fresh `schema.sql` ([the rule](database/README.md)).
-
-### One epoch
-
-Your shell is at the top of this checkout: `ctr` mounts it at `/code` ahead of the `rapidpipe` installed in the image, as `scripts/dev.sh` does, so the commands below are this checkout's, and the run records its commit as `REV`. A run is the recipe, and it is made live for its dataset so that each job's products become official as it publishes. Each `job local` runs one stage in the container and prints its result as JSON. `job_id` keeps the job's id, or fails if the job did not publish; the stage's log goes to stderr. Dataset `r00342-local` is yours alone, and F146 is fid 8 (`W146` in `filters`).
-
-```sh
-SRC=s3://stpubdata/roman/nexus/soc_simulations/r00342/l2/
-REV=$(git rev-parse HEAD)
-RUN=$(rp run create --who "$USER" --why "local quickstart" --revision "$REV" \
-  --overlay /code/rapidpipe/settings/datasets/hlwas-r00342.toml --set "intake.source_root=\"$SRC\"" \
-  --set packet.ned_match=false --set packet.lvs_match=false --set packet.ss_match=false \
-  --survey HLWAS --dataset r00342-local)
-echo '[{"open": {"survey": "HLWAS", "dataset": "r00342-local", "run": '$RUN'}}]' > "$L/live.json"
-rp official change --group /work/live.json --who "$USER" --why "local run $RUN live"
-
-J_GAIA=$(rp job local --run $RUN --stage import \
-  --scope '{"gaia": {"name": "gaia", "version": "DR3", "prefix": "/work/gaia", "partial": true}}' \
-  --expects '[{"product": "catalogs", "key": {"dataset": "r00342-local", "name": "gaia", "version": "DR3"}, "binding": null}]' | job_id)
-GAIA_IN='{"product": "catalogs", "key": {"dataset": "r00342-local", "name": "gaia", "version": "DR3"}, "source_job": '$J_GAIA'}'
-
-J_PSF=$(rp job local --run $RUN --stage psf --scope '{"dataset": "r00342-local", "file": "r0034201001001004001_0001_wfi08_f146"}' \
-  --expects '[{"product": "psfs", "key": {"dataset": "r00342-local", "fid": 8, "sca": 8, "kind": "science"}, "binding": null}]' | job_id)
-PSF_IN='{"product": "psfs", "key": {"dataset": "r00342-local", "fid": 8, "sca": 8, "kind": "science"}, "source_job": '$J_PSF'}'
-
-# An exposure's id is the integer the database holds for its name (the stem without its detector and
-# filter), the same for its 18 SCAs; the loop resolves it for every file it takes in, a hand run asks.
-E_1=$(rp exposure id --dataset r00342-local --name r0034201001001004001_0001)    # pass 1
-E_2=$(rp exposure id --dataset r00342-local --name r0034201002001004001_0001)    # pass 2
-E_4=$(rp exposure id --dataset r00342-local --name r0034201004001004001_0001)    # pass 4, the epoch
-intake() {   # intake EXPID STEM: one SOC L2 file to an l2files row, under its exposure's id
-  rp job local --run $RUN --stage intake --scope '{"dataset": "r00342-local", "file": "'$2'", "expid": '$1'}' --inputs "[$PSF_IN, $GAIA_IN]" \
-    --expects '[{"product": "exposures", "key": {"dataset": "r00342-local", "expid": '$1'}, "binding": null},
-                {"product": "l2files", "key": {"dataset": "r00342-local", "expid": '$1', "sca": 8, "fid": 8}, "binding": null}]' | job_id
-}
-l2() { echo '{"product": "l2files", "key": {"dataset": "r00342-local", "expid": '$1', "sca": 8, "fid": 8}, "source_job": '$2'}'; }
-J_1=$(intake $E_1 r0034201001001004001_0001_wfi08_f146)
-J_2=$(intake $E_2 r0034201002001004001_0001_wfi08_f146)
-J_4=$(intake $E_4 r0034201004001004001_0001_wfi08_f146)
-FIELD=$(sql "SELECT field FROM l2files_official WHERE dataset = 'r00342-local' AND expid = $E_1")
-
-J_REF=$(rp job local --run $RUN --stage reference --scope '{"field": '$FIELD', "fid": 8, "sca": 8}' \
-  --inputs "[$(l2 $E_1 $J_1), $(l2 $E_2 $J_2)]" \
-  --expects '[{"product": "refimages", "key": {"dataset": "r00342-local", "field": '$FIELD', "fid": 8}, "binding": null}]' | job_id)
-REF_IN='{"product": "refimages", "key": {"dataset": "r00342-local", "field": '$FIELD', "fid": 8}, "source_job": '$J_REF'}'
-
-EPOCH='{"dataset": "r00342-local", "expid": '$E_4', "sca": 8, "fid": 8}'
-J_DIFF=$(rp job local --run $RUN --stage difference --scope '{"expid": '$E_4', "sca": 8, "fid": 8}' \
-  --inputs "[$(l2 $E_4 $J_4), $PSF_IN, $REF_IN]" \
-  --expects '[{"product": "diffimages", "key": '"$EPOCH"', "binding": null}, {"product": "sources", "key": '"$EPOCH"', "binding": null}]' | job_id)
-
-J_PKT=$(rp job local --run $RUN --stage packet --scope '{"expid": '$E_4', "sca": 8, "fid": 8}' \
-  --inputs '['"$REF_IN, $GAIA_IN, $PSF_IN"', {"product": "sources", "key": '"$EPOCH"', "source_job": '$J_DIFF'}]' \
-  --expects '[{"product": "packets", "key": '"$EPOCH"', "binding": null}]' | job_id)
-```
-
-The packet job's JSON ends with `"kafka": {"error": "KafkaTimeoutError: Unable to bootstrap from ['127.0.0.1:9']"}`, which is the redirect working.
-
-The number `rp official change` printed is the change group's id, and every publish prints its own: `rp official undo <id> --who W --why Y` reverses that one group, and `sql "SELECT id, run, product, key FROM official WHERE opened_group = <id> OR closed_group = <id>"` shows what it did (a refused attempt consumes an id too, so they need not be consecutive).
-
-### Check it
-
-```sh
-ctr /opt/rapid/conda/envs/rapid/bin/python3 /scripts/validate_run.py --run $RUN     # "run N: 6/6 checks PASS"
-ctr /opt/rapid/conda/envs/rapid/bin/python3 /scripts/read_packets.py --job $J_PKT   # one set, failures 0
-sql "SELECT count(*) FROM packets_official WHERE dataset = 'r00342-local'"
-```
-
-The products are under `rapid-local/out/$RUN/<stage>/<job>/1/`. `rp job show <job>` prints a job's inputs, manifest and bindings. When you are done, `podman pod rm -f rapid-local` removes the database and both containers. `rapid-local/` stays until you delete it.
-
-### Running it again
-
-A second `run create` for the same dataset is refused at `official change` (`already has open binding 1`): the first run's live binding is still open, and so is every product binding it published, because each `"binding": null` above expects its key unbound. Nothing needs resetting; the table is designed to be superseded or added to.
-
-- **Supersede the first run.** Close the live binding in the same group that opens the new one, `[{"close": 1}, {"open": {"survey": "HLWAS", "dataset": "r00342-local", "run": $RUN}}]`, then in each `--expects` put the key's current binding id in place of `null`: `sql "SELECT id, product, key FROM official WHERE closed_at IS NULL AND key->>'dataset' = 'r00342-local'"` lists them. Each publish then closes the old binding and opens its own in one recorded group, the first run's rows stay closed with who, when and why, and `rp official undo <group-id>` reverses any group. The loop (`rp loop`) does this by itself from the open rows; `job local` leaves it to you.
-- **Run beside the first.** Give the new run its own dataset, `--dataset r00342-local2`, and use that name in every key: a dataset is its own namespace with its own live binding, and nothing of the first run is touched.
-- **Start empty.** `podman pod rm -f rapid-local`, `rm -rf rapid-local/out`, and the database section again: only when you want the quickstart verbatim, run ids and all.
-
 ## Repository rules
 
 This repository is public and portable. Account identifiers, bucket names and hostnames are injected at deploy time, never committed. Reference bulk data artifacts (product listings, large generated files) with the command to reproduce them instead of committing them.
@@ -194,7 +214,7 @@ The [specification](https://roman-rapid.readthedocs.io/en/latest/system/specific
 
 ## Package
 
-The distribution is `rapid-pipeline`; its import package is `rapidpipe`. The foundation plan (v5, 2026-10-20) is the design authority for its database side: one schema file, runs and jobs, the publisher, official bindings changed in recorded groups, and five verbs. `rapidpipe.foundation` holds those operations over [`database/schema.sql`](database/schema.sql); `rapidpipe.db` holds the connection, which gets database credentials through the `PG*` environment or an AWS Secrets Manager secret named by `RAPID_DB_SECRET_ID`, never through arguments or a committed file.
+The distribution is `rapid-pipeline`; its import package is `rapidpipe`. The foundation plan (v5, 2026-10-20) is the design authority for its database side: one schema file, runs and jobs, the publisher, official bindings changed in recorded groups, and the verbs below. `rapidpipe.foundation` holds those operations over [`database/schema.sql`](database/schema.sql); `rapidpipe.db` holds the connection, which gets database credentials through the `PG*` environment or an AWS Secrets Manager secret named by `RAPID_DB_SECRET_ID`, never through arguments or a committed file.
 
 Every stage runs under a job (`job local`, `job run`, below): one contract, `rapidpipe.foundation.JobContext`.
 
@@ -206,14 +226,17 @@ Every stage runs under a job (`job local`, `job run`, below): one contract, `rap
 
 The database is built by `psql -v ON_ERROR_STOP=1 -f database/schema.sql` on an empty PostgreSQL 18 ([`database/README.md`](database/README.md)). The verbs:
 
-- `rapidpipe run create --who W --why Y --revision REV [--settings FILE] [--overlay DATASET.toml] [--set TABLE.key=VALUE ...] --survey S --dataset D` records a run (a recipe someone launched for a reason) and prints its id. The body it stores is resolved here, once, from three layers: `FILE` (default the shipped `rapidpipe/settings/foundation-thin.toml`, dev's values; TOML, or JSON when its name ends in `.json`), the dataset's overlay (`rapidpipe/settings/datasets/`, only the keys that differ, each with the measurement that earned it), then each `--set` in order (a TOML value, strings quoted). A key the base lacks is refused, naming it, except the two the base documents as absent by default (`intake.source_root`, `reference.selection.before_mjd`). The run also stores the body's hash and each layer's name and SHA-256 (`runs.layers`), which `run show` prints.
-- `rapidpipe official change --group FILE --who W --why Y` applies one change group in one transaction and prints its id. `FILE` is a JSON list of items, each with `close` (the id of an open binding) and/or `open` (a product binding `{"product", "key", "job"}` or the live binding `{"survey", "dataset", "run"}`).
-- `rapidpipe official undo <group-id> --who W --why Y` applies the inverse of a change group (close what it opened, open as new rows what it closed) and prints the new group's id.
-- `rapidpipe run show <id>` prints the run, its live binding and its jobs as JSON.
+- `rapidpipe run create [--who W] --why Y [--revision REV] [--settings FILE] [--overlay DATASET.toml] [--set TABLE.key=VALUE ...] --survey S --dataset D` records a run (a recipe someone launched for a reason) and prints its id. `--who` is your login name when left out, here, on `run stop` and on the two `official` verbs (never `root`, which names nobody: say who then). `--revision` is `RAPID_SOURCE_REVISION`, the commit of the code running, where the environment sets it: the image does, to the commit it was built from, and `scripts/dev.sh` does when its checkout and its image leave one answer; where it is unset the run names its revision itself. The body it stores is resolved here, once, from three layers: `FILE` (default the shipped `rapidpipe/settings/foundation-thin.toml`, dev's values; TOML, or JSON when its name ends in `.json`), the dataset's overlay (`rapidpipe/settings/datasets/`, only the keys that differ, each with the measurement that earned it), then each `--set` in order (a TOML value, strings quoted). A key the base lacks is refused, naming it, except the two the base documents as absent by default (`intake.source_root`, `reference.selection.before_mjd`). The run also stores the body's hash and each layer's name and SHA-256 (`runs.layers`), which `run show` prints.
+- `rapidpipe official change --group FILE [--who W] --why Y` applies one change group in one transaction and prints its id. `FILE` is a JSON list of items, each with `close` (the id of an open binding) and/or `open` (a product binding `{"product", "key", "job"}` or the live binding `{"survey", "dataset", "run"}`).
+- `rapidpipe official undo <group-id> [--who W] --why Y` applies the inverse of a change group (close what it opened, open as new rows what it closed) and prints the new group's id.
+- `rapidpipe run show <id>` prints the run, its live binding and its jobs as JSON. `rapidpipe run show <id> --toml FILE` writes the run's stored settings body to `FILE` as TOML instead: a base that `rapidpipe run create --settings FILE` stores as the same body, with the same `settings_hash`, so a run's settings can be read, compared with another's, or used again without retyping its overlay and `--set` terms.
+- `rapidpipe run stop --run N [--who W] --why Y` stops a run: it records who, when and why on the run, marks `failed` the jobs recorded and not yet submitted, and asks Batch to cancel or terminate every job of the run that has not ended, printing what it did as JSON. From then on the run takes no job: `loop`, `job local`, `job submit` and `job run` refuse it (exit 1), saying who stopped it and why, and a container Batch starts after the stop does no work. A submission in flight when it is called is waited for and ended with the rest. A stopped run is not started again; a new run takes the work on. It may be repeated, to ask Batch again.
+- `rapidpipe run cleanup --run N [--delete]` is for a stopped run whose every job has ended: it prints, as JSON, the attempt directories under `RAPIDPIPE_OUTPUTS_ROOT` that belong to the run's jobs and hold no published product (a failed job's attempts, and a published job's attempts other than the one it published), with their file counts, and removes nothing. Published attempts, which hold every product a row or an official binding names, are counted and never listed; files under the run's prefix that are no job's attempt are counted as unrecognised and never removed. With `--delete` it removes exactly the listed files, checking each attempt again as it comes to it; one published meanwhile is kept and named, exit 1. It refuses, naming the job and what would end it, while any job is not shown to have ended: a row still `launched` or `running`, a Batch job Batch reports active, or one with no recorded end that Batch no longer describes (Batch forgets a job about a week after it ends, so list a stopped run within the week). On S3 the removal needs `s3:DeleteObject` under the run's prefix.
 - `rapidpipe job show <id>` prints the job, its recorded inputs and every binding of its rows as JSON.
-- `rapidpipe job local --run R --stage NAME --scope JSON [--inputs JSON] [--expects JSON]` records a job under run `R` with its inputs (the lists `rapidpipe.foundation.create_job` takes) and runs it here; `rapidpipe job run --job J` runs an existing job's next attempt. Running a job reads it first and stops at once if it is published; otherwise it calls the stage's `run(job)` in this process with a `rapidpipe.foundation.JobContext` (job, run, scope, the run's settings body, the recorded inputs, the attempt's prefix `<RAPIDPIPE_OUTPUTS_ROOT>/<run>/<stage>/<job>/<attempt>/`), then publishes the attempt and prints the publisher's result as JSON. The stage writes its files and `manifest.json` and never publishes. The outputs root is a `file://` or `s3://` URL; under `s3://` the stage writes a local working directory that is uploaded, manifest last, before publishing. `rapidpipe job submit` takes `job local`'s arguments and `--job-definition NAME`, records the job and submits one Batch job on `RAPIDPIPE_BATCH_JOB_QUEUE` whose command is `job run --job J` in the image, passing `RAPIDPIPE_OUTPUTS_ROOT` (`s3://` only) and `RAPID_DB_SECRET_ID` when set. An exposure's `expid` is the integer `exposure_ids` holds for the exposure's name in its dataset (`rapidpipe exposure id --dataset D --name N` prints it, assigning one when the dataset has none; the loop resolves it for every file it takes in), so an `import` of an epoch and a hand-run `intake` take their scope's `expid` from that verb. The foundation's stages are `import` (`rapidpipe.stages.import_products`) and `packet` (scope `{"expid", "sca", "fid"}`; inputs: the epoch's source set, the science `psfs`, the Gaia `catalogs` product, the `refimages`; it reads the triggers' objects and members (the xobjects and xmemberships of the set's xsources, under the shipped `[packet] alert_catalog = "xsources"`), their exposures, the forced window's `diffimages` and `l2files` and the official `packets` sets' forced rows as they stand at its read and records them; outputs Avro 00.08 packets and the `packets`, `forced` and `external` tables) and `reference` (scope `{"field", "fid", "sca"}`; inputs: the `l2files` to coadd; outputs the mosaic, its coverage and uncertainty maps and SExtractor catalog, and the `refimages`, `refimimages`, `refimcatalogs` and `refimmeta` tables), with `intake`, `psf` and `difference` beside them ([Getting started](#getting-started) runs all six).
+- `rapidpipe job wait --job N [N ...] [--timeout S] [--interval S]` blocks until every named job is `published` or `failed`, reconciling their runs with Batch at each check (every 30 s by default, giving up after `--timeout`, 7,000 s by default), and prints their states: exit 0 when every job published, 1 when one failed, 2 when the timeout came first. It is the one waiter for jobs submitted by hand.
+- `rapidpipe job local --run R --stage NAME --scope JSON [--inputs JSON] [--expects JSON]` records a job under run `R` with its inputs (the lists `rapidpipe.foundation.create_job` takes) and runs it here; `rapidpipe job run --job J` runs an existing job's next attempt. Running a job reads it first and stops at once if it is published; otherwise it calls the stage's `run(job)` in this process with a `rapidpipe.foundation.JobContext` (job, run, scope, the run's settings body, the recorded inputs, the attempt's prefix `<RAPIDPIPE_OUTPUTS_ROOT>/<run>/<stage>/<job>/<attempt>/`), then publishes the attempt and prints the publisher's result as JSON. The stage writes its files and `manifest.json` and never publishes. The outputs root is a `file://` or `s3://` URL; under `s3://` the stage writes a local working directory that is uploaded, manifest last, before publishing. `rapidpipe job submit` takes `job local`'s arguments, or `--job J` in their place for a new attempt of an existing job, and `--job-definition NAME` always (`--job-queue Q` names another queue for this one submission), records the job and submits one Batch job on `RAPIDPIPE_BATCH_JOB_QUEUE` whose command is `job run --job J` in the image, passing `RAPIDPIPE_OUTPUTS_ROOT` (`s3://` only) and `RAPID_DB_SECRET_ID` when set. An exposure's `expid` is the integer `exposure_ids` holds for the exposure's name in its dataset (`rapidpipe exposure id --dataset D --name N` prints it, assigning one when the dataset has none; the loop resolves it for every file it takes in), so an `import` of an epoch and a hand-run `intake` take their scope's `expid` from that verb. The foundation's stages are `import` (`rapidpipe.stages.import_products`) and `packet` (scope `{"expid", "sca", "fid"}`; inputs: the epoch's source set, the science `psfs`, the Gaia `catalogs` product, the `refimages`; it reads the triggers' objects and members (the xobjects and xmemberships of the set's xsources, under the shipped `[packet] alert_catalog = "xsources"`), their exposures, the forced window's `diffimages` and `l2files` and the official `packets` sets' forced rows as they stand at its read and records them; outputs Avro 00.08 packets and the `packets`, `forced` and `external` tables) and `reference` (scope `{"field", "fid", "sca"}`; inputs: the `l2files` to coadd; outputs the mosaic, its coverage and uncertainty maps and SExtractor catalog, and the `refimages`, `refimimages`, `refimcatalogs` and `refimmeta` tables), with `intake`, `psf` and `difference` beside them ([Getting started](#getting-started) runs all six).
 
-`python scripts/read_packets.py [--job N ...] [--out FILE]` reads published packet sets back (the Avro, `packets_official`, `forced_official`) and writes a validation report, exiting non-zero on any failure; a packet job sends its own official set to the Kafka topic its run's `[kafka]` table names as its last act, one message per packet keyed by the dataset with the set and sid in its `rapid-set` and `rapid-sid` headers, stamping `jobs.kafka_published_at` and the partition and first and last offsets after every acknowledgement; `rapidpipe publish --run N` sends the run's official sets not yet stamped (the re-publication verb and the loop's recovery sweep), and `python scripts/consume_packets.py --run N` reads each set's recorded range back, counts its packets and compares the bytes of one set per field with the outbox; `scripts/check_run.sh --run N [--settings F]` runs a run's three checks (`validate_run.py`, `read_packets.py` over its bound packet sets eight processes at a time, `consume_packets.py`) and prints one line, `Check run N: CLEAN|FAIL validate ... reader ... consumer ...` with each one's count and seconds, exiting non-zero on any failure; `rapidpipe loop --run N [--filters F146] [--scas 8] [--pointings VVV_EEEE,...] [--passes P,...] [--exposures PREFIX,...] [--programs P,...] [--stems STEM,...] [--mjd LO-HI | --dates LO..HI] --job-definition D [--once]` (every selection term `all` when left out) lists the run's `[intake] source_root`, submits every ready job of the selection one stage forward on Batch (intake, reference, difference, which associates its own sources and xsources with the objects and xobjects of their fields as they stand, then a packet per official source set, in any order) and ends each pass with `publish`, printing one summary line per pass and repeating every `--interval` seconds until a pass finds the selection drained (exit 0) or a job of the run has failed or was published with its binding refused (exit 1); `loop --local` runs each planned job here instead, as `job local` runs one, with no Batch and no job definition, passes repeating at once; `loop --dry-run` prints one pass's plan as JSON and does nothing; `--stage NAME` keeps one stage's jobs ([the loop page](https://roman-rapid.readthedocs.io/en/latest/system/loop.html)); `database/queries.sql` holds the read queries the official views answer.
+`python scripts/read_packets.py [--job N ...] [--out FILE]` reads published packet sets back (the Avro, `packets_official`, `forced_official`) and writes a validation report, exiting non-zero on any failure; a packet job sends its own official set to the Kafka topic its run's `[kafka]` table names as its last act, one message per packet keyed by the dataset with the set and sid in its `rapid-set` and `rapid-sid` headers, stamping `jobs.kafka_published_at` and the partition and first and last offsets after every acknowledgement; `rapidpipe publish --run N [--settings FILE]` sends the run's official sets not yet stamped (the re-publication verb and the loop's recovery sweep), and `python scripts/consume_packets.py --run N` reads each set's recorded range back, counts its packets and compares the bytes of one set per field with the outbox; `scripts/check_run.sh --run N [--settings F]` runs a run's three checks (`validate_run.py`, `read_packets.py` over its bound packet sets eight processes at a time, `consume_packets.py`) and prints one line, `Check run N: CLEAN|FAIL validate ... reader ... consumer ...` with each one's count and seconds, exiting non-zero on any failure; `rapidpipe loop --run N [--filters F146] [--scas 8] [--pointings VVV_EEEE,...] [--passes P,...] [--exposures PREFIX,...] [--programs P,...] [--stems STEM,...] [--mjd LO-HI | --dates LO..HI] (--job-definition D [--job-queue Q] | --local | --dry-run) [--stage NAME] [--once] [--max-intake N] [--interval S]` (every selection term `all` when left out, `--dates` and `--mjd` included; each term's `--help` says whether it bounds the files taken in, the official L2 rows, or both, and a first pass that admits no file is refused naming the term that admits none) lists the run's `[intake] source_root`, submits every ready job of the selection one stage forward on Batch (intake, reference, difference, which associates its own sources and xsources with the objects and xobjects of their fields as they stand, then a packet per official source set, in any order) and ends each pass with `publish`, printing one summary line per pass and repeating every `--interval` seconds (120 by default) until a pass finds the selection drained (exit 0) or a job of the run has failed or was published with its binding refused (exit 1); `loop --local` runs each planned job here instead, as `job local` runs one, with no Batch and no job definition, passes repeating at once; `loop --dry-run` prints one pass's plan as JSON and does nothing; `--stage NAME` keeps one stage's jobs and implies `--once` ([the loop page](https://roman-rapid.readthedocs.io/en/latest/system/loop.html)); `database/queries.sql` holds the read queries the official views answer.
 
 `python scripts/stream_l2_files.py PROGRAM --source-root s3://<bucket>/<prefix>/` copies a program's guided WFI L2 files from MAST to `<prefix><stem>_cal.asdf`, outside the pipeline and before any run (`--filter`, `--detector`, `--pass`, `--segment`, `--visit`, `--mjdmin` and `--mjdmax` cut the search, `--unguided` keeps unguided exposures, `--dryrun` copies nothing, `--workers N` copies N at a time; each file is one conditional PUT, so nothing under the root is overwritten); it reads the MAST token from `MAST_API_TOKEN`. The loop reads the same prefix as the run's `intake.source_root`, so one shell variable connects them:
 

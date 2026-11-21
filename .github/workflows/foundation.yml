@@ -1,7 +1,7 @@
 # foundation: applies database/schema.sql, the one foundation schema
 # (foundation plan v5, Part 1), to an empty PostgreSQL 18 with Q3C and runs
 # every test that needs a database against it: tests/db (the schema, the
-# operations and the procedure proof) and tests/cli (the five verbs).
+# operations and the procedure proof) and tests/cli (the verbs).
 name: foundation
 
 on:

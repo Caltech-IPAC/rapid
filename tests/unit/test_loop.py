@@ -329,7 +329,7 @@ def test_a_first_pass_listing_no_stem_of_the_selection_exits_64_and_a_drained_on
                      "--passes", "1", "--job-definition", "jd", "--interval", "0"]) == code
     if code == ExitCode.USAGE:
         err = capsys.readouterr().err
-        assert SETTINGS["intake"]["source_root"] in err and "F146" in err and "passes 1" in err
+        assert f"no soc-l2 file under {SETTINGS['intake']['source_root']}" in err     # an empty root: no term's doing
 
 
 @pytest.mark.parametrize("state, refusal", [("failed", None), ("published", "binding refused")])
@@ -1251,7 +1251,7 @@ def test_local_runs_each_planned_job_here_in_order_and_repeats_at_once_until_dra
     assert code == ExitCode.SUCCESS and ran == ["psf", "intake"]
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [line["drained"] for line in lines] == [False, False, True]
-    assert lines[0]["queues"] == {"prompt": [1]} and "batch" not in lines[0]
+    assert lines[0]["queues"] == {"local": [1]} and "batch" not in lines[0]
 
 
 def test_a_local_job_that_fails_is_logged_and_the_pass_goes_on_around_it(monkeypatch, capsys, caplog):
@@ -1308,3 +1308,66 @@ def test_job_local_without_a_stage_names_the_stages(monkeypatch, capsys):
     with pytest.raises(SystemExit) as stop:                       # a stage that does not exist: argparse's list
         cli.main(["job", "local", "--run", "1", "--stage", "associate", "--scope", "{}"])
     assert stop.value.code == ExitCode.USAGE and "'associate'" in capsys.readouterr().err
+
+
+SELECTION_TERMS = ("filters", "scas", "pointings", "passes", "exposures", "programs", "stems", "mjd", "dates")
+
+
+def test_every_selection_term_is_all_when_left_out_and_its_help_says_so_and_what_it_bounds():
+    """One form for the nine terms: ``all`` the default, and the help naming it and files, rows or both."""
+    parser = cli._build_parser()
+    args = parser.parse_args(["loop", "--run", "12", "--dry-run"])
+    assert {term: getattr(args, term) for term in SELECTION_TERMS} == dict.fromkeys(SELECTION_TERMS, "all")
+    loop_parser = parser._subparsers._group_actions[0].choices["loop"]
+    helps = {a.dest: a.help for a in loop_parser._actions if a.dest in SELECTION_TERMS}
+    assert set(helps) == set(SELECTION_TERMS)
+    for term, text in helps.items():
+        assert "or 'all' (default). Bounds " in text, term
+    assert all("Bounds rows only" in helps[term] for term in ("mjd", "dates"))
+    assert all("Bounds files" in helps[term] for term in SELECTION_TERMS[:7])
+
+
+def test_dates_all_is_no_window(monkeypatch, capsys):
+    _local_patches(monkeypatch, [snap(psfs={})], [stem(1, 1, 1)])
+    assert cli.main(["loop", "--run", "12", "--dry-run", "--dates", "all"]) == ExitCode.SUCCESS
+    assert json.loads(capsys.readouterr().out)["selection"]["mjd"] == "all"
+
+
+def test_a_selection_admitting_nothing_is_refused_naming_the_term_that_admits_no_file(monkeypatch, capsys):
+    listed = [stem(1, 1, 1), stem(2, 1, 1), stem(1, 1, 1, sca=9)]
+
+    def refusal(*terms: str) -> str:
+        _local_patches(monkeypatch, [snap()], listed)
+        assert cli.main(["loop", "--run", "12", "--dry-run", *terms]) == ExitCode.USAGE
+        return capsys.readouterr().err
+
+    # One term admits no file by itself: it alone is named, not the terms that admit some.
+    err = refusal("--filters", "F146", "--scas", "8", "--passes", "7")
+    assert "--passes 7 admits none of the 3 files under s3://bucket/l2/" in err
+    assert "--scas" not in err and "--filters" not in err
+    # A filter the root holds no file of is named the same way, though the listing is by filter.
+    assert "--filters F184 admits none of the 3 files" in refusal("--filters", "F184")
+    # Each term admits some and no file passes both: both are named, with what each admits.
+    err = refusal("--scas", "9", "--passes", "2")
+    assert "no file under s3://bucket/l2/ is admitted by every term" in err
+    assert "--scas 9 admits 1" in err and "--passes 2 admits 1" in err and "of 3 files" in err
+    # The MJD window bounds rows, never files: it is not blamed.
+    assert "--mjd" not in refusal("--mjd", "1-2", "--passes", "7")
+
+
+def test_a_root_with_no_file_of_the_runs_reader_is_refused_naming_the_root_and_reader(monkeypatch, capsys):
+    _local_patches(monkeypatch, [snap()], [])
+    assert cli.main(["loop", "--run", "12", "--dry-run"]) == ExitCode.USAGE
+    assert "no soc-l2 file under s3://bucket/l2/" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("term, text", [("scas", "eight"), ("passes", "1,,2"), ("programs", "x"),
+                                        ("pointings", "0010001"), ("mjd", "then-now")])
+def test_a_malformed_selection_term_is_refused_naming_the_term_and_its_text(term, text):
+    with pytest.raises(ValueError, match=f"--{term} {text}: "):
+        loop.Selection.parse(**{term: text})
+
+
+def test_a_filter_the_table_lacks_is_refused_naming_the_filters_it_holds():
+    with pytest.raises(loop.NotFound, match=r"no filters row for F999; the filters table holds F146, F158"):
+        loop._fid("F999", {"W146": 8, "F158": 2})

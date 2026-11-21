@@ -42,9 +42,14 @@ class Cursor:
 
     def execute(self, statement, params=()):
         self.recorded.append((statement, params))
-        self.rows = [{"state": "launched", "stage": "trivial", "scope": {}, "run": 3,
-                      "published_attempt": None, "refusal": None, "settings": {},
-                      "survey": "HLWAS", "dataset": "d"}] if "FROM jobs j JOIN runs r" in statement else []
+        if "FROM jobs j JOIN runs r" in statement:
+            self.rows = [{"state": "launched", "stage": "trivial", "scope": {}, "run": 3,
+                          "published_attempt": None, "refusal": None, "settings": {},
+                          "survey": "HLWAS", "dataset": "d"}]
+        elif "FROM runs WHERE id" in statement and "FOR SHARE" in statement:
+            self.rows = [(None, None, None)]            # the run is not stopped (bookkeeping.admit)
+        else:
+            self.rows = []
 
     def fetchone(self):
         return self.rows[0] if self.rows else None

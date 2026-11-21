@@ -283,9 +283,24 @@ class Selection:
         Returns
         -------
         Selection
-            The parsed selection; ``ValueError`` names a malformed term, a stem of another
-            reader or no reader, or a window whose low end is above its high end.
+            The parsed selection; ``ValueError`` names the term and its text when it is
+            malformed, a stem of another reader or no reader, or a window whose low end is
+            above its high end.
         """
+        def numbers(term: str, text: str, convert=int) -> frozenset | None:
+            if text == "all":
+                return None
+            try:
+                return frozenset(convert(part) for part in text.split(","))
+            except ValueError as exc:
+                raise ValueError(f"--{term} {text}: {exc}") from exc
+
+        def pointing(part: str) -> tuple[int, int]:
+            visit, sep, exposure = part.partition("_")
+            if not sep:
+                raise ValueError(f"{part!r} is not VVV_EEEE")
+            return int(visit), int(exposure)
+
         prefixes = None
         if exposures != "all":
             prefixes = tuple(sorted({p.strip() for p in exposures.split(",") if p.strip()}))
@@ -294,10 +309,9 @@ class Selection:
         if reader in PASSLESS:
             if passes != "all":
                 raise ValueError(f"a {reader} selection has no passes: select its pointings")
-            points = None if pointings == "all" else frozenset(int(p) for p in pointings.split(","))
+            points = numbers("pointings", pointings)
         else:
-            points = None if pointings == "all" else frozenset(
-                (int(v), int(e)) for v, e in (p.split("_") for p in pointings.split(",")))
+            points = numbers("pointings", pointings, pointing)
         named = keys = None
         if stems != "all":
             named = frozenset(s.strip() for s in (stems.split(",") if isinstance(stems, str) else stems)
@@ -311,14 +325,41 @@ class Selection:
         window = None
         if mjd != "all":
             lo, _, hi = mjd.partition("-")
-            window = (float(lo), float(hi))
+            try:
+                window = (float(lo), float(hi))
+            except ValueError as exc:
+                raise ValueError(f"--mjd {mjd}: expected LO-HI: {exc}") from exc
             if window[0] > window[1]:
                 raise ValueError(f"--mjd {mjd}: the window's low end is above its high end")
         return cls(None if filters == "all" else frozenset(f.strip().upper() for f in filters.split(",")),
-                   None if scas == "all" else frozenset(int(s) for s in scas.split(",")), points,
-                   None if passes == "all" else frozenset(int(p) for p in passes.split(",")), reader, prefixes,
-                   None if programs == "all" else frozenset(int(p) for p in programs.split(",")),
+                   numbers("scas", scas), points, numbers("passes", passes), reader, prefixes,
+                   numbers("programs", programs),
                    None if fixed_program == "" else int(fixed_program), named, keys, window, mjd_hi_exclusive)
+
+    def admitted_by_term(self, stems: Iterable[str]) -> tuple[int, dict[str, int]]:
+        """How many of ``stems`` each file-bounding term admits by itself, to name the one that admits none.
+
+        Parameters
+        ----------
+        stems : iterable of str
+            Every stem under the source root, of any filter.
+
+        Returns
+        -------
+        tuple of (int, dict)
+            The stems the run's reader reads at all, and, for each of ``filters``, ``scas``,
+            ``pointings``, ``passes``, ``exposures``, ``programs`` and ``stems`` that is set, the
+            count that term alone admits. The MJD window bounds rows, not files, and is not a term here.
+        """
+        stems = list(stems)
+        alone = Selection(None, None, None, reader=self.reader, fixed_program=self.fixed_program)
+
+        def count(selection: "Selection") -> int:
+            return sum(selection.admits_stem(s) is not None for s in stems)
+
+        terms = ("filters", "scas", "pointings", "passes", "exposures", "programs", "stems")
+        return count(alone), {term: count(dataclasses.replace(alone, **{term: getattr(self, term)}))
+                              for term in terms if getattr(self, term) is not None}
 
     def admits_name(self, name: str) -> bool:
         """Whether an exposure's name is selected: it starts with one of ``exposures``, or there are none."""
@@ -812,7 +853,8 @@ def _fid(band: str, fids: dict[str, int]) -> int:
     for name, fid in fids.items():
         if name[1:] == band[1:]:
             return fid
-    raise NotFound(f"no filters row for {band}")
+    known = ", ".join(sorted("F" + name[1:] for name in fids))
+    raise NotFound(f"no filters row for {band}; the filters table holds {known}")
 
 
 def reference_center(reference: dict, field: int) -> tuple[float, float]:
@@ -1124,7 +1166,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
              max_intake: int = 100, batch: Any = None,
              rerun: Callable[[int, str], Any] | None = None,
              held_sets: Callable[[], list[dict]] | None = None, spot: dict | None = None,
-             stage: str | None = None) -> dict:
+             stage: str | None = None, queue: str = "prompt") -> dict:
     """One pass: reconcile with ``batch`` (a Batch client) when given, rerun once through ``rerun``
     (``(job, stage)``, on the prompt queue) each job whose container died for a reason not the
     code's, or whose Spot submission ended unpublished or was hedged (``spot``, the run's
@@ -1134,7 +1176,8 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     (``submit(item)`` returns the job id), then publish; return the summary, with ``held_sets``,
     the quality gate's held packet sets after the publish (``held_sets()``), when given, and the
     run's ``attempts`` report. ``stage`` submits one stage's alone (:func:`cut_to_stage`); such a
-    pass never drains."""
+    pass never drains. ``queue`` names, under ``queues``, the submissions no Spot queue took
+    (``local`` for the loop's ``--local``, whose jobs run here)."""
     with conn_factory() as conn:
         if batch is not None:
             medians = median_seconds(conn, run) if spot and spot.get("hedge_factor") else None
@@ -1156,7 +1199,7 @@ def run_pass(conn_factory: Callable[[], Any], run: int, selection: Selection, st
     submissions = cut_to_stage(submissions, counts, stage)
     queues = defaultdict(list)
     for item in submissions:
-        queues[item.get("queue") or "prompt"].append(submit(item))
+        queues[item.get("queue") or queue].append(submit(item))
     counts["queues"] = dict(queues)
     produced = publish() if publish is not None else {"packets": 0, "sets": []}
     counts["packets_produced"] = produced["packets"]

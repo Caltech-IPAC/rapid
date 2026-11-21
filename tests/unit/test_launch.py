@@ -58,7 +58,11 @@ class _Conn:
         return False
 
     def execute(self, sql, params):
-        self.statements.append((sql, params))
+        if not sql.startswith("SELECT"):        # the stopped-run gate's two reads are not recorded
+            self.statements.append((sql, params))
+
+    def fetchone(self):
+        return (None, None, None)               # the gate's reads: the job's run, and that run not stopped
 
     def commit(self):
         self.committed = True
@@ -95,6 +99,8 @@ def test_a_raising_batch_request_leaves_the_row_failed_with_the_reason_and_propa
 def test_a_failing_id_write_after_an_accepted_request_does_not_mark_the_row_failed(batch_env):
     class Unwritable(_Conn):
         def execute(self, sql, params):
+            if sql.startswith("SELECT"):        # the gate's reads, before the request, still answer
+                return
             self.statements.append((sql, params))
             raise RuntimeError("the database went away")
 
@@ -163,6 +169,16 @@ def test_submit_refuses_an_outputs_root_a_batch_job_cannot_write(batch_env, monk
         launch.submit(7, "difference", job_definition="definition", client=batch)
     assert batch.submitted == []
 
+def test_a_submission_refused_for_its_environment_leaves_the_row_failed_with_what_to_export(batch_env, monkeypatch):
+    monkeypatch.delenv("RAPIDPIPE_BATCH_JOB_QUEUE")
+    conn = _Conn()
+    with pytest.raises(launch.LaunchError, match="export the Batch job queue"):
+        launch.submit(7, "difference", job_definition="definition", conn=conn, client=_Batch())
+    ((sql, params),) = conn.statements
+    assert "SET state = 'failed'" in sql and params[1] == 7 and "RAPIDPIPE_BATCH_JOB_QUEUE" in params[0]
+    assert conn.committed
+
+
 
 class _Ssm:
     """A fake SSM client: the database tree under ``/rapid/x`` and the three Kafka parameters."""
@@ -189,6 +205,8 @@ def test_the_job_environment_stands_for_every_ssm_read_and_is_read_once(monkeypa
     ssm = _Ssm()
     monkeypatch.setenv("RAPID_PARAMETER_PATH", "/rapid/x")
     monkeypatch.delenv("PGHOST", raising=False)
+    for name in publish_kafka.ENVIRONMENT.values():   # a dev.sh container sets them
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(launch, "_environments", {})
     env = launch.job_environment({"kafka": KAFKA}, ssm)
     assert env == {"PGHOST": "db.example", "PGPORT": "6432", "PGDATABASE": "rapid", "RAPID_DB_SECRET_ID": "s-1",

@@ -94,7 +94,29 @@ the pipeline imports.
   `2026-11-17-survey-programs.sql`, `2026-11-18-refimmeta.sql`,
   `2026-11-20-exposure-ids.sql` (the last after the other two; it records
   every exposure already stored under the id it has and refuses, changing
-  nothing, where it cannot).
+  nothing, where it cannot), then `2026-11-20-run-stopped.sql` (three
+  nullable columns on `runs`, which `rapidpipe run stop` writes).
+
+  Applying one is one command, run by whoever merges the pull request that
+  adds it, from their own workstation under its instance role, with no
+  profile and no database login of their own: in a rapid_systems checkout,
+
+  ```
+  cloudformation/apply-dated-sql.sh <path to the dated file>
+  ```
+
+  It pipes the file to `psql -X -v ON_ERROR_STOP=1` as `postgres` on the
+  database host, prints psql's output and exits 0 only when the file applied
+  (rapid_systems' operator runbook, "Apply a dated schema file", gives the
+  checks around it). "As postgres" in a file's header names the role the
+  statements run as, not a person. A file is one transaction, so a failure
+  leaves the database as it was. Nothing records which files a database has
+  taken but the runbook page, so a second application is the file's own
+  behaviour: one that only adds missing rows (`2026-11-17-survey-programs.sql`)
+  adds none; one that adds a table or a column fails at that statement and
+  changes nothing. A person's own database login cannot apply one: it may not
+  create in `public`, and a table it owned would lack the grants the
+  pipeline's roles get from `postgres`'s default privileges.
 - [`queries.sql`](queries.sql): the read queries the official views
   answer (foundation plan v5, Part 2): the plan's eight (as eleven
   statements: packet history three ways, lineage up and down) and the

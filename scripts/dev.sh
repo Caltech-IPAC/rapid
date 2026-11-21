@@ -37,13 +37,22 @@
 # first use. Its out/ is the pipeline's outputs root, written by jobs and
 # read by `job show`; nothing else belongs there.
 #
-# The local target (the default) talks to the throwaway database through PG*
-# and writes products under the work folder's out/; the deployed target sets
+# The local target (the default) talks to the throwaway database through PG*,
+# writes products under the work folder's out/ and points a packet job's
+# Kafka send at a closed local port, so nothing reaches the team's topic; the
+# deployed target sets
 # RAPID_PARAMETER_PATH to the rebuild tree, so the container reaches the
 # deployed database under the host's instance role (rapid_systems
 # docs/workstation-submission.md), and takes RAPIDPIPE_OUTPUTS_ROOT from the
 # caller's environment. A run against the deployed database is a real run:
 # use a dataset of your own.
+#
+# `rapidpipe run create` takes its defaults from what the container is given:
+# --who from LOGNAME, your login name here; --revision from
+# RAPID_SOURCE_REVISION, which the local target sets to this checkout's
+# commit (ending -dirty when the working tree differs) and the deployed
+# target leaves as the image's when the checkout is clean at that commit,
+# and empties otherwise, so the run names its revision itself.
 #
 # Nothing here is account-specific: the registry is derived from the caller's
 # AWS identity, as the README's Getting started does. The pulled image's
@@ -208,6 +217,9 @@ db_start() {
 db_stop() {
   local eng; eng=$(engine)
   db_running && "$eng" rm -f "$DB_CONTAINER" >/dev/null
+  # the pod or network goes too, unless another container still uses it
+  if [ "$eng" = podman ]; then "$eng" pod rm "$POD" >/dev/null 2>&1 || true
+  else "$eng" network rm "$POD" >/dev/null 2>&1 || true; fi
   echo "db: stopped" >&2
 }
 
@@ -241,18 +253,33 @@ ENTRY='py=$(sed -n "s/^exec \"\(.*\)\" -m rapidpipe.*/\1/p" /usr/local/bin/rapid
 [ -n "$py" ] && export PATH="$(dirname "$py"):$PATH";
 ln -sf /usr/local/bin/rapidpipe-entrypoint /usr/local/bin/rapidpipe; cd /code; exec "$@"'
 
+checkout_revision() {  # this checkout's commit, ending -dirty when the working tree differs from it
+  local sha
+  sha=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null) || return 0
+  [ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ] || sha="$sha-dirty"
+  echo "$sha"
+}
+
 container_args() {  # target -> the engine's run arguments, one per line
-  local target="$1"
+  local target="$1" label
   mkdir -p "$WORK/out"
+  # LOGNAME: the container's user is root, and `rapidpipe run create` records who by the login name.
   printf '%s\n' --rm -v "$ROOT:/code:Z" -v "$WORK:/work:Z" -w /code \
     -e PYTHONPATH=/code -e RAPIDPIPE_LOG_LEVEL="${RAPIDPIPE_LOG_LEVEL:-INFO}" \
-    -e RAPID_DEV_TARGET="$target"
+    -e RAPID_DEV_TARGET="$target" -e LOGNAME="$(id -un)"
   case "$target" in
     local)
       db_running || db_start >&2   # keeps a running one and its runs; `db reset` clears it
       printf '%s\n' "$(net_args)" -e PGHOST="$(db_host)" -e PGPORT=5432 -e PGDATABASE=rapid \
         -e PGUSER=postgres -e PGPASSWORD="$DB_PASSWORD" \
-        -e RAPIDPIPE_OUTPUTS_ROOT="${RAPIDPIPE_OUTPUTS_ROOT:-file:///work/out}"
+        -e RAPIDPIPE_OUTPUTS_ROOT="${RAPIDPIPE_OUTPUTS_ROOT:-file:///work/out}" \
+        -e RAPID_SOURCE_REVISION="$(checkout_revision)" \
+        -e AWS_DEFAULT_REGION="$REGION" \
+        -e RAPIDPIPE_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9 -e RAPIDPIPE_KAFKA_TOPIC=local \
+        -e RAPIDPIPE_KAFKA_MAX_REQUEST_BYTES=1048576
+      # RAPID_SOURCE_REVISION: every job runs here, on the checkout. The three Kafka values
+      # point a packet job's send at a closed port, so it fails, the job still publishes, and
+      # nothing reaches the team's topic (without them the job reads the topic from SSM).
       ;;
     deployed)
       [ -n "${RAPIDPIPE_OUTPUTS_ROOT:-}" ] || die "the deployed target: export RAPIDPIPE_OUTPUTS_ROOT (an s3:// scratch prefix) first"
@@ -260,6 +287,12 @@ container_args() {  # target -> the engine's run arguments, one per line
         -e RAPIDPIPE_OUTPUTS_ROOT="$RAPIDPIPE_OUTPUTS_ROOT" -e AWS_DEFAULT_REGION="$REGION"
       if [ -n "${RAPIDPIPE_BATCH_JOB_QUEUE:-}" ]; then
         printf '%s\n' -e "RAPIDPIPE_BATCH_JOB_QUEUE=$RAPIDPIPE_BATCH_JOB_QUEUE"
+      fi
+      # A Batch job runs the image's commit and `loop --local` the checkout's: the image's own
+      # RAPID_SOURCE_REVISION stands only when the two are one, else `run create` asks for --revision.
+      label=$("$(engine)" image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE" 2>/dev/null || true)
+      if [ -z "$label" ] || [ "$label" != "$(checkout_revision)" ]; then
+        printf '%s\n' -e RAPID_SOURCE_REVISION=
       fi
       ;;
     *) die "unknown target '$target' (local or deployed)" ;;

@@ -1,11 +1,17 @@
 """The ``rapidpipe`` command-line tool.
 
-The five foundation verbs (foundation plan v5, milestone 0) wrap
+The foundation verbs (foundation plan v5, milestone 0, and those added since) wrap
 ``rapidpipe.foundation``:
 
-- ``run create --who --why --revision [--settings FILE] [--overlay FILE]
+- ``run create [--who] --why [--revision] [--settings FILE] [--overlay FILE]
   [--set TABLE.key=value ...] --survey --dataset`` records a run and prints
-  its id; the body it stores is resolved from three layers
+  its id; ``--who`` is the login name when left out (here, on ``run stop``
+  and on ``official change`` and ``official undo``; never ``root``, which names
+  nobody), and ``--revision`` is ``RAPID_SOURCE_REVISION``, the commit of
+  the code this process runs, where the environment sets it (the image
+  does, to the commit it was built from; ``scripts/dev.sh`` does when its
+  checkout and its image leave one answer); the body it stores is resolved
+  from three layers
   (``rapidpipe.foundation.layers``): ``FILE``, the shipped
   ``foundation-thin.toml`` by default (TOML, or JSON when its name ends in
   ``.json``), the dataset's overlay, then each ``--set`` in order; the run
@@ -19,13 +25,33 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
 - ``official undo <group-id> --who --why`` applies the inverse of a group
   and prints the new group's id;
 - ``run show <id>`` and ``job show <id>`` print the run or job as JSON;
+  ``run show <id> --toml FILE`` writes the run's stored settings body to
+  ``FILE`` as TOML instead (``rapidpipe.foundation.layers.to_toml``): a
+  base ``run create --settings FILE`` takes, giving a run of the same
+  ``settings_hash``;
+- ``run stop --run N [--who] --why`` records the run as stopped and ends what
+  it has on Batch (``rapidpipe.foundation.stop``): from then on no job of the
+  run is recorded, submitted or started, on any path (``loop``, ``job local``,
+  ``job submit``, ``job run``; each is refused, exit 1, saying who stopped it,
+  when and why), its jobs recorded and not yet submitted are ``failed`` with
+  the stop as their ``refusal``, and Batch is asked to cancel or terminate
+  every job of it that has not ended; it prints what it did as JSON and may be
+  repeated;
+- ``run cleanup --run N [--delete]`` is for a stopped run whose every job is
+  shown to have ended, and refuses, naming the job and what would end it,
+  otherwise: it prints the attempt directories under
+  ``RAPIDPIPE_OUTPUTS_ROOT`` that belong to the run's jobs and hold no
+  published product, with their file counts, as JSON, and removes nothing;
+  with ``--delete`` it removes exactly those files, checking each attempt
+  again as it comes to it and keeping, and naming, any that no longer
+  qualifies (exit 1 then);
 - ``job local --run --stage --scope JSON [--inputs JSON] [--expects JSON]``
   records a job and runs it; ``job run --job <id>``
   runs an existing job's next attempt. Both run the stage's ``run(job)``
   in this process under ``RAPIDPIPE_OUTPUTS_ROOT`` and publish it
   (``rapidpipe.foundation.run_job``), printing the publisher's result;
-- ``job submit`` takes ``job local``'s arguments and ``--job-definition``
-  (or ``--job <id>`` in their place, a new attempt of an existing job),
+- ``job submit`` takes ``job local``'s arguments (or ``--job <id>`` in their
+  place, a new attempt of an existing job) and ``--job-definition``, always,
   records the job and submits one Batch job running ``job run --job <id>``
   in the image (``rapidpipe.launch.submit``) asking for the run's
   ``[batch.memory_mib]`` memory and ``[batch.vcpus]`` vCPUs for the stage, recording the Batch job id
@@ -36,13 +62,16 @@ The five foundation verbs (foundation plan v5, milestone 0) wrap
   states; exit 0 when every job published, 1 when one failed, 2 when the
   timeout passes first: one blocking waiter for hand-submitted jobs;
 - ``loop --run [--filters] [--scas] [--pointings] [--passes] [--exposures] [--programs] [--stems]
-  [--mjd LO-HI | --dates LO..HI] (--job-definition D | --local | --dry-run) [--stage NAME] [--once]``
-  carries the selection (every term ``all`` when left out) one stage
-  forward per pass on Batch and ends each
+  [--mjd LO-HI | --dates LO..HI] (--job-definition D [--job-queue Q] | --local | --dry-run)
+  [--stage NAME] [--once] [--max-intake N] [--interval S]``
+  carries the selection (every term ``all`` when left out, each term's
+  help saying whether it bounds the files taken in, the official L2 rows,
+  or both) one stage forward per pass on Batch and ends each
   pass at the Kafka topic (``rapidpipe.foundation.loop``), printing one
   summary line per pass, until a pass finds the selection drained: exit 0
   (64 when the first pass finds no stem of the selection under the source
-  root, a selection that matches nothing); ``--local`` runs each planned
+  root, a selection that matches nothing: the refusal names the term that
+  admits no file there, :func:`_nothing_admitted`); ``--local`` runs each planned
   job here through ``job local``'s path instead, with no Batch and no sweep,
   passes repeating at once; ``--dry-run`` prints one pass's plan and does
   nothing; ``--stage`` keeps one stage's submissions and implies ``--once``,
@@ -89,7 +118,9 @@ Plain argparse; no third-party CLI library.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime
+import getpass
 import importlib
 import json
 import logging
@@ -107,6 +138,8 @@ from rapidpipe import foundation, launch
 from rapidpipe import log as rapidpipe_log
 from rapidpipe.db.connection import ConnectionConfigError, ConnectionUnavailable, connect
 from rapidpipe.foundation import gate, layers, loop, publish_kafka
+from rapidpipe.foundation import stop as run_stop
+from rapidpipe.foundation.bookkeeping import stopped_message
 from rapidpipe.foundation.local import failure_reason
 from rapidpipe.products import storage
 from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
@@ -114,6 +147,7 @@ from rapidpipe.exitcodes import ArgumentParser, CommandExit, ExitCode
 
 #: The shipped settings body; ``publish`` reads its ``[kafka]`` table by default.
 _SHIPPED_SETTINGS = Path(__file__).resolve().parents[1] / "settings" / "foundation-thin.toml"
+_WHO_HELP = "Who is doing this (default: the login name)."
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -124,16 +158,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="Create or show a run.",
-                                       description="Create or show a run.")
+    run_parser = subparsers.add_parser("run", help="Create, show, stop or clean up a run.",
+                                       description="Create or show a run, stop one, or clean up after a "
+                                                   "stopped one.")
     run_parser.set_defaults(group_parser=run_parser)
     run_subparsers = run_parser.add_subparsers(dest="verb")
     create = run_subparsers.add_parser(
         "create", help="Record a run and print its id.",
         description="Record a run (a recipe someone launched for a reason) and print its id.")
-    create.add_argument("--who", required=True)
+    create.add_argument("--who", help=_WHO_HELP)
     create.add_argument("--why", required=True)
-    create.add_argument("--revision", required=True, help="The code revision the run is for.")
+    create.add_argument("--revision",
+                        help="The code revision the run is for (default: RAPID_SOURCE_REVISION, the commit "
+                             "of the code running here, where the environment sets it; required otherwise).")
     create.add_argument("--settings", type=Path, metavar="FILE", default=_SHIPPED_SETTINGS,
                         help="The base settings body: TOML, or JSON when FILE ends in .json "
                              "(default: the shipped foundation-thin.toml).")
@@ -147,6 +184,30 @@ def _build_parser() -> argparse.ArgumentParser:
     run_show = run_subparsers.add_parser("show", help="Print one run as JSON.",
                                          description="Print one run, its live binding and its jobs as JSON.")
     run_show.add_argument("id", type=int)
+    run_show.add_argument("--toml", type=Path, metavar="FILE",
+                          help="Write the run's stored settings body to FILE as TOML and print nothing: "
+                               "'run create --settings FILE' then stores the same body, with the same "
+                               "settings_hash.")
+    run_stop = run_subparsers.add_parser(
+        "stop", help="Stop a run: no further job of it, and its Batch jobs ended.",
+        description="Record the run as stopped and ask Batch to cancel or terminate every job of it that "
+                    "has not ended. From then on 'loop', 'job local', 'job submit' and 'job run' refuse "
+                    "the run, saying who stopped it and why; a stopped run is not started again (a new "
+                    "run takes the work on). Prints what it did as JSON; repeat it to ask Batch again.")
+    run_stop.add_argument("--run", required=True, type=int)
+    run_stop.add_argument("--who", help=_WHO_HELP)
+    run_stop.add_argument("--why", required=True)
+    run_cleanup = run_subparsers.add_parser(
+        "cleanup", help="List what a stopped run left behind, or remove it with --delete.",
+        description="For a stopped run whose every job has ended: print the attempt directories under "
+                    "RAPIDPIPE_OUTPUTS_ROOT that belong to the run's jobs and hold no published product, "
+                    "with their file counts, as JSON. Nothing is removed without --delete. Refuses, naming "
+                    "the job and what would end it, while a job is not shown to have ended.")
+    run_cleanup.add_argument("--run", required=True, type=int)
+    run_cleanup.add_argument("--delete", action="store_true",
+                             help="Remove the listed files, checking each attempt again as it comes to it; "
+                                  "one that no longer qualifies (published meanwhile) is kept and named, "
+                                  "exit 1.")
 
     job_parser = subparsers.add_parser("job", help="Show, launch or run a job.",
                                        description="Show a job, or run one here and publish it.")
@@ -209,13 +270,13 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Apply one change group in one transaction and print its id.")
     change.add_argument("--group", required=True, type=Path, metavar="FILE",
                         help="A JSON list of items, each with 'close' and/or 'open'.")
-    change.add_argument("--who", required=True)
+    change.add_argument("--who", help=_WHO_HELP)
     change.add_argument("--why", required=True)
     undo = official_subparsers.add_parser(
         "undo", help="Apply the inverse of a change group and print the new group's id.",
         description="Apply the inverse of a change group and print the new group's id.")
     undo.add_argument("group_id", type=int, metavar="group-id")
-    undo.add_argument("--who", required=True)
+    undo.add_argument("--who", help=_WHO_HELP)
     undo.add_argument("--why", required=True)
 
     publish_parser = subparsers.add_parser(
@@ -237,49 +298,64 @@ def _build_parser() -> argparse.ArgumentParser:
                     "Repeat every --interval seconds until a pass finds nothing new, pending or "
                     "to submit: exit 0, or 1 when a job of the run has failed or was published "
                     "with its binding refused; the work that does not depend on it drains first. "
-                    "Exit 64 when the first pass admits nothing. Every selection term is 'all' "
-                    "when left out. With --local each planned job runs here instead, as 'job local' "
+                    "Exit 64 when the first pass admits nothing, naming the term that admits no "
+                    "file. With --local each planned job runs here instead, as 'job local' "
                     "runs one, passes repeating at once until one drains; with --dry-run one pass's "
                     "plan is printed and nothing is done.")
     loop_parser.add_argument("--run", required=True, type=int)
-    loop_parser.add_argument("--filters", default="all", help="Comma-separated, e.g. F146, or 'all' (default).")
-    loop_parser.add_argument("--scas", default="all", help="Comma-separated SCA numbers, or 'all' (default).")
-    loop_parser.add_argument("--pointings", default="all",
-                             help="Comma-separated VVV_EEEE (visit, exposure), or the observing "
-                                  "sequence's rows for an OpenUniverse run, or 'all' (default).")
-    loop_parser.add_argument("--stems", default="all",
-                             help="Comma-separated L2 file stems (the name without _cal.asdf), or @FILE "
-                                  "with one per line, or 'all' (default): the files to ingest and their "
-                                  "official rows.")
-    window = loop_parser.add_mutually_exclusive_group()
+    terms = loop_parser.add_argument_group(
+        "selection",
+        "Every term is 'all' when left out, and terms combine: a file or row is selected when every "
+        "term admits it. Each says what it bounds: the files taken in from the source root, the "
+        "official L2 rows the later stages work from, or both. A term that reads a file's name "
+        "bounds a row through the file its intake read, so it selects no imported row, which has none.")
+    terms.add_argument("--filters", default="all",
+                       help="Filter names, comma-separated (F146,F158), or 'all' (default). "
+                            "Bounds files and rows.")
+    terms.add_argument("--scas", default="all",
+                       help="SCA numbers, comma-separated (1,8), or 'all' (default). Bounds files and rows.")
+    terms.add_argument("--pointings", default="all",
+                       help="Visit and exposure as VVV_EEEE, comma-separated (001_0001), or the observing "
+                            "sequence's rows for an OpenUniverse run, or 'all' (default). Bounds files "
+                            "and rows, by the file's name.")
+    terms.add_argument("--passes", default="all",
+                       help="Survey pass numbers, comma-separated (1,2,3,4), or 'all' (default). "
+                            "Bounds files and rows, by the file's name.")
+    terms.add_argument("--exposures", default="all",
+                       help="Prefixes of the exposure's name, the stem without its detector and file-kind "
+                            "suffix, comma-separated (r0034201002 is pass 2 of r00342 whole, "
+                            "r0034201005001003061 one visit), or 'all' (default). Bounds files and rows, "
+                            "by the file's name.")
+    terms.add_argument("--programs", default="all",
+                       help="Program numbers, comma-separated (1049,1018 or -2), or 'all' (default). "
+                            "Bounds files, by the program intake writes for them, and rows, by their "
+                            "exposure's official program_id.")
+    terms.add_argument("--stems", default="all",
+                       help="L2 file stems, the name without _cal.asdf, comma-separated, or @FILE with one "
+                            "per line, or 'all' (default). Bounds files and rows, by the file's name.")
+    window = terms.add_mutually_exclusive_group()
     window.add_argument("--mjd", default="all", metavar="LO-HI",
-                        help="An inclusive window of the official L2 rows' mjdobs; the files to ingest "
-                             "carry no date and are not bounded.")
-    window.add_argument("--dates", metavar="YYYY-MM-DD..YYYY-MM-DD",
-                        help="The same window as UTC dates, both days included.")
+                        help="A window of mjdobs, both ends included (61352-61354), or 'all' (default). "
+                             "Bounds rows only: a file not yet taken in carries no date.")
+    window.add_argument("--dates", default="all", metavar="YYYY-MM-DD..YYYY-MM-DD",
+                        help="The same window as UTC dates, both days included (2026-11-08..2026-11-09), "
+                             "or 'all' (default). Bounds rows only, as --mjd.")
     mode = loop_parser.add_mutually_exclusive_group()
     mode.add_argument("--local", action="store_true",
                       help="Run each planned job here under RAPIDPIPE_OUTPUTS_ROOT, one at a time in "
                            "stage order, instead of submitting it; no job definition, no Batch.")
     mode.add_argument("--dry-run", action="store_true",
                       help="Print one pass's plan (its submissions and counts) as JSON and exit 0; "
-                           "nothing is recorded or submitted.")
+                           "nothing is recorded or submitted, and an exposure the database holds no id "
+                           "for is planned with expid null and named under 'unassigned'.")
     loop_parser.add_argument("--stage", choices=loop.STAGES, metavar="NAME",
                              help=f"Keep one stage's submissions, one of {', '.join(loop.STAGES)}; "
                                   "implies --once.")
-    loop_parser.add_argument("--passes", default="all",
-                             help="Comma-separated survey pass numbers, e.g. 1,2,3,4, or 'all' (default).")
-    loop_parser.add_argument("--exposures", default="all",
-                             help="Comma-separated prefixes of the exposure's name (the stem without its "
-                                  "detector and file-kind suffix: r0034201002 is pass 2 of r00342 whole, "
-                                  "r0034201005001003061 one visit), with the other terms; 'all' (default).")
-    loop_parser.add_argument("--programs", default="all",
-                             help="Comma-separated program numbers, e.g. 1049,1018 or -2, or 'all' (default): "
-                                  "stems by the program intake writes, official L2 rows by their exposure's "
-                                  "official program_id.")
     loop_parser.add_argument("--job-definition",
-                             help="The Batch job definition the run's revision is registered as "
-                                  "(required without --local or --dry-run).")
+                             help="The Batch job definition the run's revision is registered as: name, "
+                                  "name:revision or ARN (required without --local or --dry-run; Batch "
+                                  "names a definition's image by digest and one image is registered "
+                                  "under several, so the tool cannot choose it from the run).")
     loop_parser.add_argument("--job-queue",
                              help="The prompt (on-demand) Batch job queue (default "
                                   "RAPIDPIPE_BATCH_JOB_QUEUE); the run's [batch.spot] names the Spot one.")
@@ -307,6 +383,31 @@ def _build_parser() -> argparse.ArgumentParser:
                                   "roman_tds_H158_1012 (OpenUniverse), rimtimsim_WFI_F213_000000411.")
 
     return parser
+
+
+def _who(args: argparse.Namespace) -> str:
+    """``--who``, or the login name without it; ``root`` is refused as a default, since it names nobody."""
+    if args.who:
+        return args.who
+    try:
+        name = getpass.getuser()
+    except (KeyError, OSError):         # no login name here (a container's bare uid)
+        name = ""
+    if name in ("", "root"):
+        raise CommandExit(int(ExitCode.USAGE), "--who is required: the login name here is "
+                                               f"{name or 'not set'}, which names nobody")
+    return name
+
+
+def _revision(args: argparse.Namespace) -> str:
+    """``--revision``, or ``RAPID_SOURCE_REVISION`` without it: the commit of the code this process runs."""
+    revision = args.revision or os.environ.get("RAPID_SOURCE_REVISION")
+    if not revision:
+        raise CommandExit(int(ExitCode.USAGE),
+                          "--revision is required: RAPID_SOURCE_REVISION is not set here (the image sets it "
+                          "to the commit it was built from, and scripts/dev.sh when its checkout and its "
+                          "image leave one answer); pass the commit the run's jobs will run")
+    return revision
 
 
 def _read(path: Path, what: str) -> Any:
@@ -347,6 +448,11 @@ def _dates_window(text: str) -> str:
     if first > last:
         raise CommandExit(int(ExitCode.USAGE), f"--dates {text}: the first date is after the last")
     return f"{(first - _MJD_EPOCH).days}-{(last - _MJD_EPOCH).days + 1}"
+
+
+#: The loop's selection terms that bound the files taken in, as :class:`~rapidpipe.foundation.loop.Selection`
+#: names them; ``--mjd`` and ``--dates`` bound official rows only and never empty a listing.
+_FILE_TERMS = ("filters", "scas", "pointings", "passes", "exposures", "programs", "stems")
 
 
 def _stems_argument(text: str) -> str | list[str]:
@@ -483,14 +589,18 @@ def _loop(args: argparse.Namespace) -> int:
         raise CommandExit(int(ExitCode.USAGE), "RAPIDPIPE_OUTPUTS_ROOT is not set")
     once = args.once or args.dry_run or args.stage is not None
     with connect_loop() as conn:
-        settings = foundation.run_show(conn, args.run)["settings"]
+        run = foundation.run_show(conn, args.run)
+    if run.get("stopped") is not None:  # before anything is listed, planned or submitted
+        raise foundation.Stopped(stopped_message(args.run, run["stopped"], run["stopped_by"], run["stopped_why"]))
+    settings = run["settings"]
     intake = settings["intake"]
-    mjd = _dates_window(args.dates) if args.dates else args.mjd
+    dated = args.dates != "all"
+    mjd = _dates_window(args.dates) if dated else args.mjd
     try:
         selection = loop.Selection.parse(args.filters, args.scas, args.pointings, args.passes,
                                          intake.get("reader", "soc-l2"), args.exposures, args.programs,
                                          intake.get("program_id", ""), _stems_argument(args.stems), mjd,
-                                         mjd_hi_exclusive=bool(args.dates))
+                                         mjd_hi_exclusive=dated)
     except ValueError as exc:
         raise CommandExit(int(ExitCode.USAGE), str(exc)) from exc
     s3 = storage.s3_client(unsigned=bool(intake.get("unsigned")))
@@ -499,7 +609,7 @@ def _loop(args: argparse.Namespace) -> int:
         plan = loop.dry_run(connect_loop, args.run, selection, stems, args.max_intake, args.stage)
         _print_json(plan)
         if plan["admitted"] == 0:
-            raise CommandExit(int(ExitCode.USAGE), _nothing_admitted(args, intake))
+            raise CommandExit(int(ExitCode.USAGE), _nothing_admitted(args, intake, selection, s3))
         return int(ExitCode.SUCCESS)
     batch = None if args.local else launch.batch_client()
     spot = None if args.local else launch.spot(settings)
@@ -567,7 +677,7 @@ def _loop(args: argparse.Namespace) -> int:
         stems = loop.list_stems(s3, intake["source_root"], selection)
         if args.local:                  # no Batch, no rerun, no sweep: a packet job sends its own set
             summary = loop.run_pass(connect_loop, args.run, selection, stems, submit_local, None,
-                                    args.max_intake, held_sets=held_sets, stage=args.stage)
+                                    args.max_intake, held_sets=held_sets, stage=args.stage, queue="local")
         else:
             summary = loop.run_pass(connect_loop, args.run, selection, stems, submit, publish,
                                     args.max_intake, batch, rerun, held_sets, spot, args.stage)
@@ -575,7 +685,7 @@ def _loop(args: argparse.Namespace) -> int:
         summary["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         print(json.dumps(summary, sort_keys=True), flush=True)
         if first and summary["admitted"] == 0:      # a later pass admitting nothing new is the drain
-            raise CommandExit(int(ExitCode.USAGE), _nothing_admitted(args, intake))
+            raise CommandExit(int(ExitCode.USAGE), _nothing_admitted(args, intake, selection, s3))
         first = False
         if once or summary["drained"]:
             if summary["failed"]:
@@ -587,25 +697,65 @@ def _loop(args: argparse.Namespace) -> int:
             time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
 
 
-def _nothing_admitted(args: argparse.Namespace, intake: dict) -> str:
-    return (f"the first pass found no stem under {intake['source_root']} for filters {args.filters},"
-            f" SCAs {args.scas}, pointings {args.pointings}, passes {args.passes}, exposures {args.exposures},"
-            f" programs {args.programs}, stems {args.stems}" + (f", dates {args.dates}" if args.dates else ""))
+def _nothing_admitted(args: argparse.Namespace, intake: dict, selection: loop.Selection, s3: Any) -> str:
+    """Why the first pass admitted no file: the term, or terms, that admit none under the source root.
+
+    The root is listed once more, for every filter, and each term that is not ``all`` is counted
+    alone (:meth:`~rapidpipe.foundation.loop.Selection.admitted_by_term`). A term that admits no
+    file by itself is named; when each admits some and no file passes them all, the terms are
+    named together with their counts; a root holding no file of the run's reader is named itself.
+    """
+    root = intake["source_root"]
+    everything = loop.list_stems(s3, root, dataclasses.replace(selection, filters=None))
+    readable, counts = selection.admitted_by_term(everything)
+    if readable == 0:
+        return f"the first pass found no {selection.reader} file under {root}"
+    given = {term: f"--{term} {getattr(args, term)}" for term in _FILE_TERMS if term in counts}
+    empty = [given[term] for term in given if counts[term] == 0]
+    if empty:
+        return (f"{' and '.join(empty)} admit{'s' if len(empty) == 1 else ''} none of the "
+                f"{readable} files under {root}")
+    return (f"no file under {root} is admitted by every term: "
+            + ", ".join(f"{given[term]} admits {counts[term]}" for term in given) + f", of {readable} files")
 
 
 def _foundation_command(args: argparse.Namespace) -> int:
     command = (args.command, getattr(args, "verb", None))
     if command == ("run", "create"):
+        who, revision = _who(args), _revision(args)
         try:
             settings, record = layers.resolve(args.settings, args.overlay, args.sets)
         except layers.LayerError as exc:
             raise CommandExit(int(ExitCode.USAGE), str(exc)) from exc
         with connect(application_name="rapidpipe-run-create") as conn:
-            print(foundation.create_run(conn, args.who, args.why, args.revision, settings,
+            print(foundation.create_run(conn, who, args.why, revision, settings,
                                         args.survey, args.dataset, layers=record))
     elif command == ("run", "show"):
         with connect(application_name="rapidpipe-run-show") as conn:
-            _print_json(foundation.run_show(conn, args.id))
+            run = foundation.run_show(conn, args.id)
+        if args.toml is None:
+            _print_json(run)
+        else:
+            try:
+                args.toml.write_text(layers.to_toml(run["settings"]))
+            except (OSError, layers.LayerError) as exc:
+                raise CommandExit(int(ExitCode.USAGE),
+                                  f"run {args.id}'s settings not written to {args.toml}: {exc}") from exc
+    elif command == ("run", "stop"):
+        who = _who(args)
+        with connect(application_name="rapidpipe-run-stop") as conn:
+            _print_json(run_stop.stop(conn, args.run, who, args.why, launch.batch_client))
+    elif command == ("run", "cleanup"):
+        root = os.environ.get("RAPIDPIPE_OUTPUTS_ROOT")
+        if not root:
+            raise CommandExit(int(ExitCode.USAGE), "RAPIDPIPE_OUTPUTS_ROOT is not set")
+        result = run_stop.cleanup(lambda: connect(application_name="rapidpipe-run-cleanup"), args.run, root,
+                                  launch.batch_client, delete=args.delete)
+        _print_json(result)
+        if result.get("kept") or result.get("failed"):
+            sys.stderr.write(f"rapidpipe run cleanup: run {args.run}: {len(result['kept'])} attempts kept and "
+                             f"{len(result['failed'])} files not removed, named above\n")
+            return int(ExitCode.FAILURE)
     elif command in (("job", "local"), ("job", "run"), ("job", "submit")):
         return _run_job(args)
     elif command == ("job", "wait"):
@@ -629,11 +779,13 @@ def _foundation_command(args: argparse.Namespace) -> int:
         group = _read(args.group, "group")
         if not isinstance(group, list) or not all(isinstance(item, dict) for item in group):
             raise CommandExit(int(ExitCode.USAGE), f"the group file {args.group} is not a list of items")
+        who = _who(args)
         with connect(application_name="rapidpipe-official-change") as conn:
-            print(foundation.change(conn, group, args.who, args.why))
+            print(foundation.change(conn, group, who, args.why))
     elif command == ("official", "undo"):
+        who = _who(args)
         with connect(application_name="rapidpipe-official-undo") as conn:
-            print(foundation.undo(conn, args.group_id, args.who, args.why))
+            print(foundation.undo(conn, args.group_id, who, args.why))
     else:
         args.group_parser.print_help(sys.stderr)
         return int(ExitCode.USAGE)

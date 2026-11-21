@@ -30,6 +30,7 @@ from typing import Any
 
 from rapidpipe.db.connection import parameter_tree_environment
 from rapidpipe.foundation import attempts, publish_kafka
+from rapidpipe.foundation.bookkeeping import admit
 from rapidpipe.foundation.local import failure_reason
 
 __all__ = ["LaunchError", "batch_client", "job_environment", "memory_mib", "spot", "submit", "vcpus"]
@@ -65,16 +66,35 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     ``[batch.vcpus]`` value, :func:`vcpus`) for that many vCPUs. ``name_suffix`` ends
     the Batch job's name (the loop's rerun marks its one automatic rerun so).
     ``environment_extra`` (:func:`job_environment`) is added to the job's environment.
-    When the Batch request itself raises, the row (with ``conn``) is marked
-    ``failed`` with the error as its ``refusal`` and the error propagates; a
-    failure recording the id after an accepted request is not caught here.
+    When the queue or the outputs root is missing, or the Batch request itself
+    raises, the row (with ``conn``) is marked ``failed`` with the error as its
+    ``refusal`` and the error propagates; a failure recording the id after an
+    accepted request is not caught here.
+    With ``conn``, a job of a stopped run is refused the same way, nothing sent
+    (:func:`rapidpipe.foundation.bookkeeping.admit`): its share lock on the run's
+    row is held from before the request until the id is recorded, so a stop of the
+    run waits for a submission in flight and then finds its Batch job on the row.
     """
+    def failed(exc: Exception) -> None:     # never left ``launched`` with nothing on Batch
+        if conn is not None:
+            conn.rollback()
+            with conn.cursor() as cur:
+                cur.execute("UPDATE jobs SET state = 'failed', ended = now(), refusal = %s"
+                            " WHERE id = %s AND state <> 'published'", (failure_reason(exc), job_id))
+            conn.commit()
+
     queue = queue or os.environ.get("RAPIDPIPE_BATCH_JOB_QUEUE")
-    if not queue:
-        raise LaunchError("RAPIDPIPE_BATCH_JOB_QUEUE is not set")
     root = os.environ.get("RAPIDPIPE_OUTPUTS_ROOT", "")
-    if not root.startswith("s3://"):
-        raise LaunchError(f"RAPIDPIPE_OUTPUTS_ROOT {root!r} is not an s3:// URL a Batch job can write")
+    refusal = None
+    if not queue:
+        refusal = LaunchError("RAPIDPIPE_BATCH_JOB_QUEUE is not set: export the Batch job queue to submit"
+                              " to, or run the jobs here with the loop's --local")
+    elif not root.startswith("s3://"):
+        refusal = LaunchError(f"RAPIDPIPE_OUTPUTS_ROOT {root!r} is not an s3:// URL a Batch job can write:"
+                              " export the s3:// outputs root, or run the jobs here with the loop's --local")
+    if refusal is not None:
+        failed(refusal)
+        raise refusal
     values = {**(environment_extra or {}), "RAPIDPIPE_OUTPUTS_ROOT": root}
     if os.environ.get("RAPID_DB_SECRET_ID"):
         values["RAPID_DB_SECRET_ID"] = os.environ["RAPID_DB_SECRET_ID"]
@@ -90,14 +110,13 @@ def submit(job_id: int, stage: str, *, job_definition: str, conn: Any = None, cl
     if one_attempt:
         request["retryStrategy"] = {"attempts": 1}
     try:
+        if conn is not None:
+            with conn.cursor() as cur:
+                cur.execute("SELECT run FROM jobs WHERE id = %s", (job_id,))
+                admit(cur, cur.fetchone()[0])
         response = (client or batch_client()).submit_job(**request)
     except Exception as exc:
-        if conn is not None:                # never left ``launched`` with nothing on Batch
-            conn.rollback()
-            with conn.cursor() as cur:
-                cur.execute("UPDATE jobs SET state = 'failed', ended = now(), refusal = %s"
-                            " WHERE id = %s AND state <> 'published'", (failure_reason(exc), job_id))
-            conn.commit()
+        failed(exc)
         raise
     if conn is not None:
         with conn.cursor() as cur:

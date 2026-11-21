@@ -40,6 +40,8 @@ class Cursor:
             self.rows = [{"state": "launched", "stage": "trivial", "scope": {}, "run": 3,
                           "published_attempt": None, "refusal": None, "settings": {},
                           "survey": "HLWAS", "dataset": "d"}]
+        elif "FROM runs WHERE id" in statement and "FOR SHARE" in statement:
+            self.rows = [(None, None, None)]            # the run is not stopped (bookkeeping.admit)
         else:
             self.rows = []
 

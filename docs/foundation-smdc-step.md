@@ -331,7 +331,9 @@ regression), run 158 (FAIL on the consumer only: the gate holds all but one of i
 
 What an operator runs at the tip of `rebuild`. rapid_docs' loop page,
 Starting a night, is the verbatim recipe for a night and its exit-code
-table; the README's Getting started runs one epoch locally.
+table; the README's Getting started is two worked examples, a local test
+(one HLWAS epoch by `scripts/dev.sh` and `loop --local`) and a flight
+program on SMDC (create, loop on Batch, check, stop, clean up).
 
 **The environment.** Account names come from rapid_systems, never from
 this repository. A night runs on a workstation under its own instance
@@ -524,7 +526,8 @@ catalogs are under every difference job's `diff/` either way. Under SFFT
 the difference job scores every candidate with dev's RuBR-AT model
 (`[difference.rubrat]`), its ONNX export run on onnxruntime in the job's
 own process, loaded once per job for all four catalogs, fetched from the
-bucket the SSM parameter `model_bucket_parameter` names under
+bucket the SSM parameter `model_bucket_parameter`
+(`/rapid/rebuild/s3/inputs-bucket`, which the production job role reads too) names under
 `model_key`, `rubrat-onnx/2026-10-06_canonical9_seed42` (the `[kafka]`
 venue, no per-run `--set`; a run's `difference.rubrat.model_prefix`
 wins) and checked against its `SHA256SUMS`; `sources.rb` and `rblabel` hold it,

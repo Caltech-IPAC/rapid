@@ -12,8 +12,8 @@
 <text text-anchor="middle" x="669.12" y="-3888.85" font-family="Helvetica,sans-Serif" font-size="12.00">RAPID foundation schema (database/schema.sql). Solid: declared foreign key. Dashed: reference by convention, not enforced. Every product table also declares job &#45;&gt; jobs.id (not drawn); official binds (product, key) &#45;&gt; job.</text>
 <g id="clust1" class="cluster">
 <title>cluster_bookkeeping</title>
-<path fill="none" stroke="#9aa8b8" d="M38,-8C38,-8 1008,-8 1008,-8 1014,-8 1020,-14 1020,-20 1020,-20 1020,-472 1020,-472 1020,-478 1014,-484 1008,-484 1008,-484 38,-484 38,-484 32,-484 26,-478 26,-472 26,-472 26,-20 26,-20 26,-14 32,-8 38,-8"/>
-<text text-anchor="middle" x="72.25" y="-468.6" font-family="Helvetica,sans-Serif" font-size="12.00">bookkeeping</text>
+<path fill="none" stroke="#9aa8b8" d="M29,-8C29,-8 1008,-8 1008,-8 1014,-8 1020,-14 1020,-20 1020,-20 1020,-472 1020,-472 1020,-478 1014,-484 1008,-484 1008,-484 29,-484 29,-484 23,-484 17,-478 17,-472 17,-472 17,-20 17,-20 17,-14 23,-8 29,-8"/>
+<text text-anchor="middle" x="63.25" y="-468.6" font-family="Helvetica,sans-Serif" font-size="12.00">bookkeeping</text>
 </g>
 <g id="clust2" class="cluster">
 <title>cluster_static</title>
@@ -38,28 +38,34 @@
 <!-- runs -->
 <g id="node1" class="node">
 <title>runs</title>
-<polygon fill="#f6d9c8" stroke="none" points="43,-385 43,-403 169,-403 169,-385 43,-385"/>
-<text text-anchor="start" x="46" y="-391.5" font-family="Menlo" font-weight="bold" font-size="10.00">runs</text>
-<text text-anchor="start" x="46" y="-373.5" font-family="Menlo" font-weight="bold" font-size="10.00">id</text>
-<text text-anchor="start" x="58" y="-373.5" font-family="Menlo" font-size="10.00" fill="#c2410c"> PK</text>
-<text text-anchor="start" x="100" y="-372.5" font-family="Menlo" font-size="10.00" fill="#6b7785">bigint</text>
-<text text-anchor="start" x="46" y="-354.5" font-family="Menlo" font-size="10.00">who</text>
-<text text-anchor="start" x="100" y="-354.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="46" y="-336.5" font-family="Menlo" font-size="10.00">created</text>
-<text text-anchor="start" x="100" y="-336.5" font-family="Menlo" font-size="10.00" fill="#6b7785">timestamptz</text>
-<text text-anchor="start" x="46" y="-318.5" font-family="Menlo" font-size="10.00">why</text>
-<text text-anchor="start" x="100" y="-318.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="46" y="-300.5" font-family="Menlo" font-size="10.00">revision</text>
-<text text-anchor="start" x="100" y="-300.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="46" y="-282.5" font-family="Menlo" font-size="10.00">settings</text>
-<text text-anchor="start" x="100" y="-282.5" font-family="Menlo" font-size="10.00" fill="#6b7785">jsonb</text>
-<text text-anchor="start" x="46" y="-264.5" font-family="Menlo" font-size="10.00">layers</text>
-<text text-anchor="start" x="100" y="-264.5" font-family="Menlo" font-size="10.00" fill="#6b7785">jsonb</text>
-<text text-anchor="start" x="46" y="-246.5" font-family="Menlo" font-size="10.00">survey</text>
-<text text-anchor="start" x="100" y="-246.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="46" y="-228.5" font-family="Menlo" font-size="10.00">dataset</text>
-<text text-anchor="start" x="100" y="-228.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<polygon fill="none" stroke="#9aa8b8" points="42,-222 42,-404 170,-404 170,-222 42,-222"/>
+<polygon fill="#f6d9c8" stroke="none" points="34,-398 34,-416 178,-416 178,-398 34,-398"/>
+<text text-anchor="start" x="37" y="-404.5" font-family="Menlo" font-weight="bold" font-size="10.00">runs</text>
+<text text-anchor="start" x="37" y="-386.5" font-family="Menlo" font-weight="bold" font-size="10.00">id</text>
+<text text-anchor="start" x="49" y="-386.5" font-family="Menlo" font-size="10.00" fill="#c2410c"> PK</text>
+<text text-anchor="start" x="109" y="-385.5" font-family="Menlo" font-size="10.00" fill="#6b7785">bigint</text>
+<text text-anchor="start" x="37" y="-367.5" font-family="Menlo" font-size="10.00">who</text>
+<text text-anchor="start" x="109" y="-367.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="37" y="-349.5" font-family="Menlo" font-size="10.00">created</text>
+<text text-anchor="start" x="109" y="-349.5" font-family="Menlo" font-size="10.00" fill="#6b7785">timestamptz</text>
+<text text-anchor="start" x="37" y="-331.5" font-family="Menlo" font-size="10.00">why</text>
+<text text-anchor="start" x="109" y="-331.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="37" y="-313.5" font-family="Menlo" font-size="10.00">revision</text>
+<text text-anchor="start" x="109" y="-313.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="37" y="-295.5" font-family="Menlo" font-size="10.00">settings</text>
+<text text-anchor="start" x="109" y="-295.5" font-family="Menlo" font-size="10.00" fill="#6b7785">jsonb</text>
+<text text-anchor="start" x="37" y="-277.5" font-family="Menlo" font-size="10.00">layers</text>
+<text text-anchor="start" x="109" y="-277.5" font-family="Menlo" font-size="10.00" fill="#6b7785">jsonb</text>
+<text text-anchor="start" x="37" y="-259.5" font-family="Menlo" font-size="10.00">survey</text>
+<text text-anchor="start" x="109" y="-259.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="37" y="-241.5" font-family="Menlo" font-size="10.00">dataset</text>
+<text text-anchor="start" x="109" y="-241.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="37" y="-223.5" font-family="Menlo" font-size="10.00">stopped</text>
+<text text-anchor="start" x="109" y="-223.5" font-family="Menlo" font-size="10.00" fill="#6b7785">timestamptz</text>
+<text text-anchor="start" x="37" y="-205.5" font-family="Menlo" font-size="10.00">stopped_by</text>
+<text text-anchor="start" x="109" y="-205.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="37" y="-187.5" font-family="Menlo" font-size="10.00">stopped_why</text>
+<text text-anchor="start" x="109" y="-187.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<polygon fill="none" stroke="#9aa8b8" points="33,-181 33,-417 179,-417 179,-181 33,-181"/>
 </g>
 <!-- jobs -->
 <g id="node2" class="node">
@@ -114,8 +120,8 @@
 <!-- runs&#45;&gt;jobs -->
 <g id="edge1" class="edge">
 <title>runs:e&#45;&gt;jobs:w</title>
-<path fill="none" stroke="#5d6b7c" d="M177.17,-376.24C216.67,-378.98 225.77,-404 269,-404"/>
-<polygon fill="#5d6b7c" stroke="#5d6b7c" points="177.58,-374.15 171.51,-376.05 177.44,-378.35 177.58,-374.15"/>
+<path fill="none" stroke="#5d6b7c" d="M186.25,-389.17C220.79,-390.82 230.98,-404 269,-404"/>
+<polygon fill="#5d6b7c" stroke="#5d6b7c" points="186.56,-387.08 180.51,-389.04 186.46,-391.27 186.56,-387.08"/>
 </g>
 <!-- official -->
 <g id="node3" class="node">
@@ -158,8 +164,8 @@
 <!-- runs&#45;&gt;official -->
 <g id="edge3" class="edge">
 <title>runs:e&#45;&gt;official:w</title>
-<path fill="none" stroke="#5d6b7c" d="M177.45,-375.8C319.01,-367.98 139.87,-131.76 261,-39 332.98,16.12 386.65,6.63 465,-39 540.5,-82.98 474.62,-210 562,-210"/>
-<polygon fill="#5d6b7c" stroke="#5d6b7c" points="177.45,-373.7 171.51,-375.96 177.57,-377.9 177.45,-373.7"/>
+<path fill="none" stroke="#5d6b7c" d="M186.23,-388.82C332.51,-381.2 137.76,-136.7 261,-39 332.05,17.33 386.65,6.63 465,-39 540.5,-82.98 474.62,-210 562,-210"/>
+<polygon fill="#5d6b7c" stroke="#5d6b7c" points="186.46,-386.71 180.51,-388.96 186.56,-390.91 186.46,-386.71"/>
 </g>
 <!-- jobs&#45;&gt;official -->
 <g id="edge2" class="edge">
@@ -226,17 +232,17 @@
 <!-- exposure_ids -->
 <g id="node6" class="node">
 <title>exposure_ids</title>
-<polygon fill="#f6d9c8" stroke="none" points="46,-149 46,-167 166,-167 166,-149 46,-149"/>
-<text text-anchor="start" x="49" y="-155.5" font-family="Menlo" font-weight="bold" font-size="10.00">exposure_ids</text>
-<text text-anchor="start" x="49" y="-136.5" font-family="Menlo" font-size="10.00">expid</text>
-<text text-anchor="start" x="97" y="-136.5" font-family="Menlo" font-size="10.00" fill="#6b7785">int</text>
-<text text-anchor="start" x="49" y="-118.5" font-family="Menlo" font-size="10.00">dataset</text>
-<text text-anchor="start" x="97" y="-118.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="49" y="-100.5" font-family="Menlo" font-size="10.00">name</text>
-<text text-anchor="start" x="97" y="-100.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
-<text text-anchor="start" x="49" y="-82.5" font-family="Menlo" font-size="10.00">created</text>
-<text text-anchor="start" x="97" y="-82.5" font-family="Menlo" font-size="10.00" fill="#6b7785">timestamptz</text>
-<polygon fill="none" stroke="#9aa8b8" points="45,-76 45,-168 167,-168 167,-76 45,-76"/>
+<polygon fill="#f6d9c8" stroke="none" points="46,-122 46,-140 166,-140 166,-122 46,-122"/>
+<text text-anchor="start" x="49" y="-128.5" font-family="Menlo" font-weight="bold" font-size="10.00">exposure_ids</text>
+<text text-anchor="start" x="49" y="-109.5" font-family="Menlo" font-size="10.00">expid</text>
+<text text-anchor="start" x="97" y="-109.5" font-family="Menlo" font-size="10.00" fill="#6b7785">int</text>
+<text text-anchor="start" x="49" y="-91.5" font-family="Menlo" font-size="10.00">dataset</text>
+<text text-anchor="start" x="97" y="-91.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="49" y="-73.5" font-family="Menlo" font-size="10.00">name</text>
+<text text-anchor="start" x="97" y="-73.5" font-family="Menlo" font-size="10.00" fill="#6b7785">text</text>
+<text text-anchor="start" x="49" y="-55.5" font-family="Menlo" font-size="10.00">created</text>
+<text text-anchor="start" x="97" y="-55.5" font-family="Menlo" font-size="10.00" fill="#6b7785">timestamptz</text>
+<polygon fill="none" stroke="#9aa8b8" points="45,-49 45,-141 167,-141 167,-49 45,-49"/>
 </g>
 <!-- filters -->
 <g id="node7" class="node">

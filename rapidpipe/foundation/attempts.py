@@ -2,7 +2,7 @@
 
 ``jobs.attempts`` is a JSON object keyed by Batch job id, one entry per
 submission of the job (a Batch job may hold Batch's own retries; its entry
-names the last). Three writers add to an entry, each its own fields:
+names the last). Four writers add to an entry, each its own fields:
 
 - the submitter (``rapidpipe.launch.submit``): ``queue``, ``submitted``,
   ``why`` (``first`` or ``rerun``);
@@ -12,7 +12,10 @@ names the last). Three writers add to an entry, each its own fields:
   ``failed``);
 - the loop's reconcile, for a Batch job that ended with its row
   unpublished: ``stopped``, ``status``, ``status_reason``, ``exit_code``;
-  for one it terminates as a straggler: ``hedged`` and ``status_reason``.
+  for one it terminates as a straggler: ``hedged`` and ``status_reason``;
+- a stop of the run (``rapidpipe.foundation.stop``): ``terminated`` and
+  ``status_reason`` for each Batch job it asks to end, and the reconcile's
+  fields for each it finds ended.
 
 Times are ISO 8601 UTC strings. :func:`report` reads the entries of a run.
 """

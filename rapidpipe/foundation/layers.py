@@ -2,7 +2,8 @@
 
 Foundation plan v9, Part 1 (amended 2026-10-23): the layers, low to high,
 are the base (the shipped ``foundation-thin.toml``, dev's values and
-behaviour, or another full body named by ``--settings``), one dataset
+behaviour, or another full body named by ``--settings``, among them one a
+run stores, written back by :func:`to_toml`), one dataset
 overlay (a TOML holding only the keys that differ for that dataset, each
 with the measurement that earned it in a comment) and the run's own
 ``--set TABLE.key=value`` overrides, applied in order. Tables merge key by
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tomllib
 from pathlib import Path
 from typing import Any, Sequence
@@ -44,6 +46,62 @@ def body_hash(body: dict[str, Any]) -> str:
     """``sha256:`` and the hex digest of the body's canonical JSON (keys sorted)."""
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _toml_key(key: str) -> str:
+    return key if _BARE_KEY.fullmatch(key) else json.dumps(key, ensure_ascii=False)
+
+
+def _toml_value(value: Any, where: str) -> str:
+    """One TOML value: a JSON scalar as TOML writes it, a list inline, a table in a list inline."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)                  # inf and nan are TOML's spellings too
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)     # a JSON string's escapes are a TOML basic string's
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item, where) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_toml_key(k)} = {_toml_value(v, where)}" for k, v in value.items()) + "}"
+    raise LayerError(f"settings key {where!r} holds {value!r}, which TOML cannot write")
+
+
+def to_toml(body: dict[str, Any]) -> str:
+    """A stored settings body as TOML text that :func:`resolve` reads back to the same body.
+
+    Each table is a ``[dotted.header]`` with its own values first and its tables after, keys
+    in the body's order. The text is parsed again before it is returned and its
+    :func:`body_hash` compared with the body's, so a file this wrote gives ``run create
+    --settings`` the hash the run it came from stores; a body TOML cannot hold (a null) is a
+    :class:`LayerError` naming the key.
+    """
+    lines: list[str] = []
+
+    def table(values: dict[str, Any], path: tuple[str, ...]) -> None:
+        if path:
+            lines.append(("\n" if lines else "") + "[" + ".".join(_toml_key(p) for p in path) + "]")
+        for key, value in values.items():
+            if not isinstance(value, dict):
+                lines.append(f"{_toml_key(key)} = {_toml_value(value, '.'.join((*path, key)))}")
+        for key, value in values.items():
+            if isinstance(value, dict):
+                table(value, (*path, key))
+
+    table(body, ())
+    text = "\n".join(lines) + "\n"
+    try:
+        same = body_hash(tomllib.loads(text)) == body_hash(body)
+    except tomllib.TOMLDecodeError as exc:
+        raise LayerError(f"the settings body does not survive TOML: {exc}") from exc
+    if not same:
+        raise LayerError("the settings body does not survive TOML: it reads back as a different body")
+    return text
 
 
 def parse_set(text: str) -> tuple[tuple[str, ...], Any]:

@@ -165,10 +165,12 @@ def test_official_undo_refuses_when_a_binding_has_since_moved(capsys, conn, tmp_
     (binding, *_), = open_bindings(conn)
     moved = _group_file(tmp_path, [{"close": binding,
                                     "open": {"product": "objects", "key": FIELD_KEY, "job": second}}])
-    assert _run(capsys, "official", "change", "--group", moved, *WHO_WHY)[0] == ExitCode.SUCCESS
+    code, later, _ = _run(capsys, "official", "change", "--group", moved, *WHO_WHY)
+    assert code == ExitCode.SUCCESS
     code, out, err = _run(capsys, "official", "undo", opened.strip(), *WHO_WHY)
     assert (code, out) == (ExitCode.FAILURE, "")
     assert f"refused: binding {binding} is no longer open" in err
+    assert f"change group {later.strip()} closed it" in err and f"undo group {later.strip()} first" in err
 
 
 class _Batch:
@@ -317,3 +319,145 @@ def test_exposure_id_prints_the_names_id_the_same_id_again_and_another_names_ano
     with conn.cursor() as cur:
         cur.execute("SELECT name, expid FROM exposure_ids WHERE dataset = %s ORDER BY expid", (DATASET,))
         assert cur.fetchall() == [(name, int(first)), (other, int(second))]
+
+
+def test_who_is_the_login_name_when_left_out_and_root_is_refused_as_nobody(capsys, conn, tmp_path, monkeypatch):
+    """``run create``, ``official change`` and ``official undo`` record the login name without ``--who``."""
+    from rapidpipe.cli import main as cli
+
+    settings = tmp_path / "settings.toml"
+    settings.write_text("[associate]\nradius = 1.0\n")
+    create = ["run", "create", "--why", "verb test", "--revision", "abc123", "--settings", str(settings),
+              "--survey", SURVEY, "--dataset", DATASET]
+    monkeypatch.setattr(cli.getpass, "getuser", lambda: "azalee")
+    code, out, err = _run(capsys, *create)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    group = _group_file(tmp_path, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": int(out)}}])
+    code, opened, err = _run(capsys, "official", "change", "--group", group, "--why", "live")
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    code, undone, err = _run(capsys, "official", "undo", opened.strip(), "--why", "not live")
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    with conn.cursor() as cur:
+        cur.execute("SELECT who FROM runs WHERE id = %s", (int(out),))
+        assert cur.fetchone() == ("azalee",)
+        cur.execute("SELECT opened_group, opened_by, closed_group, closed_by FROM official WHERE run = %s",
+                    (int(out),))
+        assert cur.fetchall() == [(int(opened), "azalee", int(undone), "azalee")]
+        cur.execute("SELECT count(*) FROM runs")
+        before = cur.fetchone()[0]
+    for nobody in (lambda: "root", lambda: (_ for _ in ()).throw(OSError("no login name"))):
+        monkeypatch.setattr(cli.getpass, "getuser", nobody)
+        code, out, err = _run(capsys, *create)
+        assert (code, out) == (ExitCode.USAGE, "") and "--who is required" in err
+    code, out, err = _run(capsys, *create, "--who", "root")       # said outright, it stands
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM runs")
+        assert cur.fetchone()[0] == before + 1
+
+
+def test_revision_is_the_running_codes_commit_where_the_environment_names_it_and_required_where_not(
+        capsys, conn, tmp_path, monkeypatch):
+    settings = tmp_path / "settings.toml"
+    settings.write_text("[associate]\nradius = 1.0\n")
+    create = ["run", "create", *WHO_WHY, "--settings", str(settings), "--survey", SURVEY, "--dataset", DATASET]
+
+    def revision_of(out: str) -> str:
+        with conn.cursor() as cur:
+            cur.execute("SELECT revision FROM runs WHERE id = %s", (int(out),))
+            return cur.fetchone()[0]
+
+    monkeypatch.setenv("RAPID_SOURCE_REVISION", "0123abc")
+    code, out, err = _run(capsys, *create)
+    assert (code, err) == (ExitCode.SUCCESS, "") and revision_of(out) == "0123abc"
+    code, out, err = _run(capsys, *create, "--revision", "fedcba9")      # said outright, it wins
+    assert (code, err) == (ExitCode.SUCCESS, "") and revision_of(out) == "fedcba9"
+    monkeypatch.setenv("RAPID_SOURCE_REVISION", "")      # dev.sh: the checkout and the image disagree
+    code, out, err = _run(capsys, *create)
+    assert (code, out) == (ExitCode.USAGE, "") and "--revision is required" in err
+    monkeypatch.delenv("RAPID_SOURCE_REVISION")
+    code, out, err = _run(capsys, *create)
+    assert (code, out) == (ExitCode.USAGE, "") and "--revision is required" in err
+
+
+def test_run_show_toml_writes_a_base_that_run_create_stores_as_the_same_body_and_hash(capsys, conn, tmp_path):
+    from rapidpipe.cli.main import _SHIPPED_SETTINGS
+
+    overlay = _SHIPPED_SETTINGS.parent / "datasets" / "hlwas-r00342.toml"
+    code, first, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123", "--overlay", str(overlay),
+                            "--set", 'intake.source_root="s3://bucket/l2/"',
+                            "--set", "reference.selection.before_mjd=61591.0",
+                            "--survey", SURVEY, "--dataset", DATASET)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    written = tmp_path / "run.toml"
+    code, out, err = _run(capsys, "run", "show", first.strip(), "--toml", str(written))
+    assert (code, out, err) == (ExitCode.SUCCESS, "", "")
+    code, second, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123",
+                             "--settings", str(written), "--survey", SURVEY, "--dataset", DATASET)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    with conn.cursor() as cur:
+        cur.execute("SELECT settings, layers ->> 'settings_hash' FROM runs WHERE id IN (%s, %s) ORDER BY id",
+                    (int(first), int(second)))
+        (body, digest), (again, digest_again) = cur.fetchall()
+    assert again == body and digest_again == digest
+    assert body["reference"]["selection"]["before_mjd"] == 61591.0
+    code, out, err = _run(capsys, "run", "show", "999999", "--toml", str(tmp_path / "none.toml"))
+    assert code == ExitCode.USAGE and not (tmp_path / "none.toml").exists()
+
+
+def _never_batch():
+    raise AssertionError("Batch was asked")
+
+
+def test_a_stopped_runs_loop_and_job_verbs_submit_nothing_and_say_who_stopped_it_and_why(
+        capsys, conn, tmp_path, monkeypatch):
+    run = new_run(conn)
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", tmp_path.as_uri())
+    monkeypatch.setattr("rapidpipe.launch.batch_client", _never_batch)
+    monkeypatch.setattr("rapidpipe.cli.main._stage_run", lambda stage: _never_batch)
+    code, out, err = _run(capsys, "run", "stop", "--run", str(run), "--who", "tester", "--why", "wrong overlay")
+    stopped = json.loads(out)
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    assert (stopped["stopped_by"], stopped["stopped_why"], stopped["already"]) == ("tester", "wrong overlay", False)
+
+    for argv in (["loop", "--run", str(run), "--job-definition", "definition:1"],
+                 ["loop", "--run", str(run), "--local"],
+                 ["job", "local", "--run", str(run), "--stage", "import", "--scope", "{}"],
+                 ["job", "submit", "--run", str(run), "--stage", "import", "--scope", "{}",
+                  "--job-definition", "definition:1"]):
+        code, out, err = _run(capsys, *argv)
+        assert (code, out) == (ExitCode.FAILURE, ""), argv
+        assert f"refused: run {run} was stopped by tester" in err and "(wrong overlay)" in err, argv
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM jobs WHERE run = %s", (run,))
+        assert cur.fetchone()[0] == 0
+    conn.commit()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_run_cleanup_lists_without_removing_and_removes_with_delete(capsys, conn, tmp_path, monkeypatch):
+    run = new_run(conn)
+    job = new_job(conn, run)
+    with conn.cursor() as cur:          # a job that ended failed, with a file under its attempt
+        cur.execute("UPDATE jobs SET state = 'failed', ended = now() WHERE id = %s", (job,))
+    conn.commit()
+    left = tmp_path / str(run) / "difference" / str(job) / "1" / "diff.fits"
+    left.parent.mkdir(parents=True)
+    left.write_text("left behind")
+    monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", tmp_path.as_uri())
+    monkeypatch.setattr("rapidpipe.launch.batch_client", _never_batch)
+
+    code, out, err = _run(capsys, "run", "cleanup", "--run", str(run))
+    assert (code, out) == (ExitCode.FAILURE, "") and f"refused: run {run} is not stopped" in err
+    assert _run(capsys, "run", "stop", "--run", str(run), *WHO_WHY)[0] == ExitCode.SUCCESS
+
+    code, out, err = _run(capsys, "run", "cleanup", "--run", str(run))
+    listed = json.loads(out)
+    assert (code, err, listed["files"]) == (ExitCode.SUCCESS, "", 1)
+    assert [(a["job"], a["attempt"], a["prefix"]) for a in listed["attempts"]] == [
+        (job, 1, left.parent.as_uri() + "/")]
+    assert left.is_file()
+
+    code, out, err = _run(capsys, "run", "cleanup", "--run", str(run), "--delete")
+    assert (code, err, json.loads(out)["deleted"]) == (ExitCode.SUCCESS, "", 1)
+    assert not left.exists() and not (tmp_path / str(run)).exists()
