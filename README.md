@@ -150,7 +150,7 @@ Submits the selection one stage forward per pass on Batch and prints one JSON li
 
 A reference whose frames do not cover enough of its field is one such failure, and an expected one: the reference job is recorded `failed` with exit code 65 and a `refusal` naming the coverage, `estimated coverage <f> < <minimum>` or `measured coverage <f> < <minimum>` (the flight overlay's `[reference.selection] selection_type = "coverage"`), the field's differences wait for a reference, and the loop exits 1. That row is told from a fault by its reason: any other failed job of the run keeps its own exit code and reason, and is a fault to read.
 
-The digest the first command printed is what `promote` takes to put this build into production (`rapid_systems`' `cloudformation/release-hooks/promote <sha256:digest>`), so the build promoted is the build this run tested; promoting by the newest revision or tag at the time can be another build.
+The digest the first command printed names the build this run tests, and it is what a promotion to production takes ([A production run](#a-production-run)).
 
 ```sh
 scripts/dev.sh run --target deployed -- scripts/check_run.sh --run N
@@ -171,6 +171,31 @@ scripts/dev.sh run --target deployed -- rapidpipe run cleanup --run N
 Lists, as JSON with file counts, the run's attempt directories that hold no published product (failed attempts, and published jobs' other attempts), and removes nothing; published and official products are counted and never listed. It refuses, naming the job, while any job is not shown to have ended. `--delete` removes exactly that list; on S3 it needs `s3:DeleteObject` under the outputs root, which the workstation roles do not hold today, so ask for the removal until they do.
 
 A trial's live binding is closed once it is checked, so the live list names only what is running: `rapidpipe run show N` prints its id as `"live"`, and a group file `[{"close": <that id>}]` given to `official change` closes it.
+
+### A production run
+
+A production run is the scratch run above with two values changed and nothing added; every other command is the same.
+
+```sh
+export RAPIDPIPE_OUTPUTS_ROOT=s3://<the products bucket>/rapidpipe
+```
+
+The outputs root, set before `run create`. The production job role writes under this root and nowhere else, so a production run left on a scratch root fails at its first job's upload. The products bucket's name is on [the command line page](https://roman-rapid.readthedocs.io/en/latest/system/tool.html#where-it-runs).
+
+```sh
+aws batch describe-job-definitions --job-definition-name rapid-rebuild-production --status ACTIVE \
+  --query 'sort_by(jobDefinitions, &revision)[-1].[revision, containerProperties.image]' --output text
+```
+
+Prints production's revision, called `P` below, and the image it runs. Its digest should be the one a scratch run of yours has checked; the checkout `scripts/dev.sh image rev` placed is then at production's commit too.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe loop --run N --programs 1049 --job-definition rapid-rebuild-production:P
+```
+
+The loop names the production job definition by its number, as it names the scratch one. No model override is needed: from the build that reads the real-bogus model's bucket from the rebuild's own parameter tree on, a production run sets no `difference.rubrat.model_prefix`.
+
+Production moves only by a promotion: `promote <sha256:digest>` of a build a scratch run has checked, the digest the scratch job definition's command printed for that run, so the build promoted is the build tested; promoting by the newest revision or tag at the time can be another build. Any Operator runs it from their `rapid-power` session (`rapid_systems`' `cloudformation/release-hooks/README.md`).
 
 ### Taking a run's products out of official
 
