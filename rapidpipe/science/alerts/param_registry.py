@@ -231,14 +231,20 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.xfit",   attr="xfit"),
     Param("y",             "float",            "y-pixel position on detector [pixels]",
                     IMPLEMENTED, "sources.yfit",   attr="yfit"),
+    # TODO (Emily, 2026-11-20): the four position uncertainties are stubs. SExtractor measures
+    # them on the difference image (ERRX2WIN_IMAGE, ERRY2WIN_IMAGE, ERRXYWIN_IMAGE and
+    # ERRAWIN_WORLD, ERRBWIN_WORLD, ERRTHETAWIN_WORLD in cdf/rapidSexParamsDiffImage.inp), but
+    # rapidpipe.science.difference.xsources does not carry them into xsources, so the database
+    # holds none. Filling them needs new xsources columns (a database migration), the difference
+    # stage storing them and the packet stage reading them.
     Param("xErr",          ["null", "float"],  "Uncertainty in x [pixels]",
-                    IMPLEMENTED, "sources.xerr",   attr="xerr"),
+                    STUB, "not stored: xsources has no position uncertainty"),
     Param("yErr",          ["null", "float"],  "Uncertainty in y [pixels]",
-                    IMPLEMENTED, "sources.yerr",   attr="yerr"),
-    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]", #TODO: implement in run_photutils.py?
-                    STUB, "not produced by PSF fit yet"),
-    Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]", #TODO: see raErr
-                    STUB, "not produced by PSF fit yet"),
+                    STUB, "not stored: see xErr"),
+    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]",
+                    STUB, "not stored: see xErr"),
+    Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
+                    STUB, "not stored: see xErr"),
 
     # --- Photometry --------------------------------------------------------
     Param("band",          ["null", "string"], "Filter band name (F062, F087, F106, F129, F146, F158, F184, F213)",
@@ -278,21 +284,33 @@ DIA_SOURCE_PARAMS = (
 
     # --- PSF-fit quality (photutils) ---------------------------------------
     Param("psfQfit",          ["null", "float"],  "PSF-fit quality parameter",
-                    IMPLEMENTED, "sources.qfit", attr="qfit"),
+                    STUB, "not stored: xsources has no qfit column"),
     Param("psfCfit",          ["null", "float"],  "PSF-fit chi parameter",
                     IMPLEMENTED, "sources.cfit", attr="cfit"),
     Param("psfRChi2",        ["null", "float"],  "Reduced chi-square of PSF fit",
                     IMPLEMENTED, "sources.redchi", attr="redchi"),
     Param("psfNdata",       ["null", "int"],    "Number of pixels used in  PSF fit", #TODO: used to be npixfit
                     IMPLEMENTED, "sources.npixfit", attr="npixfit"),
-    Param("sharpness",     ["null", "float"],  "PSF-fit sharpness parameter",
-                    IMPLEMENTED, "sources.sharpness"),
-    Param("roundness1",    ["null", "float"],  "PSF-fit roundness parameter 1", #TODO: better description
-                    IMPLEMENTED, "sources.roundness1"),
-    Param("roundness2",    ["null", "float"],  "PSF-fit roundness parameter 2",
-                    IMPLEMENTED, "sources.roundness2"),
+    # The three below are DAOStarFinder's detection statistics, not PSF-fit results: the
+    # difference stage computes them at the peak of the smoothed difference image within one
+    # pixel of the source (rapidpipe.science.difference.xsources.daofind_columns), null for a
+    # source that did not pass the database prefilter.
+    Param("sharpness",     ["null", "float"],  "DAOFIND sharpness: the central pixel's excess over its "
+                                               "neighbors, over the smoothed peak; high for a cosmic ray, "
+                                               "low for an extended source",
+                    IMPLEMENTED, "xsources.sharpness"),
+    Param("roundness1",    ["null", "float"],  "DAOFIND roundness from the source's symmetry about its "
+                                               "center (SROUND); 0 is round",
+                    IMPLEMENTED, "xsources.roundness1"),
+    Param("roundness2",    ["null", "float"],  "DAOFIND roundness: the difference of the Gaussian fit "
+                                               "heights along x and y over their mean (GROUND); 0 is round",
+                    IMPLEMENTED, "xsources.roundness2"),
+    Param("elongation",    ["null", "float"],  "Ratio of the source's windowed long to short width "
+                                               "(AWIN_IMAGE / BWIN_IMAGE); 1 is round",
+                    IMPLEMENTED, "xsources.awinimage / xsources.bwinimage", attr="elongation"),
+    # TODO (Emily, 2026-11-20): peak and psfQfit are stubs; xsources has no such columns.
     Param("peak",          ["null", "float"],  "Peak pixel value in source stamp [DN]",
-                    IMPLEMENTED, "sources.peak"),
+                    STUB, "not stored: xsources has no peak column"),
     # Param("psfChi2",       ["null", "float"],  "Chi-square of PSF fit (stub)",
     #                 NOT_USED, "overlaps sources.redchi (reduced chi2) -- decide whether to derive or rename"),
     # Param("psfNdata",      ["null", "int"],    "Number of data points in PSF fit (stub)",

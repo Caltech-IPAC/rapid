@@ -80,6 +80,9 @@ class Source:
     sharpness: float | None = None
     roundness1: float | None = None
     roundness2: float | None = None
+    # the ratio of the windowed long to short width (new, not dev's: an xsource's AWIN_IMAGE
+    # over BWIN_IMAGE); 1 is round. None for a source without them
+    elongation: float | None = None
     peak: float | None = None
     # aperture flux and its error (new, not dev's: an xsource's FLUX_APER_1
     # and FLUXERR_APER_1, rapid_docs decision-packets-from-xsources; None for a source)

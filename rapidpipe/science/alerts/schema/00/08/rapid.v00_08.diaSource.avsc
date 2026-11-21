@@ -269,7 +269,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "PSF-fit sharpness parameter"
+            "doc": "DAOFIND sharpness: the central pixel's excess over its neighbors, over the smoothed peak; high for a cosmic ray, low for an extended source"
         },
         {
             "name": "roundness1",
@@ -278,7 +278,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "PSF-fit roundness parameter 1"
+            "doc": "DAOFIND roundness from the source's symmetry about its center (SROUND); 0 is round"
         },
         {
             "name": "roundness2",
@@ -287,7 +287,16 @@
                 "float"
             ],
             "default": null,
-            "doc": "PSF-fit roundness parameter 2"
+            "doc": "DAOFIND roundness: the difference of the Gaussian fit heights along x and y over their mean (GROUND); 0 is round"
+        },
+        {
+            "name": "elongation",
+            "type": [
+                "null",
+                "float"
+            ],
+            "default": null,
+            "doc": "Ratio of the source's windowed long to short width (AWIN_IMAGE / BWIN_IMAGE); 1 is round"
         },
         {
             "name": "peak",
