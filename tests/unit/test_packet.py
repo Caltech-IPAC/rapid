@@ -497,7 +497,19 @@ def test_reliability_is_the_threshold_and_the_models_version_or_the_set_one():
 def _xsource_row(**columns) -> dict:
     """An xsource row as the packet stage reads it, fitted unless ``columns`` say otherwise."""
     return {"source_job": 11, "sid": 3, "x": 50.0, "y": 40.0, "fluxap1": 380.0, "fluxerrap1": 12.0,
-            "fluxfit": 400.0, "snrfit": 40.0, "flagsfit": 4, "redchi": 1.25, **columns}
+            "fluxfit": 400.0, "snrfit": 40.0, "flagsfit": 4, "redchi": 1.25,
+            "awinimage": 1.5, "bwinimage": 1.2, **columns}
+
+
+def test_elongation_is_the_long_width_over_the_short():
+    assert xsource_fields(_xsource_row())["elongation"] == pytest.approx(1.25)
+    assert "awinimage" not in xsource_fields(_xsource_row())
+
+
+@pytest.mark.parametrize("widths", [{"awinimage": None}, {"bwinimage": None}, {"bwinimage": 0.0},
+                                    {"awinimage": float("nan")}])
+def test_elongation_is_null_without_both_widths(widths):
+    assert xsource_fields(_xsource_row(**widths))["elongation"] is None
 
 
 @pytest.mark.parametrize("unfitted", [{"fluxfit": None}, {"snrfit": None}, {"snrfit": 0.0},

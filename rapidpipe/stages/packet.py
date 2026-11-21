@@ -299,8 +299,8 @@ OWN_ROWS_SQL = "SELECT {columns} FROM {{child}} s" + SOURCE_JOINS + " WHERE s.jo
 XSOURCE_COLUMNS = (
     "s.job AS source_job, s.dataset, s.xsid AS sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.x, s.y,"
     " s.fluxap1, s.fluxerrap1, s.fluxfit, s.snrfit, s.flagsfit, s.redchi, s.npixfit, s.cfit,"
-    " s.sharpness, s.roundness1, s.roundness2, s.field, s.hp6, s.hp9, s.pid, s.isdiffpos, s.rb,"
-    " s.rblabel" + EXPOSURE_COLUMNS)
+    " s.sharpness, s.roundness1, s.roundness2, s.awinimage, s.bwinimage, s.field, s.hp6, s.hp9,"
+    " s.pid, s.isdiffpos, s.rb, s.rblabel" + EXPOSURE_COLUMNS)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -382,6 +382,8 @@ def xsource_fields(row: dict) -> dict:
     0) takes the 3 px aperture, ``FLUX_APER_1`` and ``FLUXERR_APER_1``,
     and flags 0. ``apflux``, ``apfluxerr`` are always the 3 px aperture;
     ``xfit``, ``yfit`` are ``XWIN_IMAGE``, ``YWIN_IMAGE`` made zero-based.
+    ``elongation`` is ``AWIN_IMAGE / BWIN_IMAGE`` (new, not `dev`'s), null
+    without both widths.
 
     Parameters
     ----------
@@ -398,11 +400,13 @@ def xsource_fields(row: dict) -> dict:
     fluxap, fluxerrap = _finite(out.pop("fluxap1")), _finite(out.pop("fluxerrap1"))
     fluxfit, snrfit = _finite(out.pop("fluxfit")), _finite(out.pop("snrfit"))
     flagsfit = out.pop("flagsfit")
+    awin, bwin = _finite(out.pop("awinimage")), _finite(out.pop("bwinimage"))
     fitted = fluxfit is not None and snrfit                # snrfit neither null nor 0
     out.update(xfit=float(x) - 1.0, yfit=float(y) - 1.0, apflux=fluxap, apfluxerr=fluxerrap,
                fluxfit=fluxfit if fitted else fluxap,
                fluxerr=fluxfit / snrfit if fitted else fluxerrap,
-               flags=int(flagsfit or 0) if fitted else 0)
+               flags=int(flagsfit or 0) if fitted else 0,
+               elongation=awin / bwin if awin is not None and bwin is not None and bwin > 0 else None)
     return out
 
 
