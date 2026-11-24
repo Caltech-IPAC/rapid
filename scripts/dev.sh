@@ -199,14 +199,20 @@ db_host() { if [ "$(engine)" = podman ]; then echo 127.0.0.1; else echo "$DB_CON
 
 db_running() {
   local eng; eng=$(engine)
-  if [ "$eng" = podman ]; then "$eng" container exists "$DB_CONTAINER" 2>/dev/null
-  else [ -n "$("$eng" ps -q --filter "name=^${DB_CONTAINER}$")" ]; fi
+  # running, not merely existing: a container left stopped (a reboot, an earlier test) is down
+  [ -n "$("$eng" ps -q --filter "name=^${DB_CONTAINER}$" 2>/dev/null)" ]
 }
+
+db_exists() { "$(engine)" container inspect "$DB_CONTAINER" >/dev/null 2>&1; }
 
 db_start() {
   local eng; eng=$(engine)
   net_ensure
   if db_running; then echo "db: $DB_CONTAINER already running" >&2; return 0; fi
+  if db_exists; then                               # stopped: it is throwaway, so a new one replaces it
+    echo "db: $DB_CONTAINER was left stopped; removing it and starting a new one" >&2
+    "$eng" rm -f "$DB_CONTAINER" >/dev/null
+  fi
   "$eng" run -d "$(net_args)" --name "$DB_CONTAINER" -e POSTGRES_PASSWORD="$DB_PASSWORD" \
     -e POSTGRES_DB=rapid "$PG_IMAGE" >/dev/null
   until "$eng" exec "$DB_CONTAINER" pg_isready -h 127.0.0.1 -U postgres -d rapid >/dev/null 2>&1; do sleep 1; done
@@ -216,7 +222,7 @@ db_start() {
 
 db_stop() {
   local eng; eng=$(engine)
-  db_running && "$eng" rm -f "$DB_CONTAINER" >/dev/null
+  db_exists && "$eng" rm -f "$DB_CONTAINER" >/dev/null
   # the pod or network goes too, unless another container still uses it
   if [ "$eng" = podman ]; then "$eng" pod rm "$POD" >/dev/null 2>&1 || true
   else "$eng" network rm "$POD" >/dev/null 2>&1 || true; fi
