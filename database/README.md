@@ -4,7 +4,7 @@ The `rapid` PostgreSQL database schema and the sky-tessellation helpers
 the pipeline imports.
 
 - [`schema.sql`](schema.sql): the foundation schema (foundation plan v5,
-  Part 1): the scientific tables with a job on every row, `runs`, `jobs`,
+  Part 1): the scientific tables with a job on every row, `datasets`, `runs`, `jobs`,
   `job_inputs`, `official` and the `<table>_official` views. It is applied
   to an empty PostgreSQL 18 database in one run, by CI
   (`foundation.yml`) and by hand:
@@ -95,7 +95,10 @@ the pipeline imports.
   `2026-11-20-exposure-ids.sql` (the last after the other two; it records
   every exposure already stored under the id it has and refuses, changing
   nothing, where it cannot), then `2026-11-20-run-stopped.sql` (three
-  nullable columns on `runs`, which `rapidpipe run stop` writes).
+  nullable columns on `runs`, which `rapidpipe run stop` writes), then
+  `2026-11-24-datasets.sql` (the `datasets` table, every dataset the
+  existing runs name registered in it, then the foreign key from
+  `runs.dataset`).
 
   Applying one is one command, run by whoever merges the pull request that
   adds it, from their own workstation under its instance role, with no

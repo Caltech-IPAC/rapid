@@ -60,15 +60,75 @@ def stopped_message(run_id: int, stopped: Any, by: str, why: str) -> str:
             "further job; a new run takes the work on (rapidpipe run create)")
 
 
+def create_dataset(conn, name: str, description: str) -> str:
+    """Register a dataset in ``datasets``, so runs may name it; one transaction.
+
+    Parameters
+    ----------
+    conn : psycopg2 connection
+        The foundation database.
+    name : str
+        The dataset's name, the one every scientific key carries.
+    description : str
+        What the dataset is.
+
+    Returns
+    -------
+    str
+        ``name``.
+
+    Raises
+    ------
+    Refused
+        When ``name`` is already registered; nothing is changed.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO datasets (name, description) VALUES (%s, %s)"
+                        " ON CONFLICT (name) DO NOTHING RETURNING name", (name, description))
+            if cur.fetchone() is None:
+                raise Refused(f"dataset {name!r} is already registered (rapidpipe dataset list)")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return name
+
+
+def list_datasets(conn) -> list[dict[str, Any]]:
+    """The registered datasets, ordered by name.
+
+    Parameters
+    ----------
+    conn : psycopg2 connection
+        The foundation database.
+
+    Returns
+    -------
+    list of dict
+        One ``datasets`` row each: ``name``, ``description`` and ``created``.
+    """
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT name, description, created FROM datasets ORDER BY name")
+        return [dict(r) for r in cur.fetchall()]
+
+
 def create_run(conn, who: str, why: str, revision: str, settings: dict,
                survey: str, dataset: str, layers: dict | None = None) -> int:
     """Record a run and return its id.
 
     ``layers`` is how ``settings`` was resolved (``rapidpipe.foundation.layers``),
-    stored beside it; ``None`` for a body given whole.
+    stored beside it; ``None`` for a body given whole. ``dataset`` must be
+    registered (:func:`create_dataset`): :class:`NotFound`, naming the
+    registered datasets, when it is not, and nothing is recorded.
     """
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT name FROM datasets ORDER BY name")
+            registered = [row[0] for row in cur.fetchall()]
+            if dataset not in registered:
+                raise NotFound(f"dataset {dataset!r} is not registered (rapidpipe dataset create); "
+                               f"the registered datasets: {', '.join(registered) or 'none'}")
             cur.execute(
                 "INSERT INTO runs (who, why, revision, settings, layers, survey, dataset)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",

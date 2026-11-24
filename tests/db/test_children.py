@@ -16,7 +16,7 @@ from psycopg2 import errors
 
 from rapidpipe.foundation import publish
 from tests.db.foundation_helpers import (
-    DATASET, new_job, new_run, wait_until_blocked, write_attempt,
+    DATASET, new_job, new_run, register_datasets, wait_until_blocked, write_attempt,
 )
 
 #: MJD 61348 is 2026-11-04; MJD days begin at 0h UT.
@@ -108,6 +108,7 @@ def test_the_child_is_named_for_the_ut_date_of_mjdobs(conn, mjdobs, child):
 
 
 def _job(cur) -> int:
+    register_datasets(cur, "D")
     cur.execute("INSERT INTO runs (who, why, revision, settings, survey, dataset)"
                 " VALUES ('t', 't', 'r', '{}', 'S', 'D') RETURNING id")
     cur.execute("INSERT INTO jobs (run, stage, scope) VALUES (%s, 'difference', '{}')"

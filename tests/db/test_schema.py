@@ -18,7 +18,7 @@ from psycopg2 import errors
 
 SCHEMA = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
 
-BOOKKEEPING = ("runs", "jobs", "job_inputs", "official", "exposure_ids")
+BOOKKEEPING = ("datasets", "runs", "jobs", "job_inputs", "official", "exposure_ids")
 STATIC = ("filters", "scas", "surveys", "fields")
 PRODUCT_TABLES = (
     "exposures", "l2files", "refimages", "refimimages", "refimcatalogs", "refimmeta",
@@ -68,6 +68,8 @@ def test_the_plans_tables_and_views_exist(conn):
 
 
 def _run_and_job(cur):
+    cur.execute("INSERT INTO datasets (name, description) VALUES ('D', 'a test dataset')"
+                " ON CONFLICT (name) DO NOTHING")
     cur.execute(
         "INSERT INTO runs (who, why, revision, settings, survey, dataset)"
         " VALUES ('t', 'test', 'abc', '{}', 'S', 'D') RETURNING id")
@@ -191,6 +193,8 @@ def test_an_object_names_no_survey(conn):
                          "xobjects", "xobjects_1", "xobjects_official"):
             assert "survey" not in _columns(cur, relation), relation
         founders = []
+        cur.execute("INSERT INTO datasets (name, description) VALUES ('D', 'a test dataset')"
+                    " ON CONFLICT (name) DO NOTHING")
         for survey in ("GBTDS", "HLWAS"):
             cur.execute("INSERT INTO runs (who, why, revision, settings, survey, dataset)"
                         " VALUES ('t', 'test', 'abc', '{}', %s, 'D') RETURNING id", (survey,))

@@ -17,7 +17,7 @@ from rapidpipe.foundation import catalog as object_catalog
 from rapidpipe.foundation.prefix import local_path
 from tests.db.foundation_helpers import (
     DATASET, FIELD_KEY, SURVEY, memberships_rows, new_job, new_run, objects_rows, open_bindings,
-    wait_until_blocked, write_attempt,
+    register_datasets, wait_until_blocked, write_attempt,
 )
 
 
@@ -227,6 +227,7 @@ def test_a_founder_attaches_to_another_runs_object_of_its_dataset_and_never_anot
     publish attaches to A's; a job E of another dataset founded one at A's very position, which
     B's reconcile never reads."""
     conn = connect()
+    register_datasets(conn, DATASET, "E")
     runs = {name: create_run(conn, "tester", "t", "abc123", {}, survey, dataset)
             for name, survey, dataset in (("g", "GBTDS", DATASET), ("h", "HLWAS", DATASET),
                                           ("e", "GBTDS", "E"))}

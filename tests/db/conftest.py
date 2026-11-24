@@ -59,7 +59,8 @@ def connect():
 
     For tests of the foundation's operations, which commit: the fixture
     empties runs, jobs, job_inputs, official and, by cascade, every product
-    table, and exposure_ids, before the test and again after it, and drops the child tables
+    table, and exposure_ids, and every dataset but schema.sql's ``flight``, before the test
+    and again after it, and drops the child tables
     of ``sources``, ``xsources`` and the field-split tables, so each test starts from no rows and no
     children and leaves none for the rolled-back ``conn`` tests. Every
     connection it hands out is closed at teardown.
@@ -76,6 +77,7 @@ def connect():
         try:
             with connection, connection.cursor() as cur:
                 cur.execute("TRUNCATE runs, jobs, job_inputs, official, exposure_ids CASCADE")
+                cur.execute("DELETE FROM datasets WHERE name <> 'flight'")
                 # The child tables: of sources and xsources one per UT date and SCA, of
                 # objects, memberships, packets and forced one per field.
                 cur.execute("SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent IN"

@@ -130,8 +130,23 @@ CREATE TABLE fields (
 );
 
 --------------------------------------------------------------------------------
--- Bookkeeping: runs, jobs, job_inputs, official
+-- Bookkeeping: datasets, runs, jobs, job_inputs, official
 --------------------------------------------------------------------------------
+
+-- A dataset is the set of inputs whose objects are shared (rapid_docs
+-- datasets): registered once, by `rapidpipe dataset create`, before its first
+-- run. runs.dataset references it, so `run create` refuses a name it does not
+-- hold and a misspelt name cannot found an object catalog of its own. A run
+-- records its own survey and overlay (Russ Laher, 2026-11-24).
+CREATE TABLE datasets (
+    name text PRIMARY KEY,                           -- the dataset every scientific key carries
+    description text NOT NULL,
+    created timestamp with time zone DEFAULT now() NOT NULL
+);
+
+-- Flight is one dataset for every program (rapid_docs datasets, Flight data).
+INSERT INTO datasets (name, description) VALUES
+    ('flight', 'Flight, every program; the first, program 1049');
 
 -- A run is a recipe someone launched for a reason, for one survey and dataset.
 CREATE TABLE runs (
@@ -143,8 +158,8 @@ CREATE TABLE runs (
     settings jsonb NOT NULL,                         -- the full settings body, resolved
     layers jsonb,                                    -- its hash and the layers it was resolved from (rapidpipe.foundation.layers); null on earlier runs
     survey text NOT NULL,
-    dataset text NOT NULL,
-    stopped timestamp with time zone,                -- when `rapidpipe run stop` closed the run to further jobs; null while it takes them
+    dataset text NOT NULL REFERENCES datasets (name),
+    stopped timestamp with time zone,              -- when `rapidpipe run stop` closed the run to further jobs; null while it takes them
     stopped_by text,                                 -- who stopped it
     stopped_why text,                                -- and why
     CHECK ((stopped IS NULL) = (stopped_by IS NULL) AND (stopped IS NULL) = (stopped_why IS NULL))

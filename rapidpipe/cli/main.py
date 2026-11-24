@@ -103,12 +103,17 @@ The foundation verbs (foundation plan v5, milestone 0, and those added since) wr
   has none (``rapidpipe.foundation.loop.exposure_ids``, the loop's own
   resolution): a hand-run ``intake``, or an ``import`` of an epoch, takes
   its scope's ``expid`` from it;
+- ``dataset create --name --description`` registers a
+  dataset and prints its name, which ``run create --dataset`` then accepts
+  (a name not registered exits 64, naming the registered ones; a name
+  registered twice exits 1); ``dataset list`` prints the registered
+  datasets as JSON;
 
 A refused change group, or a job published but refused its automatic
 binding, exits 1 (``ExitCode.FAILURE``) with the binding named on stderr;
 a job published under a run that is not live exits 0 with the refusal on
-stderr and on its row, so Batch's status means "the job ran". A run, job
-or group that does not exist, or an unreadable file, exits 64. A transient
+stderr and on its row, so Batch's status means "the job ran". A run, job,
+group or dataset that does not exist, or an unreadable file, exits 64. A transient
 failure (the database unavailable or failing mid-query, a storage or AWS
 call throttled, timed out or unreachable) exits 75, so Batch repeats the
 job; a failed job's row records the same code (:func:`exit_code`). Data
@@ -388,6 +393,22 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="The producer's name for the exposure: the stem without its detector and "
                                   "file-kind suffix, e.g. r0034201001001004001_0001 (SOC), "
                                   "roman_tds_H158_1012 (OpenUniverse), rimtimsim_WFI_F213_000000411.")
+
+    dataset_parser = subparsers.add_parser("dataset", help="Register or list datasets.",
+                                           description="Register a dataset, which runs may then name, or list "
+                                                       "the registered datasets.")
+    dataset_parser.set_defaults(group_parser=dataset_parser)
+    dataset_subparsers = dataset_parser.add_subparsers(dest="verb")
+    dataset_create = dataset_subparsers.add_parser(
+        "create", help="Register a dataset and print its name.",
+        description="Register a dataset in the datasets table and print its name: 'run create --dataset' "
+                    "refuses a name not registered. A name already registered exits 1 and changes nothing.")
+    dataset_create.add_argument("--name", required=True,
+                                help="The dataset's name, e.g. flight-trial-3; its objects are shared by its "
+                                     "runs and no other dataset's.")
+    dataset_create.add_argument("--description", required=True, help="What the dataset is.")
+    dataset_subparsers.add_parser("list", help="Print the registered datasets as JSON.",
+                                  description="Print every registered dataset as JSON, ordered by name.")
 
     return parser
 
@@ -794,6 +815,12 @@ def _foundation_command(args: argparse.Namespace) -> int:
     elif command == ("exposure", "id"):
         with connect(application_name="rapidpipe-exposure-id") as conn:
             print(loop.exposure_ids(conn, args.dataset, [args.name])[args.name])
+    elif command == ("dataset", "create"):
+        with connect(application_name="rapidpipe-dataset-create") as conn:
+            print(foundation.create_dataset(conn, args.name, args.description))
+    elif command == ("dataset", "list"):
+        with connect(application_name="rapidpipe-dataset-list") as conn:
+            _print_json(foundation.list_datasets(conn))
     elif command == ("official", "change"):
         group = _read(args.group, "group")
         if not isinstance(group, list) or not all(isinstance(item, dict) for item in group):
@@ -853,7 +880,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # traceback and exits 75 or 70. SystemExit and KeyboardInterrupt are not
     # Exception subclasses and pass through.
     try:
-        if args.command in ("run", "job", "official", "publish", "loop", "exposure"):
+        if args.command in ("run", "job", "official", "publish", "loop", "exposure", "dataset"):
             return _foundation_command(args)
     except Exception as exc:  # noqa: BLE001 - the classified-error boundary
         code = exit_code(exc)

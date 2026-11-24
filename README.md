@@ -37,6 +37,13 @@ scripts/dev.sh run -- python -m rapidpipe.science.catalogs.store ingest-gaia --d
 Builds a local Gaia DR3 mirror of the one leaf the field is on, order-2 pixel 138 (a 212 MB download from `https://data.lsdb.io/hats/gaia_dr3/gaia/`), in the work folder. It prints its record, `"leaves_done": 1` and `"complete": false`: it is one leaf of 2,016, so it is registered below as partial, which the team's mirror never is.
 
 ```sh
+scripts/dev.sh run -- rapidpipe dataset create --name r00342-local \
+  --description "HLWAS r00342 on a laptop"
+```
+
+Registers the dataset the run below names: `run create` refuses a dataset `datasets` does not hold, so a misspelt name cannot start an object catalog of its own. It prints the name.
+
+```sh
 scripts/dev.sh run -- rapidpipe run create --why "local test" \
   --overlay rapidpipe/settings/datasets/hlwas-r00342.toml \
   --set 'intake.source_root="s3://stpubdata/roman/nexus/soc_simulations/r00342/l2/"' \
@@ -81,7 +88,7 @@ The result: `validate_run.py` ends `run 1: 6/6 checks PASS`, and `read_packets.p
 scripts/dev.sh db stop
 ```
 
-Removes the throwaway database, everything in it, and the pod it ran in. `../rapid-work/` stays until you delete it; a second test needs `db start` and the commands above again, or, on the same database, a dataset name of its own (`--dataset r00342-local2` in each command), since a dataset has one live run.
+Removes the throwaway database, everything in it, and the pod it ran in. `../rapid-work/` stays until you delete it; a second test needs `db start` and the commands above again, or, on the same database, a dataset name of its own (`--dataset r00342-local2` in each command, registered first by `dataset create --name r00342-local2`), since a dataset has one live run.
 
 ### A flight program on SMDC
 
@@ -101,6 +108,13 @@ export RAPIDPIPE_BATCH_JOB_QUEUE=<the prompt queue>
 ```
 
 Where the run's products go and the Batch queue the loop submits to; the deployed target passes both into the container. Put them in your shell profile once.
+
+```sh
+scripts/dev.sh run --target deployed -- rapidpipe dataset create --name flight-1049-<your initials> \
+  --description "program 1049 trial by <your initials>"
+```
+
+Registers your trial's dataset, a name of its own so its objects stay apart from `flight`'s ([datasets](https://roman-rapid.readthedocs.io/en/latest/system/datasets.html)); `rapidpipe dataset list` prints those registered.
 
 ```sh
 scripts/dev.sh run --target deployed -- rapidpipe run create --why "program 1049 trial" \
@@ -251,7 +265,8 @@ Every stage runs under a job (`job local`, `job run`, below): one contract, `rap
 
 The database is built by `psql -v ON_ERROR_STOP=1 -f database/schema.sql` on an empty PostgreSQL 18 ([`database/README.md`](database/README.md)). The verbs:
 
-- `rapidpipe run create [--who W] --why Y [--revision REV] [--settings FILE] [--overlay DATASET.toml] [--set TABLE.key=VALUE ...] --survey S --dataset D` records a run (a recipe someone launched for a reason) and prints its id. `--who` is your login name when left out, here, on `run stop` and on the two `official` verbs (never `root`, which names nobody: say who then). `--revision` is `RAPID_SOURCE_REVISION`, the commit of the code running, where the environment sets it: the image does, to the commit it was built from, and `scripts/dev.sh` does when its checkout and its image leave one answer; where it is unset the run names its revision itself. The body it stores is resolved here, once, from three layers: `FILE` (default the shipped `rapidpipe/settings/foundation-thin.toml`, dev's values; TOML, or JSON when its name ends in `.json`), the dataset's overlay (`rapidpipe/settings/datasets/`, only the keys that differ, each with the measurement that earned it), then each `--set` in order (a TOML value, strings quoted). A key the base lacks is refused, naming it, except the two the base documents as absent by default (`intake.source_root`, `reference.selection.before_mjd`). The run also stores the body's hash and each layer's name and SHA-256 (`runs.layers`), which `run show` prints.
+- `rapidpipe run create [--who W] --why Y [--revision REV] [--settings FILE] [--overlay DATASET.toml] [--set TABLE.key=VALUE ...] --survey S --dataset D` records a run (a recipe someone launched for a reason) and prints its id. `D` must be registered: a dataset `datasets` does not hold exits 64, naming the registered ones, and records nothing. `--who` is your login name when left out, here, on `run stop` and on the two `official` verbs (never `root`, which names nobody: say who then). `--revision` is `RAPID_SOURCE_REVISION`, the commit of the code running, where the environment sets it: the image does, to the commit it was built from, and `scripts/dev.sh` does when its checkout and its image leave one answer; where it is unset the run names its revision itself. The body it stores is resolved here, once, from three layers: `FILE` (default the shipped `rapidpipe/settings/foundation-thin.toml`, dev's values; TOML, or JSON when its name ends in `.json`), the dataset's overlay (`rapidpipe/settings/datasets/`, only the keys that differ, each with the measurement that earned it), then each `--set` in order (a TOML value, strings quoted). A key the base lacks is refused, naming it, except the two the base documents as absent by default (`intake.source_root`, `reference.selection.before_mjd`). The run also stores the body's hash and each layer's name and SHA-256 (`runs.layers`), which `run show` prints.
+- `rapidpipe dataset create --name D --description TEXT` registers a dataset, which runs may then name, and prints it; a name already registered exits 1. `rapidpipe dataset list` prints the registered datasets (`name`, `description`, `created`) as JSON. `schema.sql` registers `flight`.
 - `rapidpipe official change --group FILE [--who W] --why Y` applies one change group in one transaction and prints its id. `FILE` is a JSON list of items, each with `close` (the id of an open binding) and/or `open` (a product binding `{"product", "key", "job"}` or the live binding `{"survey", "dataset", "run"}`).
 - `rapidpipe official undo <group-id> [--who W] --why Y` applies the inverse of a change group (close what it opened, open as new rows what it closed) and prints the new group's id.
 - `rapidpipe run show <id>` prints the run, its live binding and its jobs as JSON. `rapidpipe run show <id> --toml FILE` writes the run's stored settings body to `FILE` as TOML instead: a base that `rapidpipe run create --settings FILE` stores as the same body, with the same `settings_hash`, so a run's settings can be read, compared with another's, or used again without retyping its overlay and `--set` terms.
@@ -271,7 +286,7 @@ python scripts/stream_l2_files.py 1049 --source-root "$SRC"
 rapidpipe run create ... --set "intake.source_root=\"$SRC\""
 ```
 
-A change group refused because a binding it names is no longer open, or because a key it opens already has an open binding, and a job published but refused its automatic binding, exit 1 with the binding named on stderr; a run, job or group that does not exist, or a file that cannot be read, exits 64.
+A change group refused because a binding it names is no longer open, or because a key it opens already has an open binding, and a job published but refused its automatic binding, exit 1 with the binding named on stderr; a run, job, group or dataset that does not exist, or a file that cannot be read, exits 64.
 
 ## Running a stage under a job
 

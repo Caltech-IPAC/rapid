@@ -27,6 +27,9 @@ def main(n: int) -> None:
     conn = psycopg2.connect(host=os.environ["PGHOST"], port=os.environ.get("PGPORT", "5432"),
                             dbname=os.environ["PGDATABASE"], user=os.environ["PGUSER"],
                             password=os.environ.get("PGPASSWORD", ""))
+    with conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO datasets (name, description) VALUES ('T', 'the timing script')"
+                    " ON CONFLICT (name) DO NOTHING")
     run = create_run(conn, "timing", f"change group over {n} keys", "synthetic", {}, "T", "T")
     old, new = (create_job(conn, run, "timing", {"n": n}) for _ in range(2))
     tag = f"timing-{old}"

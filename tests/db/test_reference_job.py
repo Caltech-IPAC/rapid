@@ -23,7 +23,7 @@ from tests.support import fakereftools
 from tests.support.fakereftools import FRAMES, RTID, write_frames
 from rapidpipe.stages import reference
 from rapidpipe.science.spatial import field_center, healpix_indexes
-from tests.db.foundation_helpers import write_attempt
+from tests.db.foundation_helpers import register_datasets, write_attempt
 from tests.unit.test_reference_stage import settings
 
 SURVEY, DATASET, FID, SCA = "S", "D", 8, 1
@@ -50,6 +50,7 @@ def query(conn, sql, params=()):
 def test_job_local_publishes_a_bound_reference_from_two_named_l2_rows(connect, tmp_path,
                                                                      monkeypatch, capsys):
     conn = connect()
+    register_datasets(conn, DATASET)
     run = create_run(conn, "tester", "reference", "abc123", settings(), SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}], "tester", "live")
     paths = write_frames(tmp_path / "l2")[:2]
@@ -97,6 +98,7 @@ def test_job_local_under_coverage_publishes_a_covered_reference_and_fails_a_shor
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", (tmp_path / "outputs").as_uri())
     key = {"dataset": DATASET, "field": RTID, "fid": FID}
     outcomes = {}
+    register_datasets(conn, DATASET)
     for minimum, tolerance in ((0.3, 0.05), (0.95, 0.7)):
         run = create_run(conn, "tester", "coverage", "abc123",
                          settings(selection={"selection_type": "coverage", "min_coverage_fraction": minimum,

@@ -15,7 +15,7 @@ from datetime import datetime
 from rapidpipe.foundation import change, create_job, create_run, loop, publish
 from rapidpipe.products.coverage import make_refimage_wcs
 from rapidpipe.products.spatial import overlapping_fields, tessellation_field
-from tests.db.foundation_helpers import write_attempt
+from tests.db.foundation_helpers import register_datasets, write_attempt
 
 SURVEY, DATASET, FID, SCA = "S", "D", 8, 8
 CENTRE = (150.0293, 2.01472)                 # tile 3034797's centre
@@ -31,6 +31,7 @@ SETTINGS = {"reference": {"selection": {"selection_type": "coverage", "min_frame
 
 
 def live_run(conn) -> int:
+    register_datasets(conn, DATASET)
     run = create_run(conn, "tester", "coverage", "abc123", SETTINGS, SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}], "tester", "live")
     return run
