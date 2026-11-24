@@ -655,7 +655,7 @@ def refimmeta_row(*, rfid: int, field: int, fid: int, ra_center: float, dec_cent
     fwhm : rapidpipe.science.reference.catalog.FwhmStatistics
         The SExtractor catalog's FWHM and source count.
     npucatsources : int or None
-        The Photutils PSF-fit catalog's sources (`dev`'s ``npsfcatsources``, 0 when it could not be
+        The Photutils PSF-fit catalog's sources (``npsfcatsources``, 0 when it could not be
         made); ``None`` when ``[reference.psfcat]`` is off and none was attempted.
 
     Returns
