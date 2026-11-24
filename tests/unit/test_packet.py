@@ -36,7 +36,7 @@ from astropy.time import Time
 
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts import kona
-from rapidpipe.science.alerts.assemble import load_schema
+from rapidpipe.science.alerts.assemble import build_dia_source, load_schema
 from rapidpipe.science.alerts.crossmatch import REFCAT_COLUMNS
 from rapidpipe.science.alerts.records import Source
 from rapidpipe.foundation import prefix
@@ -44,7 +44,8 @@ from rapidpipe.science.catalogs.readers import catalog_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
     CatalogInput, Read, WindowImage, _plain, _separation, alert_catalog, cap_triggers, covering,
-    measure_forced, neighbour, reliability, window_reach, write_set, xsource_fields)
+    measure_forced, neighbour, reference_dates, reliability, set_reference_dates, window_reach,
+    write_set, xsource_fields)
 from tests.support import fakekete
 from tests.support.catalogs import (
     ra_offset, write_gaia_store, write_hp6_store, write_lvs_store, write_ss_store)
@@ -469,6 +470,76 @@ def test_the_reach_admits_every_overlapping_image_of_the_detector():
     corner_on_corner = _image(2, RA0 + c, DEC0 + 0.95 * 0.12)
     assert covering([corner_on_corner], [(RA0 + 0.058 / np.cos(np.radians(DEC0)), DEC0 + 0.058)], own=1)
     assert _separation(RA0, DEC0, corner_on_corner["ra0"], corner_on_corner["dec0"]) <= window_reach(own)
+
+
+def _frames() -> tuple[list[dict], tuple, tuple, tuple]:
+    """A reference's three frames, and positions in the first two, the first and third, and none."""
+    step = 0.1 / np.cos(np.radians(DEC0))
+    frames = [{**_image(1, RA0, DEC0), "mjdobs": 61000.0},
+              {**_image(2, RA0 + step, DEC0), "mjdobs": 61200.0},     # overlaps the first's east half
+              {**_image(3, RA0 - step, DEC0), "mjdobs": 60900.0}]     # overlaps the first's west half
+    return frames, (RA0 + step / 2, DEC0), (RA0 - step / 2, DEC0), (RA0, DEC0 + 1.0)
+
+
+def test_the_reference_dates_are_those_of_the_frames_whose_footprint_holds_the_position():
+    """rapid_docs decision-reference-dates: not the whole mosaic's dates; none where no frame holds it."""
+    frames, east, west, outside = _frames()
+    assert reference_dates(frames, [east, west, outside]) == [
+        (61000.0, 61200.0), (60900.0, 61000.0), (None, None)]
+    assert reference_dates(frames[1:2], [east]) == [(61200.0, 61200.0)]   # one frame: first is last
+    assert reference_dates([], [east]) == [(None, None)] and reference_dates(frames, []) == []
+
+
+def test_each_detection_takes_the_reference_its_own_difference_job_named():
+    """A set whose job named no reference leaves its dates null; sets sharing a reference have
+    its frames read once; a reference that is not the packet job's own named input is recorded
+    as a read, once."""
+    from types import SimpleNamespace
+
+    from rapidpipe.stages.packet import JOB_REFERENCES_SQL, REFERENCE_FRAMES_SQL
+
+    frames, east, west, _ = _frames()
+    key = {"dataset": "d", "field": 7, "fid": 8}
+
+    class Cursor:
+        asked = {}
+
+        def execute(self, sql, params):
+            self.sql, self.asked[sql] = sql, params
+
+        def fetchall(self):
+            if self.sql == JOB_REFERENCES_SQL:
+                return [{"job": 10, "ref_job": 5, "rfid": 801, **key},
+                        {"job": 11, "ref_job": 5, "rfid": 801, **key},
+                        {"job": 20, "ref_job": 6, "rfid": 802, **key, "fid": 9}]
+            return ([{**f, "ref_job": 5, "rfid": 801} for f in frames[:2]]
+                    + [{**f, "ref_job": 6, "rfid": 802} for f in frames[2:]])
+
+    def detection(position):
+        return SimpleNamespace(ra=position[0], dec=position[1], first_ref_mjd=None, last_ref_mjd=None)
+
+    own, shared, earlier, uncovered, imported = (detection(p) for p in (east, east, west, east, east))
+    cursor = Cursor()
+    reads = set_reference_dates(cursor, {10: [own], 11: [shared], 20: [earlier, uncovered], 30: [imported]},
+                                named={"source_job": 5})
+    assert cursor.asked[JOB_REFERENCES_SQL] == ([10, 11, 20, 30],)
+    assert cursor.asked[REFERENCE_FRAMES_SQL] == ([5, 6], [801, 802])   # each reference once
+    assert (own.first_ref_mjd, own.last_ref_mjd) == (61000.0, 61200.0)
+    assert (shared.first_ref_mjd, shared.last_ref_mjd) == (61000.0, 61200.0)
+    assert (earlier.first_ref_mjd, earlier.last_ref_mjd) == (60900.0, 60900.0)
+    assert (uncovered.first_ref_mjd, uncovered.last_ref_mjd) == (None, None)   # outside its reference's frame
+    assert (imported.first_ref_mjd, imported.last_ref_mjd) == (None, None)     # its job named none
+    assert reads == [{"product": "refimages", "key": {**key, "fid": 9}, "source_job": 6}]
+
+
+def test_a_detections_reference_dates_reach_its_record_and_the_date_comparison_stays_unfilled():
+    detection = source(2, 1, 50, 50, aid=1)
+    record = build_dia_source(detection)
+    assert (record["firstRefMjd"], record["lastRefMjd"]) == (None, None)
+    detection.first_ref_mjd, detection.last_ref_mjd = 61000.0, 61200.0
+    record = build_dia_source(detection)
+    assert (record["firstRefMjd"], record["lastRefMjd"]) == (61000.0, 61200.0)
+    assert record["refMayContainObject"] is None
 
 
 REFERENCE_STAMP = "awaicgen_output_mosaic_image_resampled_gainmatched.fits"

@@ -400,18 +400,23 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "computed: KONA predictions within providers.SS_CANDIDATE_SEP_ARCSEC",
                     attr="is_ss_candidate"), #TODO: tune the separation cut
 
-    # --- The reference this detection was made against (stubs; moved from diaObject,
-    # which is filter-independent while a reference is per field and filter, 2026-11-16) ---
-    Param("firstRefMjd",   ["null", "double"],  "MJD of the earliest exposure coadded into the reference image this "
-                                                "detection was made against (UTC scale) [MJD] (stub)",
-                    STUB, "refimimages of the refimages row the difference job named, joined to l2files.mjdobs"),
-    Param("lastRefMjd",    ["null", "double"],  "MJD of the latest exposure coadded into the reference image this "
-                                                "detection was made against (UTC scale) [MJD] (stub)",
-                    STUB, "refimimages of the refimages row the difference job named, joined to l2files.mjdobs"),
+    # --- The reference this detection was made against (moved from diaObject, which is
+    # filter-independent while a reference is per field and filter, 2026-11-16) ---
+    Param("firstRefMjd",   ["null", "double"],  "Start MJD of the earliest exposure, among those coadded into the "
+                                                "reference image this detection was made against, whose footprint "
+                                                "holds this position; null if none does (UTC scale) [MJD]",
+                    IMPLEMENTED, "the packet stage: refimimages of the reference the difference job named, "
+                                 "joined to l2files (mjdobs and corners)", attr="first_ref_mjd"),
+    Param("lastRefMjd",    ["null", "double"],  "Start MJD of the latest exposure, among those coadded into the "
+                                                "reference image this detection was made against, whose footprint "
+                                                "holds this position; null if none does (UTC scale) [MJD]",
+                    IMPLEMENTED, "the packet stage: refimimages of the reference the difference job named, "
+                                 "joined to l2files (mjdobs and corners)", attr="last_ref_mjd"),
     Param("refMayContainObject", ["null", "boolean"], "true if the object was first detected at or before lastRefMjd, "
                                                       "so its light may be in the template; a date comparison, not a "
                                                       "measurement (stub)",
-                    STUB, "computed at assembly from the object's detections and lastRefMjd"),
+                    STUB, "left unfilled until the team agrees it would be read correctly (2026-11-24); "
+                          "would be computed at assembly from the object's detections and lastRefMjd"),
 
     # --- Roman-specific identifiers & tiling ------------------------------------
     Param("field",         "int",              "Roman field identifier",

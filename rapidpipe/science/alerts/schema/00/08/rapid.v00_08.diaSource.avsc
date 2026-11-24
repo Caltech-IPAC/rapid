@@ -508,7 +508,7 @@
                 "double"
             ],
             "default": null,
-            "doc": "MJD of the earliest exposure coadded into the reference image this detection was made against (UTC scale) [MJD] (stub)"
+            "doc": "Start MJD of the earliest exposure, among those coadded into the reference image this detection was made against, whose footprint holds this position; null if none does (UTC scale) [MJD]"
         },
         {
             "name": "lastRefMjd",
@@ -517,7 +517,7 @@
                 "double"
             ],
             "default": null,
-            "doc": "MJD of the latest exposure coadded into the reference image this detection was made against (UTC scale) [MJD] (stub)"
+            "doc": "Start MJD of the latest exposure, among those coadded into the reference image this detection was made against, whose footprint holds this position; null if none does (UTC scale) [MJD]"
         },
         {
             "name": "refMayContainObject",

@@ -95,6 +95,10 @@ class Source:
     zptmag: float | None = None
     pixel_area_map: str | None = None
     pixel_area_factor: float | None = None
+    # the reference's dates at this position (new, not dev's; rapid_docs
+    # decision-reference-dates), set by the packet stage; None where no frame holds it
+    first_ref_mjd: float | None = None
+    last_ref_mjd: float | None = None
     # Roman observation identifiers, from the exposures row (migration
     # 20261015; null for exposures ingested before it). `pass` is a Python
     # keyword, hence obs_pass; the wire name is still "pass".
@@ -121,9 +125,10 @@ class Source:
     rb_version: str | None = None
 
     # fields filled after construction (association, assembly stamping,
-    # KONA, the nJy calibration); never storage columns
+    # KONA, the nJy calibration, the reference's dates); never storage columns
     FILLED_LATER = frozenset({"aid", "time_proc", "is_ss_candidate",
-                              "rb_threshold", "rb_version", "pixel_area_factor"})
+                              "rb_threshold", "rb_version", "pixel_area_factor",
+                              "first_ref_mjd", "last_ref_mjd"})
 
     @property
     def snr(self) -> float | None:

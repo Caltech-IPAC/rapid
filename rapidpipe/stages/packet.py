@@ -84,6 +84,12 @@ Per trigger, the packet (`dev`'s ``assemble_alert_for_source``):
   history as ``nDiaSources`` is (:data:`COVERAGE_SQL`,
   :func:`coverage_counts`): how often the position was observed against
   how often it was detected. The forced list stays the 30-day window.
+- ``firstRefMjd``, ``lastRefMjd`` (not `dev`'s; rapid_docs
+  decision-reference-dates): on every detection, the trigger and the
+  previous ones, the earliest and latest ``mjdobs`` of the frames of the
+  reference its own difference job named whose footprint holds the
+  detection's position (:data:`REFERENCE_FRAMES_SQL`,
+  :func:`reference_dates`); null where no frame does.
 - ``prvDiaForcedSources``: `dev`'s forced photometry
   (:mod:`rapidpipe.science.alerts.forced`) at the object's founding
   position on every window image whose footprint holds it, both the
@@ -438,6 +444,22 @@ COVERAGE_SQL = (
     " AND EXISTS (SELECT 1 FROM official o WHERE o.closed_at IS NULL"
     " AND o.product = 'l2files' AND o.job = l.job)")
 
+#: The reference each difference job named as its input, by that job: one row per job, since an
+#: object's history spans many jobs that share a few references.
+JOB_REFERENCES_SQL = (
+    "SELECT i.job, r.job AS ref_job, r.rfid, r.dataset, r.field, r.fid FROM job_inputs i"
+    " JOIN refimages r ON r.job = i.source_job AND r.dataset = i.key ->> 'dataset'"
+    " AND r.field = (i.key ->> 'field')::integer AND r.fid = (i.key ->> 'fid')::smallint"
+    " WHERE i.job = ANY(%s) AND i.kind = 'input' AND i.product = 'refimages'")
+
+#: The frames coadded into the given references, each reference's once: each frame's start and
+#: corners (``firstRefMjd``, ``lastRefMjd``; :func:`reference_dates`).
+REFERENCE_FRAMES_SQL = (
+    "SELECT m.job AS ref_job, m.rfid, l.mjdobs,"
+    " l.ra1, l.dec1, l.ra2, l.dec2, l.ra3, l.dec3, l.ra4, l.dec4 FROM refimimages m"
+    " JOIN l2files l ON l.rid = m.rid"
+    " WHERE (m.job, m.rfid) IN (SELECT * FROM unnest(%s::bigint[], %s::integer[]))")
+
 #: Official packet sets' forced rows on the window's images, from the triggers' objects' fields'
 #: children of ``forced`` (a forced row is filed under its object's field), each with its set's key,
 #: the key of its open binding. The images and the binding are filtered inside each child's query
@@ -672,6 +694,10 @@ def _read(job: JobContext) -> Read:
                         " WHERE job = ANY(%s) ORDER BY job", (sorted(member_sets),))
             reads += [{"product": "sources", "source_job": r.pop("job"), "key": dict(r)}
                       for r in cur.fetchall()]
+        by_set: dict[int, list[Source]] = {source_job: list(triggers)}
+        for set_job, member in (pair for pairs in members.values() for pair in pairs):
+            by_set.setdefault(set_job, []).append(member)
+        reads += set_reference_dates(cur, by_set, ref_in)
 
         cur.execute("SELECT filename FROM psfs WHERE job = %s AND "
                     + _key_where(psf_in["key"], "psfs")[0],
@@ -869,6 +895,62 @@ def coverage_counts(candidates: list[dict], positions: list[tuple[float, float]]
                             for d in candidates[start:start + chunk]], dtype=float).reshape(-1, 8)
         counts += fp.contains_positions(corners, ra, dec).sum(axis=0)
     return [int(n) for n in counts]
+
+
+def reference_dates(frames: list[dict],
+                    positions: list[tuple[float, float]]) -> list[tuple[float | None, float | None]]:
+    """The earliest and latest ``mjdobs`` of the ``frames`` whose footprint holds each of ``positions``.
+
+    ``frames`` are one reference's coadded L2 rows (``mjdobs`` and the
+    eight corner columns); the footprint test is :func:`covering`'s. A
+    position no frame holds gives ``(None, None)``.
+    """
+    if not positions:
+        return []
+    if not frames:
+        return [(None, None)] * len(positions)
+    corners = np.array([[f[c] for c in ("ra1", "dec1", "ra2", "dec2", "ra3", "dec3", "ra4", "dec4")]
+                        for f in frames], dtype=float).reshape(-1, 8)
+    holds = fp.contains_positions(corners, [p[0] for p in positions], [p[1] for p in positions])
+    mjdobs = np.array([f["mjdobs"] for f in frames], dtype=float)
+    dates = []
+    for held in (mjdobs[column] for column in holds.T):
+        dates.append((float(held.min()), float(held.max())) if held.size else (None, None))
+    return dates
+
+
+def set_reference_dates(cur, by_set: dict[int, list[Source]], named: dict) -> list[dict]:
+    """Set ``first_ref_mjd`` and ``last_ref_mjd`` on each source, and return the reads to record.
+
+    ``by_set`` holds the sources by their source set's job, the difference
+    job: each takes the reference that job named as its input
+    (:data:`JOB_REFERENCES_SQL`), at its own position. The sets are grouped
+    by reference: each distinct reference's frames are read once
+    (:data:`REFERENCE_FRAMES_SQL`) and all the sources made against it are
+    tested together. A set whose job named no reference (an imported
+    epoch) leaves its sources' dates None. Every reference read that is
+    not ``named``, the packet job's own ``refimages`` input, is returned
+    as a ``refimages`` read, once.
+    """
+    made_against: dict[tuple[int, int], list[Source]] = {}       # (ref_job, rfid) -> its sources
+    keys: dict[int, dict] = {}
+    if by_set:
+        cur.execute(JOB_REFERENCES_SQL, (sorted(by_set),))
+        for row in cur.fetchall():
+            made_against.setdefault((row["ref_job"], row["rfid"]), []).extend(by_set[row["job"]])
+            keys[row["ref_job"]] = {"dataset": row["dataset"], "field": row["field"], "fid": row["fid"]}
+    frames: dict[tuple[int, int], list[dict]] = {}
+    if made_against:
+        references = sorted(made_against)
+        cur.execute(REFERENCE_FRAMES_SQL, ([r[0] for r in references], [r[1] for r in references]))
+        for row in cur.fetchall():
+            frames.setdefault((row["ref_job"], row["rfid"]), []).append(row)
+    for reference, sources in made_against.items():
+        dates = reference_dates(frames.get(reference, []), [(s.ra, s.dec) for s in sources])
+        for source, (first, last) in zip(sources, dates):
+            source.first_ref_mjd, source.last_ref_mjd = first, last
+    return [{"product": "refimages", "key": key, "source_job": ref_job}
+            for ref_job, key in sorted(keys.items()) if ref_job != named["source_job"]]
 
 
 def _separation(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
