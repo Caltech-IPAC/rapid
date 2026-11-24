@@ -1,8 +1,8 @@
 """Helpers for the tests of rapidpipe.foundation (test_publish, test_change).
 
 Not a test module. Writes an attempt's declared outputs as Parquet plus a
-manifest under a ``file://`` prefix, records live runs, and watches for a
-second connection to block on the first one's row lock.
+manifest under a ``file://`` prefix, registers datasets, records live runs,
+and watches for a second connection to block on the first one's row lock.
 """
 
 from __future__ import annotations
@@ -19,6 +19,28 @@ from rapidpipe.foundation import change, create_job, create_run
 
 SURVEY, DATASET = "S", "D"
 FIELD_KEY = {"dataset": DATASET, "field": 1}
+
+
+def register_datasets(target, *names: str) -> None:
+    """Register each of ``names`` in ``datasets`` where it is not, so runs may name it.
+
+    Parameters
+    ----------
+    target : psycopg2 connection or cursor
+        A connection is committed; a cursor's transaction is left to its caller
+        (a rolled-back ``conn`` test).
+    *names : str
+        The dataset names.
+    """
+    def insert(cur):
+        for name in names:
+            cur.execute("INSERT INTO datasets (name, description) VALUES (%s, 'a test dataset')"
+                        " ON CONFLICT (name) DO NOTHING", (name,))
+    if hasattr(target, "cursor"):
+        with target, target.cursor() as cur:
+            insert(cur)
+    else:
+        insert(target)
 
 
 def write_attempt(root: Path, tables: dict[str, list[dict]]) -> str:
@@ -45,6 +67,7 @@ def memberships_rows(source_job: int, n: int = 3) -> list[dict]:
 
 
 def new_run(conn, live: bool = False, why: str = "test") -> int:
+    register_datasets(conn, DATASET)
     run = create_run(conn, "tester", why, "abc123", {"associate": {"radius": 1.0}}, SURVEY, DATASET)
     if live:
         change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}], "tester", "live")

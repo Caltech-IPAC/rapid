@@ -23,7 +23,7 @@ from pathlib import Path
 
 from rapidpipe.foundation import change, create_job, create_run, publish
 from rapidpipe.foundation.prefix import local_path
-from tests.db.foundation_helpers import DATASET, SURVEY, new_job, write_attempt
+from tests.db.foundation_helpers import DATASET, SURVEY, new_job, register_datasets, write_attempt
 from tests.db.test_children import NOV4, source_rows
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -43,6 +43,7 @@ def _validate(monkeypatch, conn):
 
 
 def _live_run(conn) -> int:
+    register_datasets(conn, DATASET)
     run = create_run(conn, "tester", "test", "abc123", {"associate": ASSOCIATE}, SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}], "tester", "live")
     return run

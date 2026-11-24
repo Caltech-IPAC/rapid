@@ -1,7 +1,8 @@
 """The foundation verbs: each one's exit code and output on one success
 and one refusal, against the foundation database (``database/schema.sql``);
 ``exposure id``, the id a dataset holds for an exposure's name, the same
-id again and another name's another.
+id again and another name's another; ``dataset create`` and ``dataset list``,
+and ``run create`` refusing a dataset not registered.
 
 Each verb is run in-process through ``rapidpipe.cli.main.main``, which
 connects from the ``PG*`` environment like any invocation; a refusal is a
@@ -16,14 +17,19 @@ import pytest
 
 from rapidpipe.cli.main import main
 from rapidpipe.exitcodes import ExitCode
-from tests.db.foundation_helpers import DATASET, FIELD_KEY, SURVEY, new_job, new_run, open_bindings
+from tests.db.foundation_helpers import (
+    DATASET, FIELD_KEY, SURVEY, new_job, new_run, open_bindings, register_datasets,
+)
 
 WHO_WHY = ["--who", "tester", "--why", "verb test"]
 
 
 @pytest.fixture()
 def conn(connect):
-    return connect()
+    """A connection, with the module's dataset registered as ``run create`` requires."""
+    connection = connect()
+    register_datasets(connection, DATASET)
+    return connection
 
 
 def _run(capsys, *argv):
@@ -48,6 +54,37 @@ def test_run_create_prints_the_new_runs_id(capsys, conn, tmp_path):
         cur.execute("SELECT who, revision, settings, survey, dataset FROM runs WHERE id = %s",
                     (int(out),))
         assert cur.fetchone() == ("tester", "abc123", {"associate": {"radius": 1.0}}, SURVEY, DATASET)
+
+
+def test_run_create_refuses_a_dataset_not_registered_naming_the_registered_and_records_nothing(
+        capsys, conn, tmp_path):
+    settings = tmp_path / "settings.toml"
+    settings.write_text("[associate]\nradius = 1.0\n")
+    code, out, err = _run(capsys, "run", "create", *WHO_WHY, "--revision", "abc123",
+                          "--settings", str(settings), "--survey", SURVEY, "--dataset", "flihgt")
+    assert (code, out) == (ExitCode.USAGE, "")
+    assert err == ("rapidpipe run create: dataset 'flihgt' is not registered (rapidpipe dataset create);"
+                   f" the registered datasets: {DATASET}, flight\n")
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM runs")
+        assert cur.fetchone() == (0,)
+
+
+def test_dataset_create_registers_a_name_once_and_dataset_list_prints_them(capsys, conn):
+    code, out, err = _run(capsys, "dataset", "create", "--name", "flight-trial-1",
+                          "--description", "a trial on flight data")
+    assert (code, out, err) == (ExitCode.SUCCESS, "flight-trial-1\n", "")
+    code, out, err = _run(capsys, "dataset", "create", "--name", "flight-trial-1",
+                          "--description", "again")
+    assert (code, out) == (ExitCode.FAILURE, "")
+    assert "'flight-trial-1' is already registered" in err
+    code, out, err = _run(capsys, "dataset", "list")
+    assert (code, err) == (ExitCode.SUCCESS, "")
+    listed = json.loads(out)
+    assert [(d["name"], d["description"]) for d in listed] == [
+        (DATASET, "a test dataset"), ("flight", "Flight, every program; the first, program 1049"),
+        ("flight-trial-1", "a trial on flight data")]
+    assert set(listed[0]) == {"name", "description", "created"}
 
 
 def test_run_create_stores_the_resolved_body_and_its_layers(capsys, conn, tmp_path):

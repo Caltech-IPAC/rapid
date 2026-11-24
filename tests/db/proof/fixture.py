@@ -31,7 +31,7 @@ from pathlib import Path
 
 from rapidpipe.foundation import change, create_job, create_run, publish
 from rapidpipe.science.crossmatch.memory import associate_epoch
-from tests.db.foundation_helpers import write_attempt
+from tests.db.foundation_helpers import register_datasets, write_attempt
 
 SURVEY, DATASET, FIELD, FID = "S", "D", 1, 1
 SCAS = (1, 2)
@@ -66,7 +66,8 @@ class World:
     # -- bookkeeping -------------------------------------------------------
 
     def run(self, why: str, settings: dict | None = None, live: bool = False) -> int:
-        run =create_run(self.conn, "proof", why, "synthetic",
+        register_datasets(self.conn, DATASET)
+        run = create_run(self.conn, "proof", why, "synthetic",
                          settings or {"recipe": why}, SURVEY, DATASET)
         if live:
             change(self.conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}],

@@ -26,7 +26,7 @@ from tests.support.fakedifftools import (
     write_epoch,
 )
 from rapidpipe.stages import difference
-from tests.db.foundation_helpers import write_attempt
+from tests.db.foundation_helpers import register_datasets, write_attempt
 from tests.unit.test_difference_stage import settings
 
 SURVEY, DATASET, FID, SCA, EXPID, FIELD = "S", "D", 1, 7, 84613, 5321
@@ -49,6 +49,7 @@ def query(conn, sql, params=()):
 def test_job_local_publishes_a_bound_difference_image_and_source_set(connect, tmp_path,
                                                                      monkeypatch, capsys):
     conn = connect()
+    register_datasets(conn, DATASET)
     run = create_run(conn, "tester", "difference", "abc123", settings(), SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}], "tester", "live")
     files = write_epoch(tmp_path / "inputs")

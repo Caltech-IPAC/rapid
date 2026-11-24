@@ -13,6 +13,7 @@ from __future__ import annotations
 from psycopg2.extras import Json
 
 from rapidpipe.foundation import gate
+from tests.db.foundation_helpers import register_datasets
 
 GATE = {"min_epochs": 1}
 
@@ -33,6 +34,7 @@ def test_a_set_is_judged_on_its_own_difference_whichever_source_set_it_names_fir
     conn = connect()
     own, other = {"expid": 2020101, "sca": 4, "fid": 2}, {"expid": 2020103, "sca": 4, "fid": 2}
     with conn.cursor() as cur:
+        register_datasets(cur, "D")
         cur.execute("INSERT INTO runs (who, why, revision, settings, survey, dataset)"
                     " VALUES ('t', 't', 'r', '{}', 'S', 'D') RETURNING id")
         run = cur.fetchone()[0]

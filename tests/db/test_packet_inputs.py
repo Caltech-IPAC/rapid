@@ -40,7 +40,7 @@ from rapidpipe.foundation.local import local_path
 from rapidpipe.science.alerts import kona
 from rapidpipe.science.catalogs.store import gaia_from_table
 from rapidpipe.stages import packet
-from tests.db.foundation_helpers import write_attempt
+from tests.db.foundation_helpers import register_datasets, write_attempt
 from tests.db.test_child_reads import _script
 from tests.db.test_children import xsource_rows
 from tests.support import fakekete
@@ -133,6 +133,7 @@ def packet_job(conn, tmp_path, refcat_row: bool = True, program_id: int = -1,
         xsources = [xsource(1, 50, 50, member=True, fluxfit=400.0, snrfit=40.0, flagsfit=0)]
         if second_source:
             xsources.append(xsource(2, 20, 80, member=True, fluxfit=40.0, snrfit=4.0, flagsfit=0))
+    register_datasets(conn, DATASET)
     live = create_run(conn, "tester", "live", "abc123", settings, SURVEY, DATASET)
     other = create_run(conn, "tester", "a recipe that is not live", "def456",
                        settings, SURVEY, DATASET)

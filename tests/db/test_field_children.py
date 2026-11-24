@@ -22,7 +22,7 @@ from psycopg2 import errors, sql
 from rapidpipe.foundation import create_run, publish
 from rapidpipe.foundation.children import FIELD_PARENTS, field_child_name
 from tests.db.foundation_helpers import (
-    DATASET, new_job, new_run, wait_until_blocked, write_attempt,
+    DATASET, new_job, new_run, register_datasets, wait_until_blocked, write_attempt,
 )
 
 
@@ -235,6 +235,7 @@ def test_the_dataset_readers_give_every_run_s_rows_of_the_dataset_and_fields_onl
     fields, a GBTDS run's and an HLWAS run's alike, and none of another dataset's at the same
     fields (objects-across-runs)."""
     conn = connect()
+    register_datasets(conn, DATASET, "E")
     runs = [create_run(conn, "tester", "t", "abc123", {}, survey, dataset)
             for survey, dataset in (("GBTDS", DATASET), ("HLWAS", DATASET), ("GBTDS", "E"))]
     jobs = {}

@@ -16,12 +16,14 @@ refused, and :class:`Stopped` the refusal of work under a stopped run
 :class:`PublishError` is an attempt whose declared outputs could not be verified.
 """
 
-from rapidpipe.foundation.bookkeeping import Stopped, create_job, create_run, job_show, run_show
+from rapidpipe.foundation.bookkeeping import (
+    Stopped, create_dataset, create_job, create_run, job_show, list_datasets, run_show)
 from rapidpipe.foundation.local import JobContext, run_job
 from rapidpipe.foundation.official import NotFound, Refused, apply, change, undo
 from rapidpipe.foundation.publish import PRODUCT_TABLES, PublishError, publish
 
 __all__ = [
     "JobContext", "NotFound", "PRODUCT_TABLES", "PublishError", "Refused", "Stopped", "apply", "change",
-    "create_job", "create_run", "job_show", "publish", "run_job", "run_show", "undo",
+    "create_dataset", "create_job", "create_run", "job_show", "list_datasets", "publish", "run_job",
+    "run_show", "undo",
 ]

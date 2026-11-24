@@ -19,6 +19,7 @@ import pytest
 
 from rapidpipe.exitcodes import CommandExit
 from rapidpipe.foundation import change, create_job, create_run, loop, publish
+from tests.db.foundation_helpers import register_datasets
 from tests.unit.test_intake import run_intake, write_asdf
 from tests.unit.test_intake import source  # noqa: F401  (a fixture)
 
@@ -48,6 +49,7 @@ def _lookup(conn):
 
 
 def _live_run(conn) -> int:
+    register_datasets(conn, DATASET)
     run = create_run(conn, "tester", "test", "abc123", {}, "S", DATASET)
     change(conn, [{"open": {"survey": "S", "dataset": DATASET, "run": run}}], "tester", "live")
     return run

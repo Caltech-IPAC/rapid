@@ -14,6 +14,7 @@ from __future__ import annotations
 from psycopg2.extras import Json
 
 from rapidpipe.foundation import publish_kafka
+from tests.db.foundation_helpers import register_datasets
 
 
 def _job(cur, run: int, stage: str = "packet") -> int:
@@ -34,6 +35,7 @@ def test_only_unstamped_official_packet_sets_of_the_run_are_offered(connect):
     conn = connect()
     with conn.cursor() as cur:
         runs = []
+        register_datasets(cur, "D")
         for _ in range(2):
             cur.execute("INSERT INTO runs (who, why, revision, settings, survey, dataset)"
                         " VALUES ('t', 't', 'r', '{}', 'S', 'D') RETURNING id")
