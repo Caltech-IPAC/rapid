@@ -551,3 +551,53 @@ def test_the_coverage_count_is_the_official_l2_files_holding_the_object_over_the
     assert result["published"] and result["refusal"] is None
     (record,) = _records(conn, job).values()
     assert record["diaObject"]["nDiaCoverage"] == 2 and record["diaObject"]["nDiaSources"] == 1
+
+
+def test_a_detection_carries_the_dates_of_its_own_references_frames_that_hold_it(connect, tmp_path):
+    """rapid_docs decision-reference-dates: a previous detection's ``firstRefMjd`` and
+    ``lastRefMjd`` are the earliest and latest of the frames, of the reference its own job named,
+    whose footprint holds it: not the frame half a degree away, though it is the oldest. The
+    trigger, whose import job named no reference, carries null. The reference is recorded as read."""
+    conn = connect()
+    job, founder, *_ = packet_job(conn, tmp_path)
+    live = query(conn, "SELECT run FROM jobs WHERE id = %s", (job,))[0][0]
+    rows = image_rows(tmp_path / "e1")
+    l2, reference_key = rows["l2files"][0], {"dataset": DATASET, "field": FIELD, "fid": 8}
+    elsewhere = {k: l2[k] + 0.5 for k in ("ra0", "ra1", "ra2", "ra3", "ra4")}
+    frames = [{**l2, "expid": 11, "rid": 511, "mjdobs": MJD[1] - 400.0},
+              {**l2, "expid": 12, "rid": 512, "mjdobs": MJD[1] - 300.0},
+              {**l2, **elsewhere, "expid": 13, "rid": 513, "mjdobs": MJD[1] - 500.0}]
+    reference = create_job(conn, live, "reference", {})
+    publish(conn, reference, 1, write_attempt(tmp_path / "reference", {
+        "l2files": frames,
+        "refimages": [{"rfid": 802, **reference_key, "checksum": "0" * 32,
+                       "filename": (tmp_path / "e1" / "ref.fits").as_uri()}],
+        "refimimages": [{"rfid": 802, "rid": f["rid"]} for f in frames]}))
+
+    image_key = {"dataset": DATASET, "expid": 2, "sca": 9, "fid": 8}
+    earlier = create_job(conn, live, "import", {},
+                         inputs=[{"product": "refimages", "key": reference_key, "source_job": reference}],
+                         expects=[{"product": p, "key": image_key, "binding": None}
+                                  for p in ("l2files", "diffimages", "sources")])
+    moved = {"expid": 2, "sca": 9, "pid": 602, "mjdobs": MJD[1] - 1.0}
+    detection = {**xsource(1, 50, 50, fluxfit=300.0, snrfit=30.0, flagsfit=0), **moved}
+    publish(conn, earlier, 1, write_attempt(tmp_path / "earlier", {
+        "l2files": [{**l2, "expid": 2, "sca": 9, "rid": 502, "mjdobs": MJD[1] - 1.0}],
+        "diffimages": [{**rows["diffimages"][0], "expid": 2, "sca": 9, "pid": 602, "rid": 502}],
+        "sources": [{**rows["sources"][0], **moved}],
+        "xsources": [detection],
+        "xmemberships": [{"object_job": founder, "xaid": 201, "field": FIELD, "source_job": earlier,
+                          "xsid": detection["xsid"], "dra": 0.0, "ddec": 0.0, "flux": detection["fluxap"]}]}))
+
+    result = run_job(lambda: contextlib.closing(connect()), job, tmp_path.as_uri(), packet.run)
+    assert result["published"] and result["refusal"] is None
+    (record,) = _records(conn, job).values()
+    trigger = record["diaSource"]
+    assert (trigger["firstRefMjd"], trigger["lastRefMjd"]) == (None, None)
+    (previous,) = record["prvDiaSources"]
+    assert previous["midpointMjd"] < trigger["midpointMjd"]
+    assert (previous["firstRefMjd"], previous["lastRefMjd"]) == (
+        pytest.approx(MJD[1] - 400.0), pytest.approx(MJD[1] - 300.0))
+    recorded = query(conn, "SELECT source_job FROM job_inputs WHERE job = %s AND kind = 'input'"
+                           " AND product = 'refimages' ORDER BY source_job", (job,))
+    assert [j for (j,) in recorded] == sorted([founder, reference])  # the named input, and the one read
