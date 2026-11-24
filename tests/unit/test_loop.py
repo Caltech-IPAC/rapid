@@ -84,6 +84,12 @@ for it (the run's fixed ``program_id``, else the stem's) is selected, a row
 only when its exposure's official ``program_id`` is, a row without one never;
 no intake, reference frame or difference comes from an unselected program,
 and an official reference built from any program is still used; all by default.
+With ``[reference.psfcat] enabled`` a reference names the PSF rows
+``[difference] reference_psf`` calls for at its filter and scope SCA, and
+under ``"measured"`` expects the 18 keys of its own measured set, each
+naming the binding it replaces; a missing science row plans one psf job
+from the reference's stem and holds the reference, and a missing set row
+stops the pass; with the catalog off a reference names no PSF.
 """
 
 from __future__ import annotations
@@ -1547,3 +1553,81 @@ def test_the_snapshot_keys_a_reference_psf_by_its_set():
 
     assert loop.snapshot(Conn(), 1).psfs == {(8, 8, "science", None): (10, 100),
                                              (8, 8, "reference", REFERENCE_SET): (15, 105)}
+
+
+def psfcat_settings(mode: str, psf_set: str = "") -> dict:
+    return {**SETTINGS, "reference": {"selection": {"min_frames": 2}, "psfcat": {"enabled": True}},
+            "difference": {"reference_psf": mode, "reference_psf_set": psf_set}}
+
+
+def two_rows(sca: int = 8) -> dict:
+    return {(expid(1, 1, 1), sca, 8): {**l2row(7, 1.0, 20), "stem": stem(1, 1, 1, sca)},
+            (expid(2, 1, 1), sca, 8): {**l2row(7, 2.0, 21), "stem": stem(2, 1, 1, sca)}}
+
+
+PSFS = {(8, 8, "science", None): (10, 100), (8, 8, "reference", REFERENCE_SET): (15, 105)}
+
+
+@pytest.mark.parametrize("mode, psf_set, kinds", [
+    ("precomputed", REFERENCE_SET, [("reference", 15)]),
+    ("measured", REFERENCE_SET, [("reference", 15), ("science", 10)]),
+    ("measured", "", [("science", 10)]),
+    ("science", "", [("science", 10)]),
+])
+def test_a_reference_names_the_psf_rows_its_mode_calls_for(mode, psf_set, kinds):
+    subs, _ = loop.plan(snap(settings=psfcat_settings(mode, psf_set), l2=two_rows(), psfs=PSFS), [], SEL)
+    (ref,) = stages(subs, "reference")
+    named = [(i["key"]["kind"], i["source_job"]) for i in ref["inputs"] if i["product"] == "psfs"]
+    assert named == kinds and all(i["key"]["sca"] == 8 for i in ref["inputs"] if i["product"] == "psfs")
+    expects = [e for e in ref["expects"] if e["product"] == "psfs"]
+    assert len(expects) == (18 if mode == "measured" else 0)
+
+
+def test_a_measured_reference_expects_its_own_sets_18_keys_naming_any_binding_they_replace():
+    psfs = {**PSFS, (8, 3, "reference", "refimage-7-F146"): (16, 106)}
+    subs, _ = loop.plan(snap(settings=psfcat_settings("measured"), l2=two_rows(), psfs=psfs), [], SEL)
+    (ref,) = stages(subs, "reference")
+    assert ref["expects"][0]["product"] == "refimages"
+    expects = ref["expects"][1:]
+    assert [e["key"]["sca"] for e in expects] == list(range(1, 19))
+    assert {(e["key"]["psf_set"], e["key"]["kind"], e["key"]["fid"]) for e in expects} == {
+        ("refimage-7-F146", "reference", 8)}
+    assert [e["binding"] for e in expects if e["binding"] is not None] == [106]
+    assert expects[2]["key"]["sca"] == 3 and expects[2]["binding"] == 106
+
+
+def test_with_the_catalog_off_a_reference_names_no_psf():
+    subs, _ = loop.plan(snap(settings={**SETTINGS, "difference": {"reference_psf": "precomputed",
+                                                                  "reference_psf_set": REFERENCE_SET}},
+                             l2=two_rows(), psfs=PSFS), [], SEL)
+    (ref,) = stages(subs, "reference")
+    assert [i["product"] for i in ref["inputs"]] == ["l2files", "l2files"] and len(ref["expects"]) == 1
+
+
+def test_a_missing_science_row_plans_its_psf_job_from_the_references_stem_and_holds_it():
+    sel = loop.Selection.parse("F146", "9", "all")
+    subs, counts = loop.plan(snap(settings=psfcat_settings("measured"), l2=two_rows(sca=9), psfs=PSFS),
+                             [], sel)
+    assert stages(subs, "reference") == []
+    (psf,) = stages(subs, "psf")
+    assert psf["scope"] == {"dataset": D, "file": stem(1, 1, 1, 9)}
+    assert psf["expects"][0]["key"] == {"dataset": D, "fid": 8, "sca": 9, "kind": "science"}
+    assert counts["held"] == [{"field": 7, "fid": 8, "reason": "waits for the official science psfs row of"
+                               " fid 8 sca 9, its psf job planned"}]
+
+    pending = [{"id": 61, "stage": "psf", "state": "running", "scope": {"dataset": D, "file": stem(1, 1, 1, 9)}}]
+    subs, counts = loop.plan(snap(settings=psfcat_settings("science"), l2=two_rows(sca=9), psfs=PSFS,
+                                  jobs=pending), [], sel)
+    assert subs == [] and counts["held"][0]["reason"] == "waits for the official science psfs row of fid 8 sca 9"
+
+    subs, _ = loop.plan(snap(settings=psfcat_settings("science"), l2=two_rows(sca=9),
+                             psfs={**PSFS, (8, 9, "science", None): (12, 102)}), [], sel)
+    (ref,) = stages(subs, "reference")
+    assert [i["source_job"] for i in ref["inputs"] if i["product"] == "psfs"] == [12]
+
+
+def test_a_reference_whose_runs_set_has_no_official_row_stops_the_pass_and_says_why():
+    with pytest.raises(loop.NotFound, match=f"no official reference psfs row of set '{REFERENCE_SET}'"
+                                            " for fid 8 sca 8"):
+        loop.plan(snap(settings=psfcat_settings("precomputed", REFERENCE_SET), l2=two_rows(),
+                       psfs={(8, 8, "science", None): (10, 100)}), [], SEL)

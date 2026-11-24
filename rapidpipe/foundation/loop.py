@@ -143,6 +143,19 @@ One pass, in order:
   min_frames`` of them; its scope's SCA is the first in order among the
   rows that will be differenced against it. A dithered visit's later
   epoch so gets a reference from earlier epochs centred in other fields.
+  With ``[reference.psfcat] enabled`` its PSF follows ``[difference]
+  reference_psf``: it names the official science ``psfs`` row of its
+  filter and scope SCA under ``"measured"`` and ``"science"``, the run's
+  set's row under ``"precomputed"`` and under ``"measured"`` with a set
+  named, and under ``"measured"`` it expects the 18 reference ``psfs``
+  keys of set ``refimage-<field>-<filter>`` its measured PSF binds, each
+  naming the binding it replaces. A missing set row stops the pass with
+  ``NotFound``; a missing science row plans a ``psf`` job for the pair
+  from one of the reference's stems (unless one of the run serves it) and
+  holds the reference under ``held`` until the row is official. A
+  reference graded status 0 is published with its binding refused, so it
+  is reported under ``failed``, holds its field and filter in the run, and
+  gets no difference.
 - With ``[reference.selection] selection_type = "coverage"``
   (``rapidpipe.products.coverage``) the frames are chosen by how much of the
   reference they cover: the candidates are the selected official rows of the
@@ -208,7 +221,7 @@ import psycopg2.extras
 from rapidpipe.foundation import attempts
 from rapidpipe.foundation.official import NotFound
 from rapidpipe.products import coverage
-from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name
+from rapidpipe.products.filters import RAPID_TO_ROMAN_FILTER_NAMES, rapid_filter_name, refimage_psf_set
 from rapidpipe.products.storage import split_source_root
 
 #: A SOC L2 stem, the fields the selection reads (the intake stage parses all of them).
@@ -1014,12 +1027,16 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         pair = (fids[a["filter"]], a["sca"])
         if (*pair, "science", None) not in snap.psfs:
             unready.setdefault(pair, stem)
-    for (fid, sca), stem in sorted(unready.items()):
-        if (fid, sca) in served:
-            continue
+    def psf_job(fid, sca, stem):
+        served.add((fid, sca))
         out.append({"stage": "psf", "scope": {"dataset": d, "file": stem}, "inputs": [],
                     "expects": [{"product": "psfs", "key": {"dataset": d, "fid": fid, "sca": sca,
                                                             "kind": "science"}, "binding": None}]})
+
+    for (fid, sca), stem in sorted(unready.items()):
+        if (fid, sca) in served:
+            continue
+        psf_job(fid, sca, stem)
     ready_stems = [s for s in new if (fids[admitted[s]["filter"]], admitted[s]["sca"]) not in unready]
     for stem in ready_stems[:max_intake]:
         a = admitted[stem]
@@ -1042,6 +1059,18 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
     intake_pending = bool(pending["intake"])
     bound = snap.settings["reference"]["selection"].get("before_mjd")
     after = {k: v for k, v in selected.items() if bound is None or v["mjdobs"] >= float(bound)}
+
+    def reference_psf_wait(fid, sca, rows):
+        """Plan the science PSF a reference needs from one of its stems, once, and say why it waits."""
+        if (fid, sca) in served:
+            return f"waits for the official science psfs row of fid {fid} sca {sca}"
+        stems = [selected[e, s, fid].get("stem") for e, s, _ in rows if s == sca]
+        stems += [row.get("stem") for (_, s, f), row in sorted(selected.items()) if (s, f) == (sca, fid)]
+        stem = next((x for x in stems if x), None)
+        if stem is None:
+            return f"no official science psfs row of fid {fid} sca {sca}, and no stem to plan its psf job from"
+        psf_job(fid, sca, stem)
+        return f"waits for the official science psfs row of fid {fid} sca {sca}, its psf job planned"
 
     # Reference: per (field, filter) a row to be differenced has as its own field, from the rows
     # (before the bound, when set) whose overlapfields list it ("nframes") or any tile under the
@@ -1072,6 +1101,9 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
         skip = set(snap.refs) | held_refs
         held_why = select_by_coverage(snap.settings["reference"], pool,
                                       {need: rows for need, rows in frames.items() if need not in skip})
+    # With [reference.psfcat] on, the reference's PSF follows [difference] reference_psf.
+    psfcat_on = bool(snap.settings["reference"].get("psfcat", {}).get("enabled", False))
+    filter_names = {fid: name for name, fid in snap.fids.items()}
     held = []
     if ready:
         for (field, fid), rows in sorted(frames.items()):
@@ -1082,12 +1114,28 @@ def plan(snap: Snapshot, stems: Iterable[str], selection: Selection,
                 continue
             if mode == "nframes" and len(rows) < min_frames:
                 continue
+            sca = scope_sca[field, fid]
+            psf_inputs, psf_expects = [], []
+            if psfcat_on and psf_mode in ("measured", "science"):
+                if (fid, sca, "science", None) not in snap.psfs:
+                    held.append({"field": field, "fid": fid, "reason": reference_psf_wait(fid, sca, rows)})
+                    continue
+                psf_inputs.append(psf(fid, sca, "science"))
+            if psfcat_on and bind_reference:
+                psf_inputs.insert(0, psf(fid, sca, "reference", reference_set))
+            if psfcat_on and psf_mode == "measured":
+                stored = refimage_psf_set(field, filter_names[fid])
+                psf_expects = [{"product": "psfs",
+                                "key": {"dataset": d, "fid": fid, "sca": s, "kind": "reference", "psf_set": stored},
+                                "binding": snap.psfs.get((fid, s, "reference", stored), (None, None))[1]}
+                               for s in range(1, 19)]
             held_refs.add((field, fid))
-            out.append({"stage": "reference", "scope": {"field": field, "fid": fid, "sca": scope_sca[field, fid]},
-                        "inputs": [{"product": "l2files", "key": key(e, s, fid), "source_job": j}
-                                   for e, s, j in rows],
+            out.append({"stage": "reference", "scope": {"field": field, "fid": fid, "sca": sca},
+                        "inputs": [*[{"product": "l2files", "key": key(e, s, fid), "source_job": j}
+                                     for e, s, j in rows], *psf_inputs],
                         "expects": [{"product": "refimages",
-                                     "key": {"dataset": d, "field": field, "fid": fid}, "binding": None}]})
+                                     "key": {"dataset": d, "field": field, "fid": fid}, "binding": None},
+                                    *psf_expects]})
 
     # Difference: per official L2 row with an official reference, after the bound when one is set.
     held_diffs = {scope_l2(j) for j in taken["difference"]}

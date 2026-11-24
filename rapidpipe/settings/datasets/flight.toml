@@ -94,6 +94,12 @@ lookup = true
 selection_type = "coverage"
 max_frames = 50
 
+[reference.psfcat]
+# The PSF-fit catalog and its InfoBits 5, 6, 7 and 16, so a poor reference is graded status 0 and not made official (Azalee, 2026-11-10).
+enabled = true
+# DAOStarFinder's sharpness ceiling, a string as the base's; 1.8 set from the OpenUniverse sharpness distribution, which 1.0 cut a significant fraction of; flight only, the base keeps 1.0 for the simulations (Azalee, corrected 2026-11-11).
+sharphi = "1.8"
+
 [reference.awaicgen]
 # Each reference input is scaled by the table above, not its own ZPTMAG, so
 # every frame of a filter gets one scale factor while the per-frame

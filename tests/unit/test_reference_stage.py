@@ -20,6 +20,19 @@ tolerance fails before awaicgen, and a measured fraction below the minimum
 fails after it, each exit 65 with the fraction as the reason and no
 manifest; ``"nframes"`` leaves the header without them; a body stored
 before ``selection_type`` reads ``"nframes"``.
+With ``[reference.psfcat] enabled`` the catalog's PSF follows
+``[difference] reference_psf``: ``"precomputed"`` reads the set's row (its
+MD5 checked, exit 65 otherwise), ``"science"`` the science row, and
+``"measured"`` measures the mosaic and stores the PSF as 18 ``reference``
+rows of set ``refimage-<field>-<filter>`` sharing one file; a measurement
+error falls back to a named set (no rows, ``unbound``) or, with none,
+leaves no catalog, InfoBit 16 and status 0; the PSF-fit catalog is
+``refimcatalogs`` cattype 2 with its source count in the manifest and
+``refimmeta.npucatsources``; a
+status 0 reference's manifest carries ``refused`` with its fatal bits;
+psfs inputs or expects the settings do not call for are rejected 65; the
+flight overlay's resolved ``[reference]`` table is valid with the catalog
+on and ``sharphi`` 1.8.
 """
 
 from __future__ import annotations
@@ -32,6 +45,7 @@ import re
 import tomllib
 from pathlib import Path
 
+import numpy as np
 import pyarrow.parquet as pq
 import pytest
 from astropy.io import fits
@@ -39,8 +53,11 @@ from astropy.wcs import WCS
 
 import rapidpipe.stages.reference as reference
 from rapidpipe.exitcodes import CommandExit
+from rapidpipe.foundation.layers import resolve
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.science.reference import infobits
+from rapidpipe.science.difference import refpsf
+from rapidpipe.science.difference.psfcat import PsfCatalogResult
 from tests.support import fakereftools
 from tests.support.fakedifftools import cdf_dir
 from tests.support.fakereftools import FRAMES, RTID, write_frames
@@ -70,10 +87,10 @@ def settings(**tables) -> dict:
 
 
 def fake_connect(rows: dict[int, tuple[int, str]], queries: list, corners: dict | None = None,
-                 mjdobs: dict | None = None):
+                 mjdobs: dict | None = None, psfs: dict | None = None):
     """A connection answering the filter, each ``l2files`` row by source job, ``nextval`` and
     the named rows' corners by ``rid`` (``corners``), each with its corners' mean as its centre,
-    its ``mjdobs`` (``mjdobs``, else its frame's) and its key."""
+    its ``mjdobs`` (``mjdobs``, else its frame's) and its key, and each ``psfs`` row by source job (``psfs``)."""
     class Cursor:
         def __enter__(self):
             return self
@@ -92,6 +109,8 @@ def fake_connect(rows: dict[int, tuple[int, str]], queries: list, corners: dict 
                               for rid in params[0] if rid in (corners or {})]
             elif "FROM l2files" in statement:
                 self.row = rows.get(params[0])
+            elif "FROM psfs" in statement:
+                self.row = (psfs or {}).get(params[0])
             else:
                 assert "nextval" in statement
                 self.row = (RFID,)
@@ -132,11 +151,11 @@ def frame_corners(path: Path) -> tuple[list[float], list[float]]:
 
 
 def run_reference(tmp_path: Path, frames: list[Path], *, order=(2, 0, 1), body=None,
-                  key_override=None, corners=None, mjdobs=None) -> Path:
-    """Run a job naming ``frames`` (as source jobs 10, 11, ... in ``order``); return its prefix."""
+                  key_override=None, corners=None, mjdobs=None, psf_inputs=(), psfs=None) -> Path:
+    """Run a job naming ``frames`` (as source jobs 10, 11, ... in ``order``) and ``psf_inputs``; return its prefix."""
     prefix = tmp_path / "prefix"
     prefix.mkdir(exist_ok=True)
-    inputs, rows = [], {}
+    inputs, rows = list(psf_inputs), {}
     for n, index in enumerate(order):
         source_job = 10 + n
         key = {"dataset": "D", "expid": 100 + index, "sca": SCA, "fid": FID, **(key_override or {})}
@@ -147,7 +166,7 @@ def run_reference(tmp_path: Path, frames: list[Path], *, order=(2, 0, 1), body=N
                      survey="S", dataset="D", settings=body or settings(), inputs=inputs,
                      attempt=1, prefix=prefix.as_uri() + "/",
                      connect=fake_connect(rows, [], corners or {7000 + i: frame_corners(f) for i, f in enumerate(frames)},
-                                          mjdobs))
+                                          mjdobs, psfs))
     reference.run(job)
     return prefix
 
@@ -226,7 +245,9 @@ def test_a_frame_of_another_sca_is_coadded(tmp_path, frames):
 
 
 @pytest.mark.parametrize("tables", [
-    {"psfcat": {"enabled": True}},
+    {"psfcat": {"enabled": "yes"}},
+    {"psfcat": {"enabled": True, "fit_shape": "(17)"}},
+    {"psfcat": {"enabled": True, "output_psfcat_filename": "refimage_psf.fits"}},
     {"fake_sources": {"inject_fake_sources_flag": True}},
     {"selection": {"min_frames": 5, "max_frames": 4}},
     {"mosaic": {"ra_center": 10.0}},
@@ -420,3 +441,254 @@ def test_refimmeta_s_healpix_indexes_wrap_at_ra_zero(ra):
                                       mjdobs=[61000.5, 61000.1], measurements=m, fwhm=fwhm)
     assert (row["hp6"], row["hp9"]) == (wrapped["hp6"], wrapped["hp9"])
     assert (row["mjdobsmin"], row["mjdobsmax"], row["nframes"]) == ([61000.1], [61000.5], [2])
+
+
+# ----------------------------------------------------------------------
+# The PSF-fit catalog and the reference PSF it uses
+# ----------------------------------------------------------------------
+
+SET = "1043_20260928"
+MEASURED_SET = "refimage-4711398-F146"
+SCIENCE_JOB, SET_JOB = 40, 41
+
+
+def write_psf(path: Path, size: int = 31, sigma: float = 1.2) -> str:
+    """A Gaussian stamp, not normalised; returns its MD5."""
+    yy, xx = np.mgrid[:size, :size] - (size - 1) / 2
+    fits.PrimaryHDU((5.0 * np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))).astype("float32")).writeto(path)
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+@pytest.fixture()
+def psf_files(tmp_path) -> dict:
+    """The science row's and the set row's files, answered by source job."""
+    (tmp_path / "psfs").mkdir()
+    science, reference_file = tmp_path / "psfs" / "science.fits", tmp_path / "psfs" / "refimage_psf_fid8.fits"
+    write_psf(science)
+    md5 = write_psf(reference_file, sigma=1.4)
+    return {SCIENCE_JOB: (science.as_uri(),), SET_JOB: (7, reference_file.as_uri(), md5)}
+
+
+def psf_input(kind: str) -> dict:
+    key = {"dataset": "D", "fid": FID, "sca": SCA, "kind": kind}
+    if kind == "reference":
+        key["psf_set"] = SET
+    return {"kind": "input", "product": "psfs", "key": key,
+            "source_job": SET_JOB if kind == "reference" else SCIENCE_JOB, "binding": None}
+
+
+def measured_expects(psf_set: str = MEASURED_SET) -> list[dict]:
+    return [{"kind": "expects", "product": "psfs", "binding": None,
+             "key": {"dataset": "D", "fid": FID, "sca": s, "kind": "reference", "psf_set": psf_set}}
+            for s in range(1, 19)]
+
+
+def catalog_body(mode: str, psf_set: str = SET, **infobits) -> dict:
+    body = settings(psfcat={"enabled": True}, infobits={"t08": 1, **infobits})
+    body["difference"] = {"reference_psf": mode, "reference_psf_set": psf_set}
+    return body
+
+
+class FakeCatalog:
+    """Stands in for ``psf_catalog``: writes a text catalog of ``n`` sources with ``flux_err``, or none."""
+
+    def __init__(self, n: int = 40):
+        self.n, self.calls = n, []
+
+    def __call__(self, settings, *, image, uncertainty, psf, sky_coords_image, catalog, finder,
+                 residual, parquet, label, seed=None):
+        self.calls.append({"psf": psf, "sharphi": settings.sharphi, "fit_shape": settings.fit_shape})
+        if self.n == 0:
+            return PsfCatalogResult(produced=False, nsources=None)
+        rows = "\n".join(f"{i} {i}.0 {i}.0 100.0 0.02" for i in range(1, self.n + 1))
+        Path(catalog).write_text("id x_fit y_fit flux_fit flux_err\n" + rows + "\n")
+        Path(finder).write_text("id\n" + "\n".join(str(i) for i in range(1, self.n + 1)) + "\n")
+        Path(parquet).write_bytes(b"")
+        return PsfCatalogResult(produced=True, nsources=self.n)
+
+
+def measured_psf(stars: int = 12):
+    def measure(image, usable, science):
+        assert usable.shape == image.shape and usable.any() and science.shape == (31, 31)
+        return refpsf.ReferencePsf(stamp=science, stars=stars, detections=30, passed_cuts=stars,
+                                   sigma_px=1.2, centroid_px=(0.0, 0.0), star_sigma_px=1.25)
+    return measure
+
+
+def too_few(image, usable, science):
+    raise refpsf.TooFewStars(3)
+
+
+@pytest.fixture()
+def catalog_kit(monkeypatch):
+    made = FakeCatalog()
+
+    def kit(measure=measured_psf()):
+        monkeypatch.setattr(reference, "toolkit", lambda: reference.Toolkit(
+            runner=fakereftools.FakeReferenceToolRunner(), reference_psf=measure, psf_catalog=made))
+        return made
+    return kit
+
+
+def manifest_of(prefix: Path) -> dict:
+    return json.loads((prefix / "manifest.json").read_text())
+
+
+def test_precomputed_catalogs_with_the_sets_row_and_registers_cattype_2(tmp_path, frames, psf_files,
+                                                                          catalog_kit):
+    made = catalog_kit()
+    prefix = run_reference(tmp_path, frames, body=catalog_body("precomputed"),
+                           psf_inputs=[psf_input("reference")], psfs=psf_files)
+    manifest = manifest_of(prefix)
+    assert [o["table"] for o in manifest["outputs"]] == ["refimages", "refimimages", "refimcatalogs", "refimmeta"]
+    cats = {r["cattype"]: r for r in read(prefix, "refimcatalogs")}
+    assert sorted(cats) == [1, 2] and cats[2]["filename"].endswith("/ref/refimage_psfcat.txt")
+    assert cats[2]["checksum"] == hashlib.md5(
+        Path(cats[2]["filename"].removeprefix("file://")).read_bytes()).hexdigest()
+    used = fits.getdata(prefix / "ref" / reference.REFERENCE_PSF_NAME)
+    assert made.calls[0]["psf"].endswith("ref/refimage_psf.fits") and used.sum() == pytest.approx(1.0)
+    assert fits.getheader(prefix / "ref" / reference.REFERENCE_PSF_NAME)["PSFSET"] == SET
+    assert manifest["refpsf"]["mode"] == "precomputed" and manifest["refpsf"]["psfs"]["psfid"] == 7
+    assert manifest["reference"]["npsfcatsources"] == 40 and manifest["reference"]["psfcat_flag"] is True
+    assert [m["npucatsources"] for m in read(prefix, "refimmeta")] == [40]
+    quality = manifest["reference"]["quality"]
+    assert quality["npsfcat"] == 40 and quality["maglimcat"] == pytest.approx(
+        26.863 - 2.5 * np.log10(5 * 0.02), abs=1e-3)
+    assert quality["maglimit"] is not None and "refused" not in manifest and "unbound" not in manifest
+    (ref,) = read(prefix, "refimages")
+    assert ref["status"] == 1 and not ref["infobits"] & (2**5 | 2**7 | 2**16)
+
+
+def test_the_catalog_reads_sharphi_and_fit_shape_from_the_runs_table(tmp_path, frames, psf_files, catalog_kit):
+    made = catalog_kit()
+    body = catalog_body("precomputed")
+    body["reference"]["psfcat"]["sharphi"] = "1.8"
+    run_reference(tmp_path, frames, body=body, psf_inputs=[psf_input("reference")], psfs=psf_files)
+    assert (made.calls[0]["sharphi"], made.calls[0]["fit_shape"]) == (1.8, (17, 17))
+
+
+def test_a_set_file_whose_md5_is_not_the_rows_fails_65(tmp_path, frames, psf_files, catalog_kit):
+    catalog_kit()
+    psf_files[SET_JOB] = (*psf_files[SET_JOB][:2], "0" * 32)
+    with pytest.raises(CommandExit, match="is not the row's checksum") as stopped:
+        run_reference(tmp_path, frames, body=catalog_body("precomputed"),
+                      psf_inputs=[psf_input("reference")], psfs=psf_files)
+    assert stopped.value.code == 65 and not (tmp_path / "prefix" / "manifest.json").exists()
+
+
+def test_science_catalogs_with_the_science_row_and_stores_nothing(tmp_path, frames, psf_files, catalog_kit):
+    catalog_kit()
+    prefix = run_reference(tmp_path, frames, body=catalog_body("science", ""),
+                           psf_inputs=[psf_input("science")], psfs=psf_files)
+    manifest = manifest_of(prefix)
+    assert manifest["refpsf"]["mode"] == "science" and "psfs" not in [o["table"] for o in manifest["outputs"]]
+    assert sorted(r["cattype"] for r in read(prefix, "refimcatalogs")) == [1, 2]
+
+
+def test_measured_stores_its_psf_as_18_rows_of_its_own_set_sharing_one_file(tmp_path, frames, psf_files,
+                                                                           catalog_kit):
+    catalog_kit()
+    prefix = run_reference(tmp_path, frames, body=catalog_body("measured", ""),
+                           psf_inputs=[psf_input("science"), *measured_expects()], psfs=psf_files)
+    manifest = manifest_of(prefix)
+    assert [o["table"] for o in manifest["outputs"]] == ["refimages", "refimimages", "refimcatalogs", "refimmeta",
+                                                          "psfs"]
+    assert set(pq.read_schema(prefix / "psfs.parquet").names) == schema_columns("psfs") - {"psfid"}
+    rows = read(prefix, "psfs")
+    stored = prefix / "ref" / reference.REFERENCE_PSF_NAME
+    assert sorted(r["sca"] for r in rows) == list(range(1, 19))
+    assert {(r["dataset"], r["fid"], r["kind"], r["psf_set"], r["filename"], r["checksum"], r["status"])
+            for r in rows} == {("D", FID, "reference", MEASURED_SET, stored.as_uri(),
+                                hashlib.md5(stored.read_bytes()).hexdigest(), 1)}
+    assert fits.getheader(stored)["NSTARS"] == 12
+    assert manifest["refpsf"]["stars"] == 12 and manifest["refpsf"]["stored_set"] == MEASURED_SET
+    assert "unbound" not in manifest and "fallback" not in manifest["refpsf"]
+
+
+@pytest.mark.parametrize("error", [too_few, lambda image, usable, science: 1 / 0])
+def test_a_measurement_error_falls_back_to_the_named_set_and_stores_nothing(tmp_path, frames, psf_files,
+                                                                          catalog_kit, error):
+    made = catalog_kit(error)
+    prefix = run_reference(tmp_path, frames, body=catalog_body("measured"),
+                           psf_inputs=[psf_input("reference"), psf_input("science"), *measured_expects()],
+                           psfs=psf_files)
+    manifest = manifest_of(prefix)
+    assert manifest["refpsf"]["fallback"] is True and manifest["refpsf"]["measure_error"]
+    assert manifest["refpsf"]["psf_set"] == SET and manifest["unbound"] == ["psfs"]
+    assert "psfs" not in [o["table"] for o in manifest["outputs"]] and len(made.calls) == 1
+    assert sorted(r["cattype"] for r in read(prefix, "refimcatalogs")) == [1, 2]
+
+
+def test_a_fallback_that_fails_its_checks_fails_65_with_both_errors(tmp_path, frames, psf_files, catalog_kit):
+    catalog_kit(too_few)
+    psf_files[SET_JOB] = (*psf_files[SET_JOB][:2], "0" * 32)
+    with pytest.raises(CommandExit, match="checksum.*the measurement before it: refpsf: 3 stars") as stopped:
+        run_reference(tmp_path, frames, body=catalog_body("measured"),
+                      psf_inputs=[psf_input("reference"), psf_input("science")], psfs=psf_files)
+    assert stopped.value.code == 65
+
+
+def test_a_measurement_error_with_no_set_makes_no_catalog_and_a_status_0_refused_reference(
+        tmp_path, frames, psf_files, catalog_kit):
+    made = catalog_kit(too_few)
+    prefix = run_reference(tmp_path, frames, body=catalog_body("measured", ""),
+                           psf_inputs=[psf_input("science"), *measured_expects()], psfs=psf_files)
+    manifest = manifest_of(prefix)
+    (ref,) = read(prefix, "refimages")
+    assert made.calls == [] and [r["cattype"] for r in read(prefix, "refimcatalogs")] == [1]
+    assert ref["infobits"] & 2**16 and ref["infobits"] & 2**7 and ref["status"] == 0
+    assert manifest["refused"].startswith("reference status 0: fatal InfoBits 7, 16")
+    assert manifest["unbound"] == ["psfs"] and manifest["reference"]["npsfcatsources"] == 0
+    assert [m["npucatsources"] for m in read(prefix, "refimmeta")] == [0]
+    assert manifest["reference"]["quality"]["maglimit"] is None
+    assert not (prefix / "ref" / reference.REFERENCE_PSF_NAME).exists()
+
+
+def test_a_catalog_with_no_source_sets_bit_16(tmp_path, frames, psf_files, catalog_kit):
+    made = catalog_kit()
+    made.n = 0
+    prefix = run_reference(tmp_path, frames, body=catalog_body("precomputed"),
+                           psf_inputs=[psf_input("reference")], psfs=psf_files)
+    (ref,) = read(prefix, "refimages")
+    assert ref["infobits"] & 2**16 and ref["status"] == 0
+    assert manifest_of(prefix)["reference"]["quality"]["maglimcat"] is None
+
+
+def test_the_fake_catalogs_status_0_reference_carries_refused_with_its_fatal_bits(tmp_path, frames):
+    manifest = manifest_of(run_reference(tmp_path, frames))
+    assert manifest["refused"] == ("reference status 0: fatal InfoBits 8 (infobits 257); "
+                                   "published, not made official")
+
+
+@pytest.mark.parametrize("mode, psf_set, named", [
+    ("precomputed", SET, ["science"]),
+    ("measured", SET, ["science"]),
+    ("science", "", []),
+])
+def test_psfs_inputs_the_settings_do_not_call_for_are_rejected_65(tmp_path, frames, psf_files, catalog_kit,
+                                                                  mode, psf_set, named):
+    catalog_kit()
+    with pytest.raises(CommandExit, match="names psfs inputs of kinds") as stopped:
+        run_reference(tmp_path, frames, body=catalog_body(mode, psf_set),
+                      psf_inputs=[psf_input(k) for k in named], psfs=psf_files)
+    assert stopped.value.code == 65
+
+
+@pytest.mark.parametrize("mode, expects", [("measured", measured_expects("refimage-1-F146")),
+                                           ("science", measured_expects())])
+def test_psfs_expects_other_than_the_measured_sets_18_keys_are_rejected_65(tmp_path, frames, psf_files,
+                                                                          catalog_kit, mode, expects):
+    catalog_kit()
+    with pytest.raises(CommandExit, match="psfs expects are only the 18 keys") as stopped:
+        run_reference(tmp_path, frames, body=catalog_body(mode, ""),
+                      psf_inputs=[psf_input("science"), *expects], psfs=psf_files)
+    assert stopped.value.code == 65
+
+
+def test_the_flight_overlays_reference_table_turns_the_catalog_on_with_sharphi_1_8():
+    flight, _ = resolve(REPO / "rapidpipe/settings/foundation-thin.toml",
+                        REPO / "rapidpipe/settings/datasets/flight.toml")
+    assert reference.check_settings(flight["reference"]).psfcat is True
+    assert flight["reference"]["psfcat"]["sharphi"] == "1.8" and THIN["reference"]["psfcat"]["sharphi"] == "1.0"
+    assert THIN["reference"]["psfcat"]["enabled"] is False
+    assert reference.reference_psf_mode(flight["difference"]) == ("precomputed", SET)

@@ -30,6 +30,14 @@ loaded no rows, a table its manifest does not declare included, unless
 ``empty_ok`` names it: the rows stay published and unbound, the refusal on
 the job, as for any refused binding.
 
+Two more let a stage shape its own binding. ``refused``, a reason: the
+stage refuses its binding itself (a reference graded status 0), so its
+rows load and stay unbound, and the reason is the job's ``refusal``.
+``unbound``, a list of tables whose expected keys the stage did not
+produce this attempt (a reference whose measured PSF fell back to a set
+writes no ``psfs`` rows): the binding leaves those keys out, neither
+closing nor opening them, and binds the rest.
+
 The tables of :data:`CHILDREN` keep their rows in child tables that
 inherit them (``schema.sql``): those of :data:`DATE_SCA_CHILDREN` one per
 UT observation date and SCA, as `dev`'s sources and xsources do, those of
@@ -249,7 +257,8 @@ def publish(conn, job_id: int, attempt: int, prefix: str) -> dict[str, Any]:
             hold["record"] = time.perf_counter() - recording
             with _held(hold, "bind"):
                 group, refusal, live = _bind(cur, job_id, run, loaded,
-                                             set(manifest.get("empty_ok", [])))
+                                             set(manifest.get("empty_ok", [])),
+                                             manifest.get("refused"), set(manifest.get("unbound", [])))
         with _held(hold, "commit"):
             conn.commit()
     except BaseException:
@@ -426,16 +435,36 @@ def _reconcile(cur, job_id: int, manifest: dict, reads: list[dict],
                 float(manifest[key]["radius"]), ident, sid)
 
 
-def _bind(cur, job_id: int, run: int, loaded: dict[str, int],
-          empty_ok: set[str]) -> tuple[int | None, str | None, bool | None]:
+def _bind(cur, job_id: int, run: int, loaded: dict[str, int], empty_ok: set[str],
+          refused: str | None = None,
+          unbound: set[str] = frozenset()) -> tuple[int | None, str | None, bool | None]:
     """The automatic binding, inside a savepoint; returns (group id, refusal, run live).
 
-    ``loaded`` is the rows each table loaded; an expected product with none,
-    not in ``empty_ok``, refuses the binding.
+    Parameters
+    ----------
+    cur : psycopg2 cursor
+        A cursor in the publishing transaction.
+    job_id, run : int
+        The job and its run.
+    loaded : dict of str to int
+        The rows each table loaded; an expected product with none, not in ``empty_ok``,
+        refuses the binding.
+    empty_ok : set of str
+        The manifest's ``empty_ok``.
+    refused : str or None
+        The manifest's ``refused``: the stage's own reason to refuse the whole binding.
+    unbound : set of str
+        The manifest's ``unbound``: tables whose expected keys the binding leaves out.
+
+    Returns
+    -------
+    tuple
+        The change group's id or ``None``, the refusal or ``None``, and whether the run was live
+        (``None`` when nothing was expected).
     """
     cur.execute("SELECT product, key, binding FROM job_inputs"
                 " WHERE job = %s AND kind = 'expects' ORDER BY product", (job_id,))
-    expects = cur.fetchall()
+    expects = [e for e in cur.fetchall() if e[0] not in unbound]
     if not expects:
         return None, None, None
     cur.execute("SAVEPOINT automatic_binding")
@@ -444,6 +473,8 @@ def _bind(cur, job_id: int, run: int, loaded: dict[str, int],
                 " WHERE o.run = %s AND o.closed_at IS NULL", (run,))
     live = cur.fetchone() is not None
     try:
+        if refused:
+            raise Refused(refused)
         empty = sorted({product for product, _, _ in expects
                         if not loaded.get(product) and product not in empty_ok})
         if empty:
