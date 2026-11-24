@@ -161,7 +161,7 @@ class Pages:
 def snap(**kw) -> loop.Snapshot:
     base = dict(dataset=D, survey="HLWAS", settings=SETTINGS, fids={"W146": 8, "F184": 1},
                 published_stems=set(), jobs=[],
-                psfs={(8, 8, "science"): (10, 100)},
+                psfs={(8, 8, "science", None): (10, 100)},
                 exposures=set(), l2={}, refs={}, diffs={}, sources={}, packets={},
                 catalogs={"gaia": {"key": {"dataset": D, "name": "gaia", "version": "DR3"}, "job": 12}})
     base.update(kw)
@@ -508,14 +508,14 @@ def test_a_dithered_visits_last_epoch_is_referenced_from_the_earlier_epochs_that
           e2: l2row(3014320, 2.0, 21, overlap=(3010224, 3014319)),
           e3: l2row(3014320, 2.1, 22, overlap=(3010224, 3014319)),
           e4: l2row(3010224, 3.0, 23, overlap=(3014320,))}
-    subs, counts = loop.plan(snap(settings=BOUND, l2=l2, psfs={(8, 2, "science"): (10, 100)}), [], sel)
+    subs, counts = loop.plan(snap(settings=BOUND, l2=l2, psfs={(8, 2, "science", None): (10, 100)}), [], sel)
     (ref,) = stages(subs, "reference")
     assert ref["scope"] == {"field": 3010224, "fid": 8, "sca": 2}
     assert [i["source_job"] for i in ref["inputs"]] == [20, 21, 22] and counts["held"] == []
 
     # Once it is official, epoch 4 is differenced against it, and nothing else is.
     subs, _ = loop.plan(snap(settings=BOUND, l2=l2, refs={(3010224, 8): 30},
-                             psfs={(8, 2, "science"): (10, 100)}), [], sel)
+                             psfs={(8, 2, "science", None): (10, 100)}), [], sel)
     (diff,) = stages(subs, "difference")
     assert diff["scope"]["expid"] == e4[0] and diff["inputs"][-1]["source_job"] == 30
 
@@ -533,8 +533,8 @@ def test_a_reference_takes_overlapping_rows_of_any_sca_scoped_to_the_first_sca_i
     sel = loop.Selection.parse("F146", "8,9", "all")
     a, b, c = (expid(1, 1, 1), 8, 8), (expid(2, 1, 1), 9, 8), (expid(3, 1, 1), 9, 8)
     l2 = {a: l2row(5, 1.0, 20, overlap=(7,)), b: l2row(7, 2.0, 21), c: l2row(7, 3.0, 22)}
-    subs, _ = loop.plan(snap(settings=BOUND, l2=l2, psfs={(8, 8, "science"): (10, 100),
-                                                         (8, 9, "science"): (11, 101)}), [], sel)
+    subs, _ = loop.plan(snap(settings=BOUND, l2=l2, psfs={(8, 8, "science", None): (10, 100),
+                                                         (8, 9, "science", None): (11, 101)}), [], sel)
     (ref,) = stages(subs, "reference")
     assert ref["scope"] == {"field": 7, "fid": 8, "sca": 9}
     assert [(i["key"]["sca"], i["source_job"]) for i in ref["inputs"]] == [(8, 20), (9, 21)]
@@ -551,7 +551,7 @@ def test_without_the_bound_the_reference_takes_every_row_and_nothing_is_held():
 def test_a_missing_psf_submits_one_psf_job_and_no_intake_of_that_sca():
     sel = loop.Selection.parse("F146", "8,9", "all")
     stems = [stem(1, 1, 1), stem(2, 1, 1), stem(1, 1, 1, sca=9), stem(2, 1, 1, sca=9)]
-    psfs = {(8, 9, "science"): (12, 102)}
+    psfs = {(8, 9, "science", None): (12, 102)}
     subs, _ = loop.plan(snap(psfs=psfs), stems, sel, ids=resolved(*stems))   # SCA 8 lacks its science PSF
     (psf,) = stages(subs, "psf")
     assert psf["scope"] == {"dataset": D, "file": stem(1, 1, 1)}
@@ -651,7 +651,7 @@ def test_a_job_the_code_failed_is_not_rerun():
 def test_a_pass_submits_at_most_the_cap_in_stage_order_and_defers_the_rest():
     stems = [stem(1, 1, 1), stem(1, 1, 1, sca=9), stem(2, 1, 1)]
     sel = loop.Selection.parse("F146", "8,9", "all")
-    psfs = {(8, 8, "science"): (10, 100), (8, 9, "science"): (11, 101)}
+    psfs = {(8, 8, "science", None): (10, 100), (8, 9, "science", None): (11, 101)}
     subs, counts = loop.plan(snap(psfs=psfs), stems, sel, max_submissions=2, ids=resolved(*stems))
     assert [s["scope"]["file"] for s in subs] == stems[:2] and counts["deferred"] == 1
     assert [e["product"] for e in subs[0]["expects"]] == ["exposures", "l2files"]
@@ -688,7 +688,7 @@ def test_passes_pointings_and_programs_select_a_row_by_its_intake_stem_and_a_ste
 def test_the_18_stems_of_one_exposure_get_one_scope_expid_and_exactly_one_exposures_expectation():
     stems = [stem(1, 1, 1, sca=s) for s in range(1, 19)]
     sel = loop.Selection.parse("F146", ",".join(str(s) for s in range(1, 19)), "all")
-    psfs = {(8, s, "science"): (10 + s, 100 + s) for s in range(1, 19)}
+    psfs = {(8, s, "science", None): (10 + s, 100 + s) for s in range(1, 19)}
     ids = resolved(*stems)
     assert list(ids) == [name(stems[0])]                                     # one name for the 18
     subs, _ = loop.plan(snap(psfs=psfs), stems, sel, ids=ids)
@@ -721,7 +721,7 @@ def test_a_readers_name_function_is_the_only_thing_a_naming_change_touches(monke
     id the mapping's) the plan's submissions and the selection are the same but for the names."""
     stems = [stem(1, 1, 1), stem(1, 1, 1, sca=9), stem(2, 3, 1), stem(2, 4, 1)]
     sel = loop.Selection.parse("F146", "8,9", "all", "1,2", exposures="r0034201001,r0034201002001004003")
-    world = dict(psfs={(8, 8, "science"): (10, 100), (8, 9, "science"): (11, 101)}, refs={(7, 8): 30},
+    world = dict(psfs={(8, 8, "science", None): (10, 100), (8, 9, "science", None): (11, 101)}, refs={(7, 8): 30},
                  l2={(expid(1, 1, 1), 8, 8): l2row(7, 1.0, 20, stem=stem(1, 1, 1)),
                      (expid(2, 3, 1), 8, 8): l2row(7, 2.0, 21, stem=stem(2, 3, 1)),
                      (expid(2, 4, 1), 8, 8): l2row(7, 3.0, 22, stem=stem(2, 4, 1))})
@@ -982,7 +982,7 @@ def test_an_openuniverse_pointing_is_the_sequence_row_in_stems_and_rows():
     sel = loop.Selection.parse("F158", "10", "1012,2034", reader=OU)
     stems = [ou(1012), ou(2034), ou(3000), ou(1012, 4), stem(1, 1, 1, sca=10)]
     ids = resolved(*stems)
-    subs, counts = loop.plan(snap(fids={"H158": 2}, psfs={(2, 10, "science"): (10, 100)}), stems, sel, ids=ids)
+    subs, counts = loop.plan(snap(fids={"H158": 2}, psfs={(2, 10, "science", None): (10, 100)}), stems, sel, ids=ids)
     intake = stages(subs, "intake")
     assert [s["scope"]["file"] for s in intake] == [ou(1012), ou(2034)] and counts["admitted"] == 2
     assert name(ou(1012)) == "roman_tds_H158_1012" == name(ou(1012, 4))
@@ -1027,7 +1027,7 @@ def test_a_rimtimsim_pointing_is_the_exposure_number_in_stems_and_rows():
     sel = loop.Selection.parse("F213", "2", "411,827", reader=RTS)
     stems = [rts(411), rts(827), rts(1243), rts(411, sca=3), ou(411, 2, "K213"), stem(1, 1, 1, sca=2)]
     ids = resolved(*stems)
-    subs, counts = loop.plan(snap(fids={"K213": 4}, psfs={(4, 2, "science"): (10, 100)}), stems, sel, ids=ids)
+    subs, counts = loop.plan(snap(fids={"K213": 4}, psfs={(4, 2, "science", None): (10, 100)}), stems, sel, ids=ids)
     intake = stages(subs, "intake")
     assert [s["scope"]["file"] for s in intake] == [rts(411), rts(827)] and counts["admitted"] == 2
     assert name(rts(411)) == "rimtimsim_WFI_F213_000000411" == name(rts(411, sca=3))
@@ -1479,3 +1479,71 @@ def test_a_malformed_selection_term_is_refused_naming_the_term_and_its_text(term
 def test_a_filter_the_table_lacks_is_refused_naming_the_filters_it_holds():
     with pytest.raises(loop.NotFound, match=r"no filters row for F999; the filters table holds F146, F158"):
         loop._fid("F999", {"W146": 8, "F158": 2})
+
+
+REFERENCE_SET = "1043_20260928"
+
+
+def set_settings(mode: str, psf_set: str = REFERENCE_SET) -> dict:
+    return {**SETTINGS, "difference": {"reference_psf": mode, "reference_psf_set": psf_set}}
+
+
+@pytest.mark.parametrize("mode, psf_set, bound", [("precomputed", REFERENCE_SET, True),
+                                                  ("measured", REFERENCE_SET, True),
+                                                  ("measured", "", False),
+                                                  ("science", REFERENCE_SET, False)])
+def test_a_difference_names_its_runs_reference_set_row_when_it_may_read_it(mode, psf_set, bound):
+    k = (expid(1, 1, 1), 8, 8)
+    psfs = {(8, 8, "science", None): (10, 100), (8, 8, "reference", REFERENCE_SET): (15, 105),
+            (8, 8, "reference", "other"): (16, 106)}
+    subs, _ = loop.plan(snap(settings=set_settings(mode, psf_set), l2={k: l2row(7, 1.0, 20)},
+                             refs={(7, 8): 30}, psfs=psfs), [], SEL)
+    (diff,) = stages(subs, "difference")
+    named = [i for i in diff["inputs"] if i["product"] == "psfs"]
+    reference = {"product": "psfs", "key": {"dataset": D, "fid": 8, "sca": 8, "kind": "reference",
+                                            "psf_set": REFERENCE_SET}, "source_job": 15, "binding": 105}
+    assert named == [{"product": "psfs", "key": {"dataset": D, "fid": 8, "sca": 8, "kind": "science"},
+                      "source_job": 10, "binding": 100}] + ([reference] if bound else [])
+
+
+def test_a_run_naming_a_set_with_no_official_row_plans_no_difference_and_says_why():
+    k = (expid(1, 1, 1), 8, 8)
+    psfs = {(8, 8, "science", None): (10, 100), (8, 8, "reference", "other"): (16, 106)}
+    with pytest.raises(loop.NotFound, match=f"no official reference psfs row of set '{REFERENCE_SET}'"
+                                            " for fid 8 sca 8"):
+        loop.plan(snap(settings=set_settings("precomputed"), l2={k: l2row(7, 1.0, 20)},
+                       refs={(7, 8): 30}, psfs=psfs), [], SEL)
+
+
+def test_the_snapshot_keys_a_reference_psf_by_its_set():
+    class Cursor:
+        def __init__(self):
+            self.answers = iter([
+                [{"dataset": D, "survey": "S", "settings": SETTINGS}], [], [], [],
+                [{"id": 100, "product": "psfs", "key": {"dataset": D, "fid": 8, "sca": 8, "kind": "science"},
+                  "job": 10},
+                 {"id": 105, "product": "psfs", "key": {"dataset": D, "psf_set": REFERENCE_SET, "fid": 8,
+                                                        "sca": 8, "kind": "reference"}, "job": 15}],
+                []])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=()):
+            self.rows = next(self.answers)
+
+        def fetchall(self):
+            return self.rows
+
+    class Conn:
+        def cursor(self, cursor_factory=None):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+    assert loop.snapshot(Conn(), 1).psfs == {(8, 8, "science", None): (10, 100),
+                                             (8, 8, "reference", REFERENCE_SET): (15, 105)}

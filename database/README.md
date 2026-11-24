@@ -97,7 +97,8 @@ the pipeline imports.
   nothing, where it cannot), then `2026-11-20-run-stopped.sql` (three
   nullable columns on `runs`, which `rapidpipe run stop` writes), then
   `2026-11-23-pixel-area-map.sql` (one nullable column on `l2files`,
-  which intake writes).
+  which intake writes), then `2026-11-24-psfs-psf-set.sql` (`psfs.psf_set`,
+  the reference PSF's set in its key and in `psfs_official`'s key match).
 
   Applying one is one command, run by whoever merges the pull request that
   adds it, from their own workstation under its instance role, with no
