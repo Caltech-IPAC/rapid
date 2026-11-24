@@ -63,8 +63,12 @@ class Source:
     # alert-assembly timestamp (timeProcessedMjd), stamped by
     # produce.assemble_alert_for_source(); never a storage column
     time_proc: float | None = None
+    # the position's uncertainties (rapid_docs decision-position-uncertainties): xerr, yerr in
+    # pixels; raerr, decerr in degrees on the sky. None for a source stored without them
     xerr: float | None = None
     yerr: float | None = None
+    raerr: float | None = None
+    decerr: float | None = None
     fluxfit: float | None = None
     fluxerr: float | None = None
     flags: int = 0

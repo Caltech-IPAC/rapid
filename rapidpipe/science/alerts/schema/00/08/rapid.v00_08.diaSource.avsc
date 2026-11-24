@@ -75,7 +75,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in x [pixels]"
+            "doc": "1-sigma uncertainty in x; null if not stored [pixels]"
         },
         {
             "name": "yErr",
@@ -84,7 +84,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in y [pixels]"
+            "doc": "1-sigma uncertainty in y; null if not stored [pixels]"
         },
         {
             "name": "raErr",
@@ -93,7 +93,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in ra [deg]"
+            "doc": "1-sigma angular uncertainty in right ascension (dRA*cos(Dec)); null if not stored [deg]"
         },
         {
             "name": "decErr",
@@ -102,7 +102,7 @@
                 "float"
             ],
             "default": null,
-            "doc": "Uncertainty in dec [deg]"
+            "doc": "1-sigma angular uncertainty in dec; null if not stored [deg]"
         },
         {
             "name": "band",

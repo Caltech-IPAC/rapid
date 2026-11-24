@@ -81,6 +81,16 @@ SEXTRACTOR_COLUMNS = (
     ("FLAGS", "flags"),
 )
 
+#: SExtractor's position uncertainties (not in `dev`'s table): catalog name, column.
+#: The windowed position's variances and covariance [pixel^2] and its error
+#: ellipse on the sky [deg]; a value that is not finite is null, and so is
+#: every value of a column the catalog does not have.
+POSITION_ERROR_COLUMNS = (
+    ("ERRX2WIN_IMAGE", "errx2win"), ("ERRY2WIN_IMAGE", "erry2win"), ("ERRXYWIN_IMAGE", "errxywin"),
+    ("ERRAWIN_WORLD", "errawinworld"), ("ERRBWIN_WORLD", "errbwinworld"),
+    ("ERRTHETAWIN_WORLD", "errthetawinworld"),
+)
+
 #: The extra columns of ``xsources``: computed name, column, integer-valued
 #: (`dev`'s loader's ``extra_cols``, in its order).
 EXTRA_COLUMNS = (
@@ -629,8 +639,8 @@ def xsource_rows(catalog, extra: dict[str, np.ndarray], *, isdiffpos: bool, key:
     Returns
     -------
     tuple
-        The columns of :data:`SEXTRACTOR_COLUMNS` and :data:`EXTRA_COLUMNS`
-        and the set's own (``xsid`` not among them), for the kept rows; and
+        The columns of :data:`SEXTRACTOR_COLUMNS`, :data:`POSITION_ERROR_COLUMNS`
+        and :data:`EXTRA_COLUMNS` and the set's own (``xsid`` not among them), for the kept rows; and
         the number of rows read.
     """
     n = len(catalog)
@@ -641,6 +651,10 @@ def xsource_rows(catalog, extra: dict[str, np.ndarray], *, isdiffpos: bool, key:
     rows = np.flatnonzero(keep)
     m = len(rows)
     out: dict[str, Any] = {name: np.asarray(catalog[source])[rows] for source, name in SEXTRACTOR_COLUMNS}
+    for source, name in POSITION_ERROR_COLUMNS:           # null when the catalog lacks the column
+        values = (np.asarray(catalog[source], dtype=np.float64)[rows] if source in catalog.colnames
+                  else np.full(m, np.nan))
+        out[name] = np.where(np.isfinite(values), values, np.nan)
     for name, column, _ in EXTRA_COLUMNS:
         out[column] = (np.asarray(extra[name], dtype=np.float64)[rows] if name in extra
                        else np.full(m, np.nan))
@@ -692,11 +706,16 @@ def xsources_table(parts: Sequence[dict[str, np.ndarray]]):
             table[name] = pa.array(np.round(np.where(finite, values, 0)).astype(np.int16), mask=~finite)
         else:
             table[name] = pa.array(np.where(finite, values, 0.0), mask=~finite)
+    for _, name in POSITION_ERROR_COLUMNS:
+        values = joined(name).astype(np.float64)
+        finite = np.isfinite(values)
+        table[name] = pa.array(np.where(finite, values, 0.0), mask=~finite)
     return pa.table(table)
 
 
 __all__: Sequence[str] = (
-    "CATALOG_FILL_VALUE", "EDGE_MARGIN", "EXTRA_COLUMNS", "PHOTUTILS_COLUMNS", "SEXTRACTOR_COLUMNS", "aperture_snr",
+    "CATALOG_FILL_VALUE", "EDGE_MARGIN", "EXTRA_COLUMNS", "PHOTUTILS_COLUMNS", "POSITION_ERROR_COLUMNS",
+    "SEXTRACTOR_COLUMNS", "aperture_snr",
     "catalog_extra_columns", "daofind_columns", "extra_columns", "fit_selection", "photutils_columns",
     "positions_within_image", "prefilter", "prefilter_table", "rb_input", "read_catalog", "snap_to_daofind_peak", "threshold",
     "xsource_rows", "xsources_table",

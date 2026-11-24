@@ -577,6 +577,12 @@ CREATE TABLE xsources (
     flagsfit smallint,
     cfit real,
     rblabel smallint,
+    errx2win real,                                   -- ERRX2WIN_IMAGE, pixel^2; null: published before the column
+    erry2win real,                                   -- ERRY2WIN_IMAGE
+    errxywin real,                                   -- ERRXYWIN_IMAGE
+    errawinworld real,                               -- ERRAWIN_WORLD, deg
+    errbwinworld real,                               -- ERRBWIN_WORLD, deg
+    errthetawinworld real,                           -- ERRTHETAWIN_WORLD, deg from the RA axis
     UNIQUE (job, xsid)
 );
 

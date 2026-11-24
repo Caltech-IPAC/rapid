@@ -306,7 +306,8 @@ XSOURCE_COLUMNS = (
     "s.job AS source_job, s.dataset, s.xsid AS sid, s.expid, s.sca, s.mjdobs, s.ra, s.dec, s.x, s.y,"
     " s.fluxap1, s.fluxerrap1, s.fluxfit, s.snrfit, s.flagsfit, s.redchi, s.npixfit, s.cfit,"
     " s.sharpness, s.roundness1, s.roundness2, s.awinimage, s.bwinimage, s.field, s.hp6, s.hp9,"
-    " s.pid, s.isdiffpos, s.rb, s.rblabel" + EXPOSURE_COLUMNS)
+    " s.pid, s.isdiffpos, s.rb, s.rblabel,"
+    " s.errx2win, s.erry2win, s.errawinworld, s.errbwinworld, s.errthetawinworld" + EXPOSURE_COLUMNS)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -379,6 +380,37 @@ def _finite(value) -> float | None:
     return value if math.isfinite(value) else None
 
 
+def _root(variance) -> float | None:
+    """The square root of ``variance``, or None when it is null, not finite or negative."""
+    variance = _finite(variance)
+    return math.sqrt(variance) if variance is not None and variance >= 0 else None
+
+
+def sky_errors(a, b, theta) -> tuple[float | None, float | None]:
+    """A position's 1-sigma uncertainties along right ascension and declination.
+
+    Parameters
+    ----------
+    a, b : float or None
+        The error ellipse's axes, ``ERRAWIN_WORLD`` and ``ERRBWIN_WORLD`` [deg].
+    theta : float or None
+        Its angle from the right ascension axis, ``ERRTHETAWIN_WORLD`` [deg].
+
+    Returns
+    -------
+    tuple
+        ``sqrt(a² cos²θ + b² sin²θ)`` and ``sqrt(a² sin²θ + b² cos²θ)`` [deg],
+        each an angle on the sky (the first is the uncertainty in
+        ``ra × cos(dec)``, rapid_docs decision-position-uncertainties);
+        both None when a value is null or not finite or an axis is negative.
+    """
+    a, b, theta = _finite(a), _finite(b), _finite(theta)
+    if a is None or b is None or theta is None or a < 0 or b < 0:
+        return None, None
+    cos, sin = math.cos(math.radians(theta)), math.sin(math.radians(theta))
+    return math.hypot(a * cos, b * sin), math.hypot(a * sin, b * cos)
+
+
 def xsource_fields(row: dict) -> dict:
     """An xsource row (:data:`XSOURCE_COLUMNS`) as :class:`Source` fields, the ruling's mapping.
 
@@ -389,7 +421,10 @@ def xsource_fields(row: dict) -> dict:
     and flags 0. ``apflux``, ``apfluxerr`` are always the 3 px aperture;
     ``xfit``, ``yfit`` are ``XWIN_IMAGE``, ``YWIN_IMAGE`` made zero-based.
     ``elongation`` is ``AWIN_IMAGE / BWIN_IMAGE`` (new, not `dev`'s), null
-    without both widths.
+    without both widths. ``xerr``, ``yerr`` are the square roots of
+    ``ERRX2WIN_IMAGE``, ``ERRY2WIN_IMAGE`` and ``raerr``, ``decerr`` are
+    :func:`sky_errors` of the position's error ellipse (new, not `dev`'s),
+    null for a row stored before the columns were.
 
     Parameters
     ----------
@@ -408,6 +443,10 @@ def xsource_fields(row: dict) -> dict:
     flagsfit = out.pop("flagsfit")
     awin, bwin = _finite(out.pop("awinimage")), _finite(out.pop("bwinimage"))
     fitted = fluxfit is not None and snrfit                # snrfit neither null nor 0
+    xerr, yerr = _root(out.pop("errx2win")), _root(out.pop("erry2win"))
+    raerr, decerr = sky_errors(out.pop("errawinworld"), out.pop("errbwinworld"),
+                               out.pop("errthetawinworld"))
+    out.update(xerr=xerr, yerr=yerr, raerr=raerr, decerr=decerr)
     out.update(xfit=float(x) - 1.0, yfit=float(y) - 1.0, apflux=fluxap, apfluxerr=fluxerrap,
                fluxfit=fluxfit if fitted else fluxap,
                fluxerr=fluxfit / snrfit if fitted else fluxerrap,

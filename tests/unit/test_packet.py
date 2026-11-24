@@ -44,8 +44,8 @@ from rapidpipe.science.catalogs.readers import catalog_reader
 from rapidpipe.science.statistics.sums import Sums
 from rapidpipe.stages.packet import (
     CatalogInput, Read, WindowImage, _plain, _separation, alert_catalog, cap_triggers, covering,
-    measure_forced, neighbour, reference_dates, reliability, set_reference_dates, window_reach,
-    write_set, xsource_fields)
+    measure_forced, neighbour, reference_dates, reliability, set_reference_dates, sky_errors,
+    window_reach, write_set, xsource_fields)
 from tests.support import fakekete
 from tests.support.catalogs import (
     ra_offset, write_gaia_store, write_hp6_store, write_lvs_store, write_ss_store)
@@ -569,7 +569,49 @@ def _xsource_row(**columns) -> dict:
     """An xsource row as the packet stage reads it, fitted unless ``columns`` say otherwise."""
     return {"source_job": 11, "sid": 3, "x": 50.0, "y": 40.0, "fluxap1": 380.0, "fluxerrap1": 12.0,
             "fluxfit": 400.0, "snrfit": 40.0, "flagsfit": 4, "redchi": 1.25,
-            "awinimage": 1.5, "bwinimage": 1.2, **columns}
+            "awinimage": 1.5, "bwinimage": 1.2, "errx2win": 4.0e-4, "erry2win": 9.0e-4,
+            "errawinworld": 4.0e-7, "errbwinworld": 3.0e-7, "errthetawinworld": 0.0, **columns}
+
+
+def test_the_pixel_uncertainties_are_the_roots_of_sextractors_variances():
+    fields = xsource_fields(_xsource_row())
+    assert (fields["xerr"], fields["yerr"]) == (pytest.approx(0.02), pytest.approx(0.03))
+    assert not {"errx2win", "erry2win", "errawinworld", "errbwinworld", "errthetawinworld"} & set(fields)
+
+
+@pytest.mark.parametrize("theta, expected", [
+    (0.0, (4.0e-7, 3.0e-7)),                       # the long axis along right ascension
+    (90.0, (3.0e-7, 4.0e-7)),                      # and along declination
+    (-90.0, (3.0e-7, 4.0e-7)),
+    (30.0, (14.25 ** 0.5 * 1e-7, 10.75 ** 0.5 * 1e-7))])
+def test_the_sky_uncertainties_are_the_error_ellipses_extent_along_each_axis(theta, expected):
+    fields = xsource_fields(_xsource_row(errthetawinworld=theta))
+    assert (fields["raerr"], fields["decerr"]) == pytest.approx(expected)
+
+
+def test_a_round_error_ellipse_gives_its_radius_at_any_angle():
+    assert sky_errors(2.0e-7, 2.0e-7, 37.0) == pytest.approx((2.0e-7, 2.0e-7))
+
+
+def test_an_xsource_stored_before_the_columns_has_null_uncertainties():
+    """A row published before xsources kept the position errors reads them as null."""
+    fields = xsource_fields(_xsource_row(errx2win=None, erry2win=None, errawinworld=None,
+                                         errbwinworld=None, errthetawinworld=None))
+    assert (fields["xerr"], fields["yerr"], fields["raerr"], fields["decerr"]) == (None,) * 4
+
+
+@pytest.mark.parametrize("bad", [{"errx2win": -1.0e-4}, {"errx2win": float("nan")}])
+def test_a_variance_that_is_negative_or_not_finite_gives_a_null_uncertainty(bad):
+    fields = xsource_fields(_xsource_row(**bad))
+    assert fields["xerr"] is None and fields["yerr"] == pytest.approx(0.03)
+
+
+@pytest.mark.parametrize("bad", [{"errawinworld": None}, {"errbwinworld": float("inf")},
+                                 {"errthetawinworld": None}, {"errawinworld": -1.0e-7}])
+def test_an_incomplete_error_ellipse_gives_null_sky_uncertainties(bad):
+    fields = xsource_fields(_xsource_row(**bad))
+    assert (fields["raerr"], fields["decerr"]) == (None, None)
+    assert fields["xerr"] == pytest.approx(0.02)   # the pixel uncertainties stand on their own
 
 
 def test_elongation_is_the_long_width_over_the_short():

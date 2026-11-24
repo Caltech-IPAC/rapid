@@ -97,7 +97,9 @@ the pipeline imports.
   nothing, where it cannot), then `2026-11-20-run-stopped.sql` (three
   nullable columns on `runs`, which `rapidpipe run stop` writes), then
   `2026-11-23-pixel-area-map.sql` (one nullable column on `l2files`,
-  which intake writes).
+  which intake writes), then `2026-11-24-xsources-position-errors.sql`
+  (six nullable columns on `xsources` and, by inheritance, every child,
+  which the difference stage writes).
 
   Applying one is one command, run by whoever merges the pull request that
   adds it, from their own workstation under its instance role, with no

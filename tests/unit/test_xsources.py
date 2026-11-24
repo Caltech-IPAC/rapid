@@ -159,6 +159,25 @@ def test_the_rows_keep_devs_cuts_and_map_onto_the_xsources_columns():
     assert rows[4]["flags"] == 0 and rows[4]["fluxap1"] == pytest.approx(287.1921)
 
 
+def test_the_rows_carry_sextractors_position_errors_and_one_not_finite_is_null():
+    catalog = xsources.read_catalog(CATALOG)[3:5]
+    assert all(float(catalog[source][0]) > 0 for source, _ in xsources.POSITION_ERROR_COLUMNS[:5])
+    catalog["ERRAWIN_WORLD"][1] = np.nan
+    rows, _ = xsources.xsource_rows(catalog, {}, isdiffpos=True, key=KEY, pid=1, mjdobs=1.0,
+                                    naxis1=120, naxis2=120, thresholds=thresholds({}))
+    first, second = xsources.xsources_table([rows]).to_pylist()
+    for source, name in xsources.POSITION_ERROR_COLUMNS:
+        assert first[name] == pytest.approx(float(catalog[source][0]))
+    assert second["errawinworld"] is None
+    assert second["errbwinworld"] == pytest.approx(float(catalog["ERRBWIN_WORLD"][1]))
+    catalog.remove_column("ERRXYWIN_IMAGE")          # a catalog made without one of the columns
+    rows, _ = xsources.xsource_rows(catalog, {}, isdiffpos=True, key=KEY, pid=1, mjdobs=1.0,
+                                    naxis1=120, naxis2=120, thresholds=thresholds({}))
+    first, second = xsources.xsources_table([rows]).to_pylist()
+    assert first["errxywin"] is None and second["errxywin"] is None
+    assert first["errx2win"] == pytest.approx(float(catalog["ERRX2WIN_IMAGE"][0]))
+
+
 def test_a_missing_extra_value_is_null_and_rblabel_minus_one_stays():
     catalog = xsources.read_catalog(CATALOG)[3:4]
     extra = {"sumrat": np.array([np.nan]), "rb_score": np.array([np.nan]),

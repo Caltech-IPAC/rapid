@@ -34,7 +34,7 @@ WIRE_NAMES = {"program_id": "program", "execution_plan": "plan", "obs_pass": "pa
 def _source(sid, **overrides):
     row = {"sid": sid, "expid": 1234, "sca": 7, "mjdobs": 61273.125, "ra": 269.45,
            "dec": -28.77, "xfit": 10.0, "yfit": 12.0, "band": "F184", "xerr": 0.01,
-           "yerr": 0.02, "fluxfit": 100.0, "fluxerr": 2.0, "flags": 0, "field": 5321,
+           "yerr": 0.02, "raerr": 3.0e-7, "decerr": 6.0e-7, "fluxfit": 100.0, "fluxerr": 2.0, "flags": 0, "field": 5321,
            "hp6": 1, "hp9": 2, "pid": 4242, "isdiffpos": True, "qfit": 0.1, "cfit": 0.1,
            "redchi": 1.0, "npixfit": 25, "sharpness": 0.5, "roundness1": 0.0,
            "roundness2": 0.0, "peak": 12.0, "apflux": None, "apfluxerr": None, "exptime": 139.8, **IDENTIFIERS,
@@ -294,7 +294,7 @@ def test_index_associations_keeps_the_lowest_aid_and_the_orphans():
     rows = [_object_row(5, 1), _object_row(7, 1), _object_row(8, 2, aid=None)]
     history = [{"object_set": "A1", **{c: getattr(_source(3, mjdobs=61000.0), c) for c in
                    ("sid", "expid", "sca", "mjdobs", "ra", "dec", "xfit", "yfit", "band", "xerr",
-                    "yerr", "fluxfit", "fluxerr", "flags", "field", "hp6", "hp9", "pid",
+                    "yerr", "raerr", "decerr", "fluxfit", "fluxerr", "flags", "field", "hp6", "hp9", "pid",
                     "isdiffpos", "qfit", "cfit", "redchi", "npixfit", "sharpness",
                     "roundness1", "roundness2", "peak", "apflux", "apfluxerr", "exptime", *IDENTIFIERS, "survey", "rb",
                     "rblabel", "zptmag", "pixel_area_map", "elongation")}, "object_aid": 5}]

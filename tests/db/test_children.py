@@ -213,6 +213,35 @@ def test_a_sets_xsources_load_into_their_own_child_and_are_official_with_its_sou
     assert _one(conn, "SELECT count(*) FROM xsources_official WHERE job = %s", (job,)) == [(0,)]
 
 
+POSITION_ERRORS = ("errx2win", "erry2win", "errxywin", "errawinworld", "errbwinworld",
+                   "errthetawinworld")
+
+
+def test_a_sets_position_errors_load_and_a_set_written_without_them_reads_null(connect, tmp_path):
+    """The six SExtractor position-error columns are nullable: a set written before them (a job on
+    an older image) still loads, beside one that has them."""
+    conn = connect()
+    run = new_run(conn, live=True)
+    values = dict(zip(POSITION_ERRORS, (4.0e-4, 9.0e-4, -1.0e-4, 4.0e-7, 3.0e-7, 30.0)))
+    with_errors = [{**row, **values} for row in xsource_rows(NOV4 + 0.7, 8, n=1)]
+    with_errors[0]["errawinworld"] = None            # one SExtractor could not compute
+    jobs = []
+    for expid, rows in ((1, with_errors), (2, xsource_rows(NOV4 + 0.7, 8, n=1))):
+        key = {"dataset": DATASET, "expid": expid, "sca": 8, "fid": 1}
+        rows = [{**row, "expid": expid} for row in rows]
+        job = new_job(conn, run, expects=[{"product": "sources", "key": key, "binding": None}])
+        publish(conn, job, 1, write_attempt(tmp_path / f"attempt{expid}", {
+            "sources": source_rows(NOV4 + 0.7, 8, expid=expid), "xsources": rows}))
+        jobs.append(job)
+
+    columns = ", ".join(POSITION_ERRORS)
+    stored, older = (_one(conn, f"SELECT {columns} FROM xsources_20261104_8 WHERE job = %s", (job,))
+                     for job in jobs)
+    assert stored == [pytest.approx((4.0e-4, 9.0e-4, -1.0e-4, None, 3.0e-7, 30.0))]
+    assert older == [(None,) * 6]
+    assert _one(conn, "SELECT count(*) FROM ONLY xsources") == [(0,)]
+
+
 def test_a_set_with_its_sources_skipped_still_binds_and_its_xsources_are_official(connect, tmp_path):
     """[difference] skip_loading_sources_records: the set declares sources with no rows (empty_ok)."""
     conn = connect()

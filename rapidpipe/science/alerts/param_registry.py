@@ -231,20 +231,21 @@ DIA_SOURCE_PARAMS = (
                     IMPLEMENTED, "sources.xfit",   attr="xfit"),
     Param("y",             "float",            "y-pixel position on detector [pixels]",
                     IMPLEMENTED, "sources.yfit",   attr="yfit"),
-    # TODO (Emily, 2026-11-20): the four position uncertainties are stubs. SExtractor measures
-    # them on the difference image (ERRX2WIN_IMAGE, ERRY2WIN_IMAGE, ERRXYWIN_IMAGE and
-    # ERRAWIN_WORLD, ERRBWIN_WORLD, ERRTHETAWIN_WORLD in cdf/rapidSexParamsDiffImage.inp), but
-    # rapidpipe.science.difference.xsources does not carry them into xsources, so the database
-    # holds none. Filling them needs new xsources columns (a database migration), the difference
-    # stage storing them and the packet stage reading them.
-    Param("xErr",          ["null", "float"],  "Uncertainty in x [pixels]",
-                    STUB, "not stored: xsources has no position uncertainty"),
-    Param("yErr",          ["null", "float"],  "Uncertainty in y [pixels]",
-                    STUB, "not stored: see xErr"),
-    Param("raErr",         ["null", "float"],  "Uncertainty in ra [deg]",
-                    STUB, "not stored: see xErr"),
-    Param("decErr",        ["null", "float"],  "Uncertainty in dec [deg]",
-                    STUB, "not stored: see xErr"),
+    # SExtractor's windowed position uncertainties on the difference image, converted by the
+    # packet stage (rapid_docs decision-position-uncertainties); null for a detection stored
+    # before xsources kept them
+    Param("xErr",          ["null", "float"],  "1-sigma uncertainty in x; null if not stored [pixels]",
+                    IMPLEMENTED, "sqrt(xsources.errx2win)", attr="xerr"),
+    Param("yErr",          ["null", "float"],  "1-sigma uncertainty in y; null if not stored [pixels]",
+                    IMPLEMENTED, "sqrt(xsources.erry2win)", attr="yerr"),
+    Param("raErr",         ["null", "float"],  "1-sigma angular uncertainty in right ascension "
+                    "(dRA*cos(Dec)); null if not stored [deg]",
+                    IMPLEMENTED, "xsources.errawinworld, errbwinworld, errthetawinworld",
+                    attr="raerr"),
+    Param("decErr",        ["null", "float"],  "1-sigma angular uncertainty in dec; null if not "
+                    "stored [deg]",
+                    IMPLEMENTED, "xsources.errawinworld, errbwinworld, errthetawinworld",
+                    attr="decerr"),
 
     # --- Photometry --------------------------------------------------------
     Param("band",          ["null", "string"], "Filter band name (F062, F087, F106, F129, F146, F158, F184, F213)",
