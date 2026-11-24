@@ -200,7 +200,7 @@ def write(job: JobContext, stamp: np.ndarray, filter_name: str, sca: int, cards:
             header[card] = value
         fits.PrimaryHDU(stamp.astype(np.float32), header).writeto(job.path / filename)
         digest = hashlib.md5((job.path / filename).read_bytes()).hexdigest()  # dev's checksum column
-        rows.append({"dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind,
+        rows.append({"dataset": job.dataset, "fid": fid, "sca": sca, "kind": kind, "psf_set": None,
                      "filename": job.prefix + filename, "checksum": digest, "status": STATUS_GOOD})
     pq.write_table(pa.Table.from_pylist(rows), job.path / "psfs.parquet")
     lap("rows")

@@ -112,7 +112,7 @@ KEYS = {
     "sources": ("dataset", "expid", "sca", "fid"),
     "packets": ("dataset", "expid", "sca", "fid"),
     "refimages": ("dataset", "field", "fid"),
-    "psfs": ("dataset", "fid", "sca", "kind"),
+    "psfs": ("dataset", "psf_set", "fid", "sca", "kind"),
     "objects": ("dataset", "field"),
     "xobjects": ("dataset", "field"),
     "catalogs": ("dataset", "name", "version"),
@@ -188,7 +188,9 @@ def rows_of(table: str, jobs: str) -> str:
 
 
 def keyed(product: str, alias: str = "t") -> str:
-    return "jsonb_build_object(" + ", ".join(f"'{c}', {alias}.{c}" for c in KEYS[product]) + ")"
+    built = "jsonb_build_object(" + ", ".join(f"'{c}', {alias}.{c}" for c in KEYS[product]) + ")"
+    # A science PSF's key has no psf_set (psfs_official's key match strips the null).
+    return f"jsonb_strip_nulls({built})" if product == "psfs" else built
 
 
 def report(name: str, failures: list[str], detail: str, t0: float) -> bool:
