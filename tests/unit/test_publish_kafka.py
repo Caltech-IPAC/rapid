@@ -13,8 +13,9 @@ binds sends its own set, a failure to send it leaves the job exit 0 and the
 set unstamped, and a job that did not bind sends nothing; a set the
 quality gate holds is neither sent nor stamped, by the sweep or by its own
 packet job, and the others are; the producer waits for every replica and
-is idempotent; a container downloaded from ``s3://`` is removed from the
-download cache once read, and a ``file://`` URL's own container is kept.
+is idempotent; an Avro packet file downloaded from ``s3://`` is removed
+from the download cache once read, and a ``file://`` URL's own Avro packet
+file is kept.
 """
 
 from __future__ import annotations
@@ -155,7 +156,7 @@ def test_each_message_is_a_one_record_container_of_its_packet(outbox):
         assert packet.decode().endswith(f":{record['sid']}")
 
 
-def test_a_downloaded_container_is_removed_once_read_and_a_file_url_container_is_kept(tmp_path, monkeypatch):
+def test_a_downloaded_packet_file_is_removed_once_read_and_a_file_url_packet_file_is_kept(tmp_path, monkeypatch):
     fake = FakeS3(page_size=2)
     monkeypatch.setattr("rapidpipe.products.storage.s3_client", lambda: fake)
     monkeypatch.setattr(prefix, "_cache", tmp_path / "cache")

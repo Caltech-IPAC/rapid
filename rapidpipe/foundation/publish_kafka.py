@@ -165,7 +165,7 @@ def identity(message_headers) -> tuple[int, int] | None:
 def messages(index: list[dict]) -> list[tuple[int, bytes]]:
     """``(sid, value)`` for every packet of a set, in the index's order.
 
-    A container downloaded into the cache is removed once read, so a long-lived sweep's disk does not grow.
+    An Avro packet file downloaded into the cache is removed once read, so a long-lived sweep's disk does not grow.
     """
     containers: dict[str, tuple[bytes, int]] = {}
     out = []
