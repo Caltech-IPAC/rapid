@@ -18,8 +18,9 @@ the container's own window to send it, so the two paths do not both send
 one set; a set inside that window is reported as ``waiting``.
 
 Each packet of a set is read from the outbox (the container the
-``packets`` index names, through :func:`rapidpipe.foundation.prefix.get`)
-and sent as one message:
+``packets`` index names, through :func:`rapidpipe.foundation.prefix.get`;
+a download is removed from the cache once read, and a set sent again is
+downloaded again) and sent as one message:
 
 - key the run's dataset, so a dataset's messages share one partition
   and keep their order there;
@@ -69,7 +70,7 @@ import fastavro
 import psycopg2.extras
 
 from rapidpipe.foundation import gate
-from rapidpipe.foundation.prefix import get
+from rapidpipe.foundation.prefix import get, is_staged
 
 logger = logging.getLogger(__name__)
 
@@ -162,12 +163,18 @@ def identity(message_headers) -> tuple[int, int] | None:
 
 
 def messages(index: list[dict]) -> list[tuple[int, bytes]]:
-    """``(sid, value)`` for every packet of a set, in the index's order."""
+    """``(sid, value)`` for every packet of a set, in the index's order.
+
+    An Avro packet file downloaded into the cache is removed once read, so a long-lived sweep's disk does not grow.
+    """
     containers: dict[str, tuple[bytes, int]] = {}
     out = []
     for row in index:
         if row["filename"] not in containers:
-            data = get(row["filename"]).read_bytes()
+            path = get(row["filename"])
+            data = path.read_bytes()
+            if is_staged(path):
+                path.unlink()
             containers[row["filename"]] = (data, next(fastavro.block_reader(io.BytesIO(data))).offset)
         data, header_end = containers[row["filename"]]
         start = row["byte_offset"]
