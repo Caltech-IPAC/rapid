@@ -102,14 +102,13 @@ max_frames = 50
 # reference.awaicgen.use_nominal_zptmag=false.
 use_nominal_zptmag = true
 
-[psf]
-# Flight's PSF fits are to use commissioning's oversampled (os3) ePSF stamp,
-# imported beside the phase-averaged science PSF ("oversampled"; needs
-# crossconv_flag false, below). "native" until flight's science PSFs are
-# imported again with their companions: a job under "oversampled" without
-# one is rejected (exit 65). The switch is then this one value (Jacob,
-# 2026-11-25; rapid_docs decision-flight-psf-fit-oversampled).
-fit_model = "native"
+# [psf] fit_model: flight's PSF fits are to use commissioning's oversampled
+# (os3) ePSF stamp, imported beside the phase-averaged science PSF
+# ("oversampled"; needs crossconv_flag false, below). Flight keeps the base's
+# "native" until its science PSFs are imported again with their companions:
+# a job under "oversampled" without one is rejected (exit 65). The switch is
+# then a [psf] table here with fit_model = "oversampled" (Jacob, 2026-11-25;
+# rapid_docs decision-flight-psf-fit-oversampled).
 
 [difference]
 # The cutover's scope, as the flight and HLWAS overlays share it: SFFT's
