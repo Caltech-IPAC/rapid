@@ -515,9 +515,10 @@ def test_an_oversampled_stamp_is_copied_beside_the_science_psf_and_checked(tmp_p
     fits.PrimaryHDU(stamp, fits.Header({"DETECTOR": "WFI08", "FILTER": "F146", "OVERSAMP": 3})).writeto(
         source / "os3.fits")
     prefix = run_import(tmp_path, source, {"psf": {"kind": "science", "path": "psf.fits",
-                                                   "oversampled": "os3.fits"}}, "os3")
+                                                   "oversampled": "os3.fits", "psf_set": "1043_20260928"}}, "os3")
     recorded = json.loads((prefix / "manifest.json").read_text())["psf"]["oversampled"]
     assert recorded["oversampling"] == 3 and recorded["filename"].endswith("psf_oversampled.fits")
+    assert recorded["psf_set"] == "1043_20260928"
     assert (prefix / "psf_oversampled.fits").is_file()
     fits.setval(source / "os3.fits", "DETECTOR", value="WFI09")          # another SCA: refused
     with pytest.raises(ValueError, match="SCA 9"):

@@ -122,8 +122,8 @@ epsf_cache = ""
 # science PSF, as dev; "oversampled", the stamp the import keeps beside it
 # (<science PSF stem>_oversampled.fits), for SFFT's PSF-fit catalogs, the
 # xsources and the packet's forced photometry. Refused with
-# [difference.sfft] crossconv_flag true. rapid_docs
-# decision-flight-psf-fit-oversampled.
+# [difference.sfft] crossconv_flag true; flight's value once its science PSFs
+# carry their companions. rapid_docs decision-flight-psf-fit-oversampled.
 fit_model = "native"
 
 [psf.epsf]
