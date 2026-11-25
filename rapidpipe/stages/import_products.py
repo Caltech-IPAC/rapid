@@ -16,7 +16,7 @@ The job's scope names what to import, relative to ``source_dir``::
                  "l2": "<L2 FITS>", "difference": "<difference job directory>"}],
      "reference": {"rfid": 4, "dir": "<reference job directory>"},
      "psf": {"kind": "science", "path": "<science-image PSF>",
-             "oversampled": "<its oversampled stamp, optional>"},
+             "oversampled": "<its oversampled stamp, optional>", "psf_set": "<the stamp's set>"},
      "gaia": {"version": "DR3", "prefix": "<the Gaia mirror's prefix>"},
      "ned": {"version": "36.1_20260527_v2", "prefix": "<the NED copy's prefix>"},
      "lvs": {"version": "20260424", "prefix": "<the same prefix: lvs/ is under it>"},
@@ -94,7 +94,8 @@ same filter and SCA, with an ``OVERSAMP`` card above 1, it is copied beside
 the science PSF as ``<science PSF stem>_oversampled.fits``, where the
 difference and packet stages fit with it under ``[psf] fit_model =
 "oversampled"`` (:mod:`rapidpipe.science.psfmodel`). It has no row; the
-manifest records its URL, checksum and oversampling (``psf.oversampled``).
+manifest records its URL, checksum, oversampling and the precomputed set
+it comes from, the scope's ``psf_set`` (``psf.oversampled``).
 rapid_docs ``decisions.md``, flight-psf-fit-oversampled.
 """
 
@@ -189,7 +190,8 @@ def run(job: JobContext) -> None:
         tables["psfs"] = [row]
         recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
         if "oversampled" in scope["psf"]:
-            recorded["psf"]["oversampled"] = _oversampled(job, source / scope["psf"]["oversampled"], row)
+            recorded["psf"]["oversampled"] = _oversampled(job, source / scope["psf"]["oversampled"], row,
+                                                          scope["psf"].get("psf_set"))
     catalogs = []
     for kind in CATALOG_KINDS:
         if kind in scope:
@@ -485,11 +487,12 @@ def _sca(header: fits.Header) -> int:
     return int(header["DETECTOR"].removeprefix("WFI"))
 
 
-def _oversampled(job: JobContext, path: Path, psf_row: dict) -> dict:
+def _oversampled(job: JobContext, path: Path, psf_row: dict, psf_set: str | None = None) -> dict:
     """Copy the science PSF's oversampled stamp beside it, as ``<science PSF stem>_oversampled.fits``
     (rapid_docs decision-flight-psf-fit-oversampled): no row of its own, the manifest's record.
 
     Refuses a stamp of another filter or SCA than the science PSF's, or with no ``OVERSAMP`` above 1.
+    ``psf_set`` names the precomputed set the stamp comes from (``1043_20260928``), recorded as given.
     """
     with fits.open(path) as hdul:
         header = hdul[0].header
@@ -508,7 +511,7 @@ def _oversampled(job: JobContext, path: Path, psf_row: dict) -> dict:
         for block in iter(lambda: stream.read(1 << 20), b""):
             digest.update(block)
     return {"filename": job.prefix + name, "checksum": digest.hexdigest(), "oversampling": oversampling,
-            "source": path.name}
+            "source": path.name, "psf_set": psf_set}
 
 
 def _psf(job: JobContext, source: Path, psf: dict) -> tuple[dict, str | None]:
