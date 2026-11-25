@@ -53,6 +53,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from rapidpipe.science import psfmodel
 from rapidpipe.science.difference import columns
 from rapidpipe.science.load.catalogs import healpix_arrays, tessellation_ids
 
@@ -306,7 +307,14 @@ def _fit_chunk(index: np.ndarray) -> dict[str, np.ndarray]:
     inputs = _FIT_INPUTS
     psf = inputs["psf"]
     psf_ny, psf_nx = psf.shape
-    model = ImagePSF(psf, flux=np.sum(psf), x_0=(psf_nx - 1) / 2, y_0=(psf_ny - 1) / 2)
+    oversampling = inputs.get("oversampling", 1)
+    if oversampling == 1:
+        model = ImagePSF(psf, flux=np.sum(psf), x_0=(psf_nx - 1) / 2, y_0=(psf_ny - 1) / 2)
+    else:
+        # Not dev: an oversampled stamp ([psf] fit_model = "oversampled"), at unit flux.
+        model = ImagePSF(psfmodel.unit_flux(psf, oversampling), flux=1.0,
+                         x_0=(psf_nx - 1) / 2 / oversampling, y_0=(psf_ny - 1) / 2 / oversampling,
+                         oversampling=oversampling)
     photometry = PSFPhotometry(psf_model=model, fit_shape=inputs["fit_shape"],
                                aperture_radius=inputs["aperture_radius"],
                                xy_bounds=inputs["xy_bounds"])
@@ -333,7 +341,7 @@ def _fit_chunk(index: np.ndarray) -> dict[str, np.ndarray]:
 def photutils_columns(data: np.ndarray, error: np.ndarray, psf: np.ndarray, x0, y0, *,
                       fwhm: float, fit_shape: Sequence[int], aperture_radius: float,
                       snap_radius: int = 1, xy_bounds=None,
-                      num_processes: int = 1) -> dict[str, np.ndarray]:
+                      num_processes: int = 1, oversampling: int = 1) -> dict[str, np.ndarray]:
     """`dev`'s ``compute_photutils_cols_for_diff_image``, on arrays and zero-based positions.
 
     Parameters
@@ -358,6 +366,9 @@ def photutils_columns(data: np.ndarray, error: np.ndarray, psf: np.ndarray, x0, 
         PSFPhotometry's bound on how far a fitted position moves; None leaves it free.
     num_processes : int, optional
         Forked processes the fits are split among; the results do not depend on it.
+    oversampling : int, optional
+        ``psf``'s oversampling (:func:`rapidpipe.science.psfmodel.oversampling`); 1, `dev`'s
+        detector-sampled stamp, unless ``[psf] fit_model`` is ``"oversampled"``.
 
     Returns
     -------
@@ -421,7 +432,8 @@ def photutils_columns(data: np.ndarray, error: np.ndarray, psf: np.ndarray, x0, 
     _FIT_INPUTS = {"data": np.where(mask, 0.0, data), "mask": mask,
                    "error": np.where(mask, 1.0, error), "psf": np.asarray(psf, dtype=np.float64),
                    "fit_shape": tuple(int(s) for s in fit_shape),
-                   "aperture_radius": aperture_radius, "xy_bounds": xy_bounds, "x0": x0, "y0": y0}
+                   "aperture_radius": aperture_radius, "xy_bounds": xy_bounds, "x0": x0, "y0": y0,
+                   "oversampling": int(oversampling)}
     processes = max(1, min(int(num_processes), len(index)))
     try:
         if processes > 1:
@@ -475,7 +487,7 @@ def fit_selection(catalog, pixel: dict[str, np.ndarray], naxis1: int, naxis2: in
 
 
 def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
-                  settings: dict[str, Any]) -> tuple[dict[str, np.ndarray], int]:
+                  settings: dict[str, Any], oversampling: int = 1) -> tuple[dict[str, np.ndarray], int]:
     """`dev`'s ``compute_extra_cols_sxtractor`` but RuBR-AT, which the stage adds (:func:`rb_input`).
 
     Parameters
@@ -487,6 +499,8 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
     settings : dict
         The stage's ``[difference]`` table: ``sumrat``, ``extra_catalog_cols``,
         ``psfcat_diffimage`` and ``xsources_database_prefilter`` (:func:`prefilter_table`).
+    oversampling : int, optional
+        ``psf``'s oversampling, for :func:`photutils_columns`.
 
     Returns
     -------
@@ -513,7 +527,8 @@ def extra_columns(catalog, data: np.ndarray, error: np.ndarray, psf: np.ndarray,
                                fit_shape=fit_shape, aperture_radius=float(p["aperture_radius"]),
                                snap_radius=int(e["photutils_cols_snap_radius"]),
                                xy_bounds=e["photutils_cols_xy_bounds"] or None,
-                               num_processes=int(e["photutils_cols_num_processes"]))
+                               num_processes=int(e["photutils_cols_num_processes"]),
+                               oversampling=oversampling)
     for name in PHOTUTILS_COLUMNS:
         values = np.full(len(catalog), np.nan)
         values[index] = fitted[name]

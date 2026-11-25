@@ -230,6 +230,7 @@ from rapidpipe.foundation.prefix import get
 from rapidpipe.foundation.steps import step
 from rapidpipe.products.diffimage import (
     INFORMATIONAL_SOURCE_FLAGS, SOURCE_FLAG_BRIGHT_FOOTPRINT, catalog_outcome_bit)
+from rapidpipe.science import psfmodel
 from rapidpipe.science.crossmatch.memory import associate_epoch
 from rapidpipe.science.crossmatch.xsources import accepted as accepted_xsources, xassociate_epoch
 from rapidpipe.science.difference import (
@@ -454,6 +455,8 @@ class Inputs:
     reference_catalog: Path
     science_psf: Path
     pid: int
+    #: The oversampled stamp beside the science PSF, under ``[psf] fit_model = "oversampled"``.
+    fit_psf: Path | None = None
 
 
 def _beside(url: str, name: str) -> Path:
@@ -543,7 +546,21 @@ def read_inputs(job: JobContext) -> Inputs:
         reference_uncertainty=_beside(ref_url,
                                       image_name.replace("_image.fits", "_uncert_image.fits")),
         reference_catalog=get(refcat[0]),
-        science_psf=get(psf_urls["science"]), pid=pid)
+        science_psf=get(psf_urls["science"]), pid=pid,
+        fit_psf=_fit_psf(job, psf_urls["science"]))
+
+
+def _fit_psf(job: JobContext, science_psf_url: str) -> Path | None:
+    """The oversampled stamp beside the science PSF under ``[psf] fit_model = "oversampled"``,
+    else None; a missing one rejects the job (exit 65), never a fit with the science PSF."""
+    if psfmodel.fit_model(job.settings) != "oversampled":
+        return None
+    name = psfmodel.companion_name(science_psf_url)
+    try:
+        return _beside(science_psf_url, name)
+    except FileNotFoundError:
+        raise _rejected(f"job {job.job}: [psf] fit_model = \"oversampled\" but no {name} beside "
+                        f"the science PSF {science_psf_url}") from None
 
 
 def _stage_input(source: Path, work_dir: Path, taken: set[str]) -> str:
@@ -684,6 +701,7 @@ def _run_catalogs(*, differencer: str, kit: Toolkit, work_dir: Path, settings: d
 def run(job: JobContext) -> None:
     settings = job.settings["difference"]
     check_settings(settings)
+    psfmodel.check(job.settings)
     with step("read_inputs"):
         inputs = read_inputs(job)
     kit = toolkit()
@@ -711,7 +729,8 @@ def run(job: JobContext) -> None:
         staged = {name: _stage_input(path, work_dir, taken) for name, path in (
             ("science", inputs.science_image), ("reference", inputs.reference_image),
             ("coverage", inputs.reference_coverage), ("uncertainty", inputs.reference_uncertainty),
-            ("catalog", inputs.reference_catalog), ("science_psf", inputs.science_psf))}
+            ("catalog", inputs.reference_catalog), ("science_psf", inputs.science_psf))
+            + ((("fit_psf", inputs.fit_psf),) if inputs.fit_psf is not None else ())}
         science_image_filename = _unzip_science_image(work_dir, staged["science"])
 
     def w(name: str) -> Path:
@@ -959,7 +978,7 @@ def run(job: JobContext) -> None:
         scigainmatch_catalog=filename_scigainmatchsexcat_catalog,
         refgainmatch_catalog=filename_refgainmatchsexcat_catalog,
         science_psf=filename_sciimage_psf_normalized, reference_psf=REFERENCE_PSF_NAME,
-        rb=rb, with_xsources=True, **common)
+        rb=rb, with_xsources=True, fit_psf=staged.get("fit_psf"), **common)
     infobits |= sfft_catalogs.bits
     metrics["pixel_columns_s"] = sfft_catalogs.pixel_columns_s
     if sfft_catalogs.rb is not None:
@@ -1453,7 +1472,8 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
               filename_bkg_subbed_science_image, gainmatched_reference, resampled_cov_map,
               nan_indices, scigainmatch_catalog, refgainmatch_catalog, science_psf,
               reference_psf, reformatted_science_image, gain_times_exptime,
-              thresh, rb=None, with_xsources=False) -> tuple[dict[str, str], _Catalogs]:
+              thresh, rb=None, with_xsources=False,
+              fit_psf: str | None = None) -> tuple[dict[str, str], _Catalogs]:
     """Run SFFT as `dev` does, then mask its difference and make both signs' catalogs.
 
     A nonzero exit raises :class:`~rapidpipe.science.difference.tools.ToolFailed`
@@ -1500,6 +1520,10 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
     with_xsources : bool
         Add `dev`'s extra columns to both SExtractor catalogs, scored as `dev`
         scores them (:func:`_xsources_columns`).
+    fit_psf : str or None
+        The staged oversampled stamp the PSF-fit catalogs and the xsources fit
+        with under ``[psf] fit_model = "oversampled"``; None fits SFFT's
+        difference PSF, as `dev`.
 
     Returns
     -------
@@ -1568,7 +1592,7 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
                       "catalog": detection.replace(".fits", ".txt")},
             negative={"detection": detection_negative, "input": diffimage_negative,
                       "catalog": detection_negative.replace(".fits", ".txt")},
-            weight_image=diffimage_unc, psf_image=names["diffpsf"],
+            weight_image=diffimage_unc, psf_image=fit_psf or names["diffpsf"],
             sky_coords_image=reformatted_science_image,
             psfcat_names={"catalog": psfcat_table["output_sfft_psfcat_filename"],
                           "finder": psfcat_table["output_sfft_psfcat_finder_filename"],
@@ -1602,7 +1626,7 @@ def _run_sfft(*, kit, work_dir, settings, seed, science_image_filename,
             kit, work_dir, settings, rb,
             {"positive": (detection.replace(".fits", ".txt"), diffimage),
              "negative": (detection_negative.replace(".fits", ".txt"), diffimage_negative)},
-            uncertainty_image=diffimage_unc, psf_image=names["diffpsf"],
+            uncertainty_image=diffimage_unc, psf_image=fit_psf or names["diffpsf"],
             science=filename_bkg_subbed_science_image, reference=gainmatched_reference)
     return names, catalogs
 
@@ -1639,13 +1663,15 @@ def _xsources_columns(kit, work_dir: Path, settings: dict[str, Any], rb, signs: 
     """
     start = time.perf_counter()
     error = fits.getdata(work_dir / uncertainty_image, 0)
-    psf_data = fits.getdata(work_dir / psf_image, 0)
+    psf_data, psf_header = fits.getdata(work_dir / psf_image, 0, header=True)
+    oversampling = psfmodel.oversampling(psf_header)
     out: dict[str, Any] = {"catalogs": {}, "extra": {}, "fitted": {}, "scored": {}, "rb": {}}
     for sign, (catalog_name, image) in signs.items():
         catalog = xsources.read_catalog(work_dir / catalog_name)
         data = fits.getdata(work_dir / image, 0)
         with step("xsources_fit"):
-            extra, fitted = xsources.extra_columns(catalog, data, error, psf_data, settings)
+            extra, fitted = xsources.extra_columns(catalog, data, error, psf_data, settings,
+                                                   oversampling=oversampling)
         out["fitted"][sign] = fitted
         if rb is not None and len(catalog):
             classifier, filter_name = rb

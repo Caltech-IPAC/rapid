@@ -102,6 +102,13 @@ max_frames = 50
 # reference.awaicgen.use_nominal_zptmag=false.
 use_nominal_zptmag = true
 
+[psf]
+# Flight's PSF fits use commissioning's oversampled (os3) ePSF stamp, imported
+# beside the phase-averaged science PSF; every other reader keeps the latter.
+# Needs crossconv_flag false, below (Jacob, 2026-11-25; rapid_docs
+# decision-flight-psf-fit-oversampled).
+fit_model = "oversampled"
+
 [difference]
 # The cutover's scope, as the flight and HLWAS overlays share it: SFFT's
 # difference, its xsources and their packets, which is what commissioning

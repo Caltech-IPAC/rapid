@@ -15,7 +15,8 @@ The job's scope names what to import, relative to ``source_dir``::
      "epochs": [{"expid": 1, "rid": 2, "pid": 3, "rfid": 4,
                  "l2": "<L2 FITS>", "difference": "<difference job directory>"}],
      "reference": {"rfid": 4, "dir": "<reference job directory>"},
-     "psf": {"kind": "science", "path": "<science-image PSF>"},
+     "psf": {"kind": "science", "path": "<science-image PSF>",
+             "oversampled": "<its oversampled stamp, optional>"},
      "gaia": {"version": "DR3", "prefix": "<the Gaia mirror's prefix>"},
      "ned": {"version": "36.1_20260527_v2", "prefix": "<the NED copy's prefix>"},
      "lvs": {"version": "20260424", "prefix": "<the same prefix: lvs/ is under it>"},
@@ -86,6 +87,15 @@ PSF files carry it as ``PSFKIND`` (:data:`PSFKIND`): a file whose keyword
 names the other kind fails the job before a manifest; a file with no
 keyword imports under the declared kind, and the manifest records the
 keyword as it was (``psf.PSFKIND``, null when absent).
+
+A ``psf`` may also name the science PSF's oversampled stamp
+(``oversampled``, commissioning's ``epsf_os3_<filter>_scaNN.fits``): of the
+same filter and SCA, with an ``OVERSAMP`` card above 1, it is copied beside
+the science PSF as ``<science PSF stem>_oversampled.fits``, where the
+difference and packet stages fit with it under ``[psf] fit_model =
+"oversampled"`` (:mod:`rapidpipe.science.psfmodel`). It has no row; the
+manifest records its URL, checksum and oversampling (``psf.oversampled``).
+rapid_docs ``decisions.md``, flight-psf-fit-oversampled.
 """
 
 from __future__ import annotations
@@ -106,6 +116,7 @@ from rapidpipe.exitcodes import CommandExit, ExitCode
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import get
 from rapidpipe.foundation.steps import step
+from rapidpipe.science import psfmodel
 from rapidpipe.science.catalogs.readers import CATALOG_KINDS, mirror_root
 from rapidpipe.science.catalogs.store import GAIA_INFO, LVS_INFO, LVS_PARQUET, MANIFEST_NAME, Store
 from rapidpipe.science.difference import xsources
@@ -177,6 +188,8 @@ def run(job: JobContext) -> None:
         row, keyword = _psf(job, source, scope["psf"])
         tables["psfs"] = [row]
         recorded["psf"] = {"kind": row["kind"], "PSFKIND": keyword}
+        if "oversampled" in scope["psf"]:
+            recorded["psf"]["oversampled"] = _oversampled(job, source / scope["psf"]["oversampled"], row)
     catalogs = []
     for kind in CATALOG_KINDS:
         if kind in scope:
@@ -470,6 +483,32 @@ def _sca(header: fits.Header) -> int:
     if "SCA" in header:
         return int(header["SCA"])
     return int(header["DETECTOR"].removeprefix("WFI"))
+
+
+def _oversampled(job: JobContext, path: Path, psf_row: dict) -> dict:
+    """Copy the science PSF's oversampled stamp beside it, as ``<science PSF stem>_oversampled.fits``
+    (rapid_docs decision-flight-psf-fit-oversampled): no row of its own, the manifest's record.
+
+    Refuses a stamp of another filter or SCA than the science PSF's, or with no ``OVERSAMP`` above 1.
+    """
+    with fits.open(path) as hdul:
+        header = hdul[0].header
+        sca, fid = _sca(header), _fid(header["FILTER"])
+        oversampling = psfmodel.oversampling(header)
+    if (fid, sca) != (psf_row["fid"], psf_row["sca"]):
+        raise ValueError(f"{path.name}: fid {fid} SCA {sca}, not the science PSF's fid {psf_row['fid']} "
+                         f"SCA {psf_row['sca']}")
+    if oversampling < 2:
+        raise ValueError(f"{path.name}: OVERSAMP {oversampling}, not an oversampled stamp")
+    name = psfmodel.companion_name(psf_row["filename"])
+    target = job.path / name
+    shutil.copyfile(path, target)
+    digest = hashlib.md5()
+    with target.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return {"filename": job.prefix + name, "checksum": digest.hexdigest(), "oversampling": oversampling,
+            "source": path.name}
 
 
 def _psf(job: JobContext, source: Path, psf: dict) -> tuple[dict, str | None]:
