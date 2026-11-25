@@ -118,6 +118,13 @@ size = 61
 # never here. Empty: CRDS alone. A 178.6 MB reference from CRDS took most of
 # a psf job's time.
 epsf_cache = ""
+# New: the model the PSF fits use (rapidpipe.science.psfmodel): "native", the
+# science PSF, as dev; "oversampled", the stamp the import keeps beside it
+# (<science PSF stem>_oversampled.fits), for SFFT's PSF-fit catalogs, the
+# xsources and the packet's forced photometry. Refused with
+# [difference.sfft] crossconv_flag true. rapid_docs
+# decision-flight-psf-fit-oversampled.
+fit_model = "native"
 
 [psf.epsf]
 # New: the CRDS ePSF reference the psf stage reduces for a file that names

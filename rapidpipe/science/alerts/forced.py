@@ -43,6 +43,8 @@ from astropy.wcs import WCS
 from photutils.background import (Background2D, MADStdBackgroundRMS,
                                   MedianBackground)
 
+from rapidpipe.science import psfmodel
+
 logger = logging.getLogger(__name__)
 
 FIT_SHAPE = (7, 7)
@@ -376,25 +378,32 @@ def project_positions(wcs, shape, positions, margin=STAMP_MARGIN_PX):
     return x, y, on_chip
 
 
-def load_psf(path, oversampling=1):
+def load_psf(path, oversampling=None):
     """The photutils PSF model for forced fitting: an ImagePSF built from
-    a PSF image, normalized to unit sum, with its position fixed so only
-    the flux is fit.
+    a PSF image at unit flux, with its position fixed so only the flux is
+    fit.
 
     Parameters
     ----------
     path : str
-        Local FITS file holding the PSF image (the job-directory PSF
-        products are detector-sampled, so ``oversampling`` is 1).
+        Local FITS file holding the PSF image.
+    oversampling : int, optional
+        The image's oversampling; by default its ``OVERSAMP`` card, 1 when
+        absent (the detector-sampled PSF products). An oversampled stamp is
+        scaled to sum to ``oversampling ** 2``, which is unit flux for
+        ``ImagePSF`` (:func:`rapidpipe.science.psfmodel.unit_flux`); unit sum
+        would fit ``oversampling ** 2`` times the flux.
     """
     from photutils.psf import ImagePSF
 
-    psf_data, _ = _first_image_hdu(path)
-    total = float(np.nansum(psf_data))
-    if not np.isfinite(total) or total <= 0.0:
-        raise ValueError(f"PSF {path} has non-positive total {total}")
-    psf = ImagePSF(np.nan_to_num(psf_data) / total, flux=1.0, x_0=0.0, y_0=0.0,
-                   oversampling=oversampling)
+    psf_data, header = _first_image_hdu(path)
+    if oversampling is None:
+        oversampling = psfmodel.oversampling(header)
+    try:
+        data = psfmodel.unit_flux(psf_data, oversampling)
+    except ValueError as exc:
+        raise ValueError(f"PSF {path}: {exc}") from exc
+    psf = ImagePSF(data, flux=1.0, x_0=0.0, y_0=0.0, oversampling=oversampling)
     psf.x_0.fixed = True
     psf.y_0.fixed = True
     return psf

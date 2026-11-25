@@ -26,6 +26,7 @@ from typing import Any, Callable, Sequence
 import numpy as np
 from astropy.io import fits
 
+from rapidpipe.science import psfmodel
 from rapidpipe.science.difference.statistics import fits_data_statistics_with_clipping
 
 logger = logging.getLogger(__name__)
@@ -81,8 +82,16 @@ def compute_psf_catalog(n_clip_sigma,
     x_0 = (naxis1 - 1) / 2
     y_0 = (naxis2 - 1) / 2
 
-    data_psf_sum = np.sum(data_psf_np)
-    psf_model = ImagePSF(data_psf_np, flux=data_psf_sum, x_0=x_0, y_0=y_0)
+    # Not dev: an oversampled stamp (its OVERSAMP card, [psf] fit_model = "oversampled") is
+    # fitted at its oversampling, scaled to unit flux; a detector-sampled one exactly as dev.
+    oversampling = psfmodel.oversampling(hdr_psf)
+    if oversampling == 1:
+        data_psf_sum = np.sum(data_psf_np)
+        psf_model = ImagePSF(data_psf_np, flux=data_psf_sum, x_0=x_0, y_0=y_0)
+    else:
+        psf_model = ImagePSF(psfmodel.unit_flux(data_psf_np, oversampling), flux=1.0,
+                             x_0=x_0 / oversampling, y_0=y_0 / oversampling,
+                             oversampling=oversampling)
 
     finder = DAOStarFinder(threshold=threshold,
                            fwhm=fwhm,

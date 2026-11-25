@@ -203,6 +203,8 @@ from rapidpipe.foundation.children import set_children
 from rapidpipe.foundation.local import JobContext
 from rapidpipe.foundation.prefix import cache_dir, get, is_staged
 from rapidpipe.foundation.steps import step
+from rapidpipe.exitcodes import CommandExit, ExitCode
+from rapidpipe.science import psfmodel
 from rapidpipe.science.alerts import calibration
 from rapidpipe.science.alerts import forced as fp
 from rapidpipe.science.alerts.assemble import (
@@ -723,6 +725,7 @@ def _read(job: JobContext) -> Read:
         psf_rows, psf_reads = science_psfs(cur, chosen, key["dataset"], named_psf)
         reads += psf_reads
         fetched_psfs: dict[str, Path] = {}
+        oversampled = psfmodel.fit_model(job.settings) == "oversampled"
         for d in chosen:
             image_key = {"dataset": d["dataset"], "expid": d["expid"], "sca": d["sca"], "fid": d["fid"]}
             reads += [{"product": "diffimages", "key": image_key, "source_job": d["job"]},
@@ -733,6 +736,8 @@ def _read(job: JobContext) -> Read:
                                " psfs row; measured on its difference image only",
                                job.job, d["pid"], d["expid"], d["sca"], d["fid"])
                 sci_psf = None
+            elif oversampled:
+                sci_psf = fetched_psfs.setdefault(psf_row["filename"], _fit_psf(job, psf_row["filename"]))
             else:
                 sci_psf = fetched_psfs.setdefault(psf_row["filename"], get(psf_row["filename"]))
             diff = get(d["filename"])
@@ -746,7 +751,11 @@ def _read(job: JobContext) -> Read:
                 band=d["filter"], mjdobs=d["mjdobs"],
                 corners=tuple(d[c] for c in ("ra1", "dec1", "ra2", "dec2",
                                              "ra3", "dec3", "ra4", "dec4")),
-                diff=diff, diff_psf=_beside(d["filename"], fp.DIFF_PSF_BASENAMES[plain]),
+                # Under [psf] fit_model = "oversampled" the difference is fitted with the science
+                # PSF's oversampled stamp too: without cross-convolution, which the setting
+                # requires, SFFT's difference PSF is the science PSF.
+                diff=diff, diff_psf=(sci_psf if oversampled and sci_psf is not None
+                                     else _beside(d["filename"], fp.DIFF_PSF_BASENAMES[plain])),
                 diff_uncert=_beside(d["filename"], uncert) if uncert else None,
                 sci=_beside(d["filename"], fp.SCI_BASENAME), sci_psf=sci_psf, l2=d["l2file"],
                 exptime=d["exptime"], zptmag=d["zptmag"], pixel_area_map=d["pixel_area_map"]))
@@ -963,6 +972,18 @@ def _separation(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
 def neighbour(name: str, diff: str) -> str:
     """The published name of the difference image ``diff``'s neighbour ``name``: gzipped beside a gzipped image."""
     return name + ".gz" if diff.endswith(".fits.gz") else name
+
+
+def _fit_psf(job: JobContext, science_psf_url: str) -> Path:
+    """The oversampled stamp the import keeps beside the science PSF ``science_psf_url``
+    (``[psf] fit_model = "oversampled"``); a missing one rejects the job (exit 65)."""
+    name = psfmodel.companion_name(science_psf_url)
+    try:
+        return get(science_psf_url.rsplit("/", 1)[0] + "/" + name)
+    except FileNotFoundError:
+        raise CommandExit(int(ExitCode.INPUT_REJECTED),
+                          f"job {job.job}: [psf] fit_model = \"oversampled\" but no {name} beside the "
+                          f"science PSF {science_psf_url}") from None
 
 
 def _beside(url: str, name: str) -> Path:
