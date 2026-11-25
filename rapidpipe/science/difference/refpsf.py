@@ -26,7 +26,8 @@ re-centred on the central pixel, with what it measured:
   width between the science PSF's and that plus :data:`WIDTH_EXCESS_MAX_PX`;
   the brightest :data:`MAX_STARS` by flux;
 - fewer than :data:`MIN_STARS` raises :class:`TooFewStars` (``refpsf: N
-  stars, 10 needed``): no fallback, a sparse field is the next experiment;
+  stars, 10 needed``): the difference stage falls back to a named
+  reference PSF set when its run has one;
 - the ePSF: ``EPSFBuilder`` at :data:`OVERSAMPLE` on :data:`STAMP_PX`
   stamps, evaluated at the pixel centres of the output stamp (an effective
   PSF evaluated at a pixel centre is that pixel's value), shifted until its

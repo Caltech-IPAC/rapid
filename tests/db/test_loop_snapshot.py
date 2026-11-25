@@ -79,7 +79,7 @@ def test_the_snapshot_reads_program_id_and_a_two_program_dataset_plans_only_the_
         "status": 1, "nframes": 2, "cov5percent": 50.0}]},
         expects=[{"product": "refimages", "key": {"dataset": DATASET, "field": FIELD, "fid": FID},
                   "binding": CURRENT}])
-    snap = dataclasses.replace(loop.snapshot(w.conn, run), psfs={(FID, SCA, "science"): (1, 1)})
+    snap = dataclasses.replace(loop.snapshot(w.conn, run), psfs={(FID, SCA, "science", None): (1, 1)})
     subs, _ = loop.plan(snap, [], sel)
     assert [s["stage"] for s in subs] == ["difference"] and subs[0]["scope"]["expid"] == 1
 

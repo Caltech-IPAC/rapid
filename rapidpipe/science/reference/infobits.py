@@ -11,12 +11,11 @@ thresholds and the fatal bits in ``[reference.infobits]`` (`dev`'s
 that could not be computed (NaN or absent) sets none. The status is 0
 (bad) when a fatal bit is set, else 1.
 
-Departure (reference page): `dev` always makes the Photutils reference
-catalog and has a reference PSF, so it measures the PSF-fit catalog's
-source count and limiting magnitude and the formula limiting magnitude.
-This build makes neither (``[reference.psfcat] enabled = false``), so
-those metrics are absent and bits 5, 6, 7 and 16 are never set: a catalog
-that was not attempted is not one that failed.
+With ``[reference.psfcat] enabled`` the grade reads the PSF-fit catalog's
+flag and source count (0 when the catalog was not made) and the two
+limiting magnitudes (:mod:`.psfcat`), so bits 5, 6, 7 and 16 are live.
+With it off those metrics are absent and the four bits are never set: a
+catalog that was not attempted is not one that failed (reference page).
 """
 
 from __future__ import annotations
@@ -165,8 +164,41 @@ def bad_pixel_percent(image: np.ndarray, coverage: np.ndarray, satcount: int) ->
 def grade(image_path: Path, coverage_path: Path, definitions_path: str | Path,
           params: Mapping[str, Any], *, gmedian: float, datascale: float, satcount: int,
           fwhm_mode_pix: float, fwhm_pctl_pix: float, nsexcat: int,
-          input_zptmags) -> Grade:
-    """`dev` ``evaluate_refimage_quality`` without the PSF-fit catalog's metrics (above)."""
+          input_zptmags, psfcat_flag: bool | None = None, npsfcat: int = 0,
+          maglimcat: float = np.nan, maglimit: float = np.nan) -> Grade:
+    """`dev` ``evaluate_refimage_quality``, with the PSF-fit catalog's metrics when it was attempted.
+
+    Parameters
+    ----------
+    image_path, coverage_path : pathlib.Path
+        The mosaic and its coverage map.
+    definitions_path : str or pathlib.Path
+        ``cdf/infobitsref.txt``.
+    params : mapping
+        :func:`check_params`' values.
+    gmedian, datascale : float
+        The mosaic's median and robust noise [DN/s].
+    satcount : int
+        Its saturated pixels.
+    fwhm_mode_pix, fwhm_pctl_pix : float
+        The SExtractor catalog's point-source FWHM mode and percentile [px].
+    nsexcat : int
+        The SExtractor catalog's sources.
+    input_zptmags : sequence of float
+        The coadded frames' ``ZPTMAG``.
+    psfcat_flag : bool or None
+        Whether the PSF-fit catalog was made; ``None`` when it was not attempted, which leaves
+        its four metrics absent.
+    npsfcat : int
+        The PSF-fit catalog's sources, recorded as 0 when it was not made.
+    maglimcat, maglimit : float
+        The catalog and formula limiting magnitudes [mag], NaN when not computed (recorded as ``None``).
+
+    Returns
+    -------
+    Grade
+        The InfoBits, status, header cards and metrics.
+    """
     with fits.open(image_path) as hdul:
         scale = pixel_scale_arcsec(hdul[0].header)
         image = np.asarray(hdul[0].data)
@@ -182,6 +214,11 @@ def grade(image_path: Path, coverage_path: Path, definitions_path: str | Path,
                "fwhm_med_arcsec": arcsec(fwhm_mode_pix),
                "fwhm_pctl_arcsec": arcsec(fwhm_pctl_pix),
                "nsexcat": int(nsexcat), "zptmag_rms": compute_robust_spread(input_zptmags)}
+    if psfcat_flag is not None:
+        # A limiting magnitude not computed is recorded as null, which JSON can hold and sets no bit.
+        metrics.update(maglimcat=float(maglimcat) if np.isfinite(maglimcat) else None,
+                       maglimit=float(maglimit) if np.isfinite(maglimit) else None,
+                       npsfcat=int(npsfcat) if psfcat_flag else 0, psfcat_flag=bool(psfcat_flag))
     infobits, status = compute_refimage_infobits(metrics, params)
     return Grade(infobits=infobits, status=status,
                  cards=infobit_cards(definitions_path, params), metrics=metrics)

@@ -438,10 +438,7 @@ zprefimg = 17.0
 use_nominal_zptmag = false
 
 [reference.psfcat]
-# [PSFCAT_REFIMAGE]. `dev`'s Photutils reference catalog needs a
-# reference PSF input the input set does not carry yet; designed in, off,
-# not produced in this build (reference page). true fails the job. The table's
-# other values are `dev`'s, kept for when it is ported.
+# [PSFCAT_REFIMAGE]: the mosaic's Photutils PSF-fit catalog, made with the reference PSF [difference] reference_psf chooses and grading InfoBits 5, 6, 7 and 16; off in the base, so the simulations' references make none (Azalee, 2026-11-10).
 enabled = false
 n_clip_sigma = "3.0"
 n_thresh_sigma = "5"
@@ -490,8 +487,7 @@ t04 = 2.0
 fwhm_percentile = 90.0
 # bits 5 and 6: limiting magnitude from the PSF-fit catalog's flux
 # uncertainties < t05, from the background noise and the PSF < t06, at
-# maglim_snr. Neither is computed in this build (no Photutils reference
-# catalog, no reference PSF at the reference stage), so neither bit is set.
+# maglim_snr; computed only with [reference.psfcat] enabled, else neither bit is set.
 t05 = 15.0
 t06 = 15.0
 maglim_snr = 5.0
@@ -504,6 +500,7 @@ t08 = 10
 # bit 10: robust spread (0.5 * (p84 - p16)) of the input frames' ZPTMAG > t10 mag.
 t10 = 3.5
 # Bits that make the reference bad (status 0), as ZTF.
+# A reference with a fatal bit set is published but not made official, and its job fails (Azalee, 2026-11-10).
 fatalinfobits = [2, 5, 7, 8, 16]
 
 # [SEXTRACTOR_REFIMAGE] verbatim (generated from the ini; configparser's
@@ -616,7 +613,10 @@ xy_fit_max_offset = 0.5
 # stars (core and ring residuals, the ring count, registration): "measured"
 # takes the measurement's finder stars, "science" the reference mosaic's
 # SExtractor catalog mapped onto the science grid.
+# "precomputed" reads the reference_psf_set's official reference psfs row; its metrics' stars are the catalog's (Azalee, 2026-11-06).
 reference_psf = "measured"
+# The imported reference PSF set a run reads, by name (import_psf_set.py); "measured" falls back to it on any measurement error, and empty means no fallback (Azalee, 2026-11-13).
+reference_psf_set = ""
 
 [difference.paths]
 # `dev`: rapid_sw = "/code", cfg_path = rapid_sw + "/cdf" (hard-coded in

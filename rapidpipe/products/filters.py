@@ -50,3 +50,24 @@ def rapid_filter_name(name: str) -> str:
 def same_filter(a: str, b: str) -> bool:
     """True when ``a`` and ``b`` name one filter in either spelling."""
     return bool(filter_spellings(a) & filter_spellings(b))
+
+
+def refimage_psf_set(field: int, filter_name: str) -> str:
+    """The ``psf_set`` of a reference job's measured PSF: ``refimage-<field>-<filter>``.
+
+    The filter is in the Roman spelling (``F158``), so the name reads on its own beside the key's ``fid``.
+
+    Parameters
+    ----------
+    field : int
+        The reference's tessellation field.
+    filter_name : str
+        The filter in either spelling (``H158`` or ``F158``).
+
+    Returns
+    -------
+    str
+        For example ``refimage-12345-F158``.
+    """
+    rapid = rapid_filter_name(filter_name)
+    return f"refimage-{int(field)}-{RAPID_TO_ROMAN_FILTER_NAMES.get(rapid, rapid)}"

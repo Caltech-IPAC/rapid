@@ -50,7 +50,7 @@ def query(conn, sql, params=()):
 def test_job_local_publishes_a_bound_reference_from_two_named_l2_rows(connect, tmp_path,
                                                                      monkeypatch, capsys):
     conn = connect()
-    run = create_run(conn, "tester", "reference", "abc123", settings(), SURVEY, DATASET)
+    run = create_run(conn, "tester", "reference", "abc123", settings(infobits={"t08": 1}), SURVEY, DATASET)
     change(conn, [{"open": {"survey": SURVEY, "dataset": DATASET, "run": run}}], "tester", "live")
     paths = write_frames(tmp_path / "l2")[:2]
     l2_job = create_job(conn, run, "import", {})
@@ -100,7 +100,8 @@ def test_job_local_under_coverage_publishes_a_covered_reference_and_fails_a_shor
     for minimum, tolerance in ((0.3, 0.05), (0.95, 0.7)):
         run = create_run(conn, "tester", "coverage", "abc123",
                          settings(selection={"selection_type": "coverage", "min_coverage_fraction": minimum,
-                                             "coverage_estimate_tolerance": tolerance}), f"S{minimum}", DATASET)
+                                             "coverage_estimate_tolerance": tolerance},
+                                  infobits={"t08": 1}), f"S{minimum}", DATASET)
         change(conn, [{"open": {"survey": f"S{minimum}", "dataset": DATASET, "run": run}}], "tester", "live")
         l2_job = create_job(conn, run, "import", {})
         ra, dec = fakereftools.TILE_CENTRE

@@ -246,3 +246,15 @@ def test_toml_holds_every_value_a_body_can_and_refuses_a_null_naming_its_key():
     assert tomllib.loads(to_toml(body)) == body
     with pytest.raises(LayerError, match="plain.missing"):
         to_toml({"plain": {"missing": None}})
+def test_precomputed_without_a_reference_psf_set_is_refused():
+    """A run whose difference job would read a set names it (Azalee, 2026-11-10)."""
+    with pytest.raises(LayerError, match="needs a reference_psf_set"):
+        resolve(SHIPPED, None, ['difference.reference_psf="precomputed"'])
+    body, _ = resolve(SHIPPED, None, ['difference.reference_psf="precomputed"',
+                                      'difference.reference_psf_set="1043_20260928"'])
+    assert body["difference"]["reference_psf_set"] == "1043_20260928"
+    flight, _ = resolve(SHIPPED, FLIGHT)
+    assert (flight["difference"]["reference_psf"], flight["difference"]["reference_psf_set"]) == (
+        "precomputed", "1043_20260928")
+    with pytest.raises(LayerError, match="needs a reference_psf_set"):
+        resolve(SHIPPED, FLIGHT, ['difference.reference_psf_set=""'])

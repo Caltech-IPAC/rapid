@@ -7,6 +7,7 @@ and the foundation schema never collect each other's tests.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -123,10 +124,11 @@ def test_the_psf_key_carries_its_kind(conn):
     with conn.cursor() as cur:
         run, science = _run_and_job(cur)
         reference = _job(cur, run)
-        for job, kind in ((science, "science"), (reference, "reference")):
-            cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, filename, checksum)"
-                        " VALUES (%s, 'D', 1, 1, %s, 'psf.fits', 'x')", (job, kind))
-            _open(cur, job, f'{{"dataset": "D", "fid": 1, "sca": 1, "kind": "{kind}"}}', "psfs")
+        for job, kind, psf_set in ((science, "science", None), (reference, "reference", "S1")):
+            cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, psf_set, filename, checksum)"
+                        " VALUES (%s, 'D', 1, 1, %s, %s, 'psf.fits', 'x')", (job, kind, psf_set))
+            key = {"dataset": "D", "fid": 1, "sca": 1, "kind": kind, **({"psf_set": psf_set} if psf_set else {})}
+            _open(cur, job, json.dumps(key), "psfs")
         cur.execute("SELECT kind, job FROM psfs_official ORDER BY kind")
         assert cur.fetchall() == [("reference", reference), ("science", science)]
 
@@ -138,6 +140,34 @@ def test_the_psf_key_carries_its_kind(conn):
         with pytest.raises(errors.CheckViolation):
             cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, filename, checksum)"
                         " VALUES (%s, 'D', 1, 1, 'difference', 'psf.fits', 'x')", (science,))
+
+
+@pytest.mark.parametrize("kind, psf_set", [("reference", None), ("science", "S1")])
+def test_a_reference_psf_names_its_set_and_a_science_psf_none(conn, kind, psf_set):
+    with conn.cursor() as cur:
+        _, job = _run_and_job(cur)
+        with pytest.raises(errors.CheckViolation):
+            cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, psf_set, filename, checksum)"
+                        " VALUES (%s, 'D', 1, 1, %s, %s, 'psf.fits', 'x')", (job, kind, psf_set))
+
+
+def test_two_reference_sets_are_official_side_by_side_and_a_science_psf_stays_unique(conn):
+    """The set is in the reference key; a job's science PSF of one key is still one row."""
+    with conn.cursor() as cur:
+        run, first = _run_and_job(cur)
+        second = _job(cur, run)
+        for job, psf_set in ((first, "S1"), (second, "S2")):
+            cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, psf_set, filename, checksum)"
+                        " VALUES (%s, 'D', 1, 1, 'reference', %s, %s, 'x')", (job, psf_set, psf_set))
+            _open(cur, job, json.dumps({"dataset": "D", "psf_set": psf_set, "fid": 1, "sca": 1,
+                                        "kind": "reference"}), "psfs")
+        cur.execute("SELECT psf_set, job FROM psfs_official ORDER BY psf_set")
+        assert cur.fetchall() == [("S1", first), ("S2", second)]
+        cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, filename, checksum)"
+                    " VALUES (%s, 'D', 1, 1, 'science', 'psf.fits', 'x')", (first,))
+        with pytest.raises(errors.UniqueViolation):
+            cur.execute("INSERT INTO psfs (job, dataset, fid, sca, kind, filename, checksum)"
+                        " VALUES (%s, 'D', 1, 1, 'science', 'psf.fits', 'x')", (first,))
 
 
 def test_the_catalog_views_follow_the_source_sets_bindings(conn):
