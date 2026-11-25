@@ -13,7 +13,8 @@ binds sends its own set, a failure to send it leaves the job exit 0 and the
 set unstamped, and a job that did not bind sends nothing; a set the
 quality gate holds is neither sent nor stamped, by the sweep or by its own
 packet job, and the others are; the producer waits for every replica and
-is idempotent.
+is idempotent; a container downloaded from ``s3://`` is removed from the
+download cache once read, and a ``file://`` URL's own container is kept.
 """
 
 from __future__ import annotations
@@ -28,7 +29,9 @@ import pytest
 
 from rapidpipe.cli import main as cli
 from rapidpipe.exitcodes import ExitCode
-from rapidpipe.foundation import publish_kafka
+from rapidpipe.foundation import prefix, publish_kafka
+
+from .fakes3 import FakeS3
 
 SCHEMA = fastavro.parse_schema({"type": "record", "name": "P", "fields": [
     {"name": "sid", "type": "long"}]})
@@ -150,6 +153,18 @@ def test_each_message_is_a_one_record_container_of_its_packet(outbox):
     for _, _, value, packet in producer.sent:
         (record,) = fastavro.reader(io.BytesIO(value))
         assert packet.decode().endswith(f":{record['sid']}")
+
+
+def test_a_downloaded_container_is_removed_once_read_and_a_file_url_container_is_kept(tmp_path, monkeypatch):
+    fake = FakeS3(page_size=2)
+    monkeypatch.setattr("rapidpipe.products.storage.s3_client", lambda: fake)
+    monkeypatch.setattr(prefix, "_cache", tmp_path / "cache")
+    local = _outbox(tmp_path, 7, [70, 71])
+    fake.seed("bucket", "run/1/packet/7/1/packets/7.avro", (tmp_path / "7.avro").read_bytes())
+    staged = [{**row, "filename": "s3://bucket/run/1/packet/7/1/packets/7.avro"} for row in local]
+    assert publish_kafka.messages(staged) == publish_kafka.messages(local)
+    assert not (tmp_path / "cache" / "bucket" / "run/1/packet/7/1/packets/7.avro").exists()
+    assert (tmp_path / "7.avro").is_file()
 
 
 def test_a_producer_error_leaves_the_stamp_null_and_the_verb_exits_non_zero(outbox, tmp_path, monkeypatch):
