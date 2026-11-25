@@ -88,11 +88,10 @@ PSF, ``psfs``: 18 ``reference`` rows, one per SCA, sharing
 ``refimage-<field>-<filter>`` (:func:`rapidpipe.products.filters.refimage_psf_set`),
 bound with the reference. A measurement that fell back, or failed with no
 set, writes none, and the manifest's ``unbound`` leaves those expected
-keys out of the binding. A reference graded status 0 (a fatal InfoBit) is
-published with the manifest's ``refused`` naming its fatal bits: its rows
-load and its binding, the ``psfs`` keys with it, is refused, so the job
-counts as failed and no difference is made against it (Azalee,
-2026-11-10). The manifest also records
+keys out of the binding. A reference graded status 0 (a fatal InfoBit)
+fails the job with exit 65 after its header stamp and before any table or
+manifest is written, its fatal bits the reason, so nothing is published and
+no difference is made against it (Azalee, 2026-11-24). The manifest also records
 `dev`'s refimmeta measurements under ``reference`` and ``metrics``, one
 flat dict of named numbers (the compact stars' width, the coverage
 histogram, the extremes, awaicgen's wall seconds; :func:`rapidpipe.science.reference.measure.quality_metrics`).
@@ -1014,6 +1013,10 @@ def run(job: JobContext) -> None:
             "coverage_target": checked.min_coverage_fraction} if covered is not None else {}))
     header.add_keywords_to_reference_image_header(o(names["image"]), stamp)
     header.add_keywords_to_reference_image_header(o(names["uncertainty"]), stamp)
+    if grade.status == 0:
+        fatal = sorted(set(grade.bits) & set(checked.infobits["fatalinfobits"]))
+        raise _rejected(f"reference status 0: fatal InfoBits {', '.join(map(str, fatal))} "
+                        f"(infobits {grade.infobits})")
 
     def url(name: str) -> str:
         return job.prefix + o(name).relative_to(job.path).as_posix()
@@ -1060,11 +1063,6 @@ def run(job: JobContext) -> None:
     expects_psfs = any(i["kind"] == "expects" and i["product"] == "psfs" for i in job.inputs)
     if expects_psfs and "psfs" not in tables:
         extra["unbound"] = ["psfs"]
-    if grade.status == 0:
-        fatal = sorted(set(grade.bits) & set(checked.infobits["fatalinfobits"]))
-        extra["refused"] = (f"reference status 0: fatal InfoBits {', '.join(map(str, fatal))} "
-                            f"(infobits {grade.infobits}); published, not made official")
-        logger.warning("reference: %s", extra["refused"])
     job.write_manifest(
         [(table, f"{table}.parquet") for table in tables], **extra,
         reference={"rfid": rfid, "ra_center": ra_center, "dec_center": dec_center,

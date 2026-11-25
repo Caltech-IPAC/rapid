@@ -1,16 +1,15 @@
-"""A reference graded status 0 is published but not official, and a measured reference PSF binds with it.
+"""A reference graded status 0 fails its job, and a measured reference PSF binds with a good one.
 
 Contracts, against database/schema.sql, with ``job local`` and the fake
-tools: a status 0 reference (a fatal InfoBit) loads its ``refimages``,
-``refimimages`` and ``refimcatalogs`` rows, opens no binding, exits 1 and
-records its fatal bits as the job's refusal; the loop then plans no
-difference against it, does not plan it again in the same run, and
-reports it under ``failed``. A status 1 reference binds as before. With
-``[reference.psfcat] enabled`` under ``"measured"`` the measured PSF's 18
-``reference`` ``psfs`` rows (set ``refimage-<field>-<filter>``) bind in the
-reference's own change group, stay unbound with a status 0 reference, and
-a measurement that fell back to the run's set leaves their keys out of the
-binding while the reference binds.
+tools: a status 0 reference (a fatal InfoBit) exits 65, leaves its job
+``failed`` with its fatal bits in the refusal and loads no row of any
+table; the loop then plans no difference against it, does not plan it
+again in the same run, and reports it under ``failed``. A status 1
+reference binds as before. With ``[reference.psfcat] enabled`` under
+``"measured"`` the measured PSF's 18 ``reference`` ``psfs`` rows (set
+``refimage-<field>-<filter>``) bind in the reference's own change group,
+a status 0 reference loads none, and a measurement that fell back to the
+run's set leaves their keys out of the binding while the reference binds.
 """
 
 from __future__ import annotations
@@ -92,30 +91,34 @@ def fakes(monkeypatch, tmp_path, measure=None, made=None):
     monkeypatch.setenv("RAPIDPIPE_OUTPUTS_ROOT", (tmp_path / "outputs").as_uri())
 
 
-def test_a_status_0_reference_is_published_unbound_failed_and_never_differenced(connect, tmp_path,
-                                                                               monkeypatch, capsys):
+def reference_job(conn, run) -> int:
+    ((job,),) = query(conn, "SELECT id FROM jobs WHERE run = %s AND stage = 'reference'", (run,))
+    return job
+
+
+def test_a_status_0_reference_fails_65_loads_nothing_and_is_never_differenced(connect, tmp_path,
+                                                                             monkeypatch, capsys):
     conn = connect()
-    body = {**settings(), "difference": {"reference_psf": "measured", "reference_psf_set": ""}}
+    body = {**settings(infobits={"t08": 10}), "difference": {"reference_psf": "measured", "reference_psf_set": ""}}
     run = live_run(conn, body)
     inputs = l2_inputs(conn, run, tmp_path)
     fakes(monkeypatch, tmp_path)
-    code, result = job_local(run, inputs, ref_expects(), capsys)   # the fake catalog's 4 sources: bit 8
-    assert code == 1 and result["published"] and result["group"] is None
-    assert result["refusal"].startswith("reference status 0: fatal InfoBits 8")
-    assert query(conn, "SELECT state, refusal FROM jobs WHERE id = %s", (result["job"],)) == [
-        ("published", result["refusal"])]
-    assert query(conn, "SELECT status, infobits & 256 FROM refimages WHERE job = %s", (result["job"],)) == [
-        (0, 256)]
-    assert query(conn, "SELECT count(*) FROM refimimages WHERE job = %s", (result["job"],)) == [(2,)]
-    assert query(conn, "SELECT count(*) FROM refimcatalogs WHERE job = %s", (result["job"],)) == [(1,)]
-    assert query(conn, "SELECT count(*) FROM refimages_official") == [(0,)]
+    code = cli.main(["job", "local", "--run", str(run), "--stage", "reference",   # 4 sources under t08 = 10: bit 8
+                     "--scope", json.dumps({"field": RTID, "fid": FID, "sca": SCA}),
+                     "--inputs", json.dumps(inputs), "--expects", json.dumps(ref_expects())])
+    capsys.readouterr()
+    job = reference_job(conn, run)
+    ((state, exit_code, refusal),) = query(conn, "SELECT state, exit_code, refusal FROM jobs WHERE id = %s", (job,))
+    assert (code, state, exit_code) == (65, "failed", 65) and "reference status 0: fatal InfoBits 8 " in refusal
+    for table in ("refimages", "refimimages", "refimcatalogs", "refimmeta"):
+        assert query(conn, f"SELECT count(*) FROM {table} WHERE job = %s", (job,)) == [(0,)]
+    assert query(conn, "SELECT count(*) FROM official WHERE job = %s", (job,)) == [(0,)]
 
     snap = loop.snapshot(conn, run)
     assert snap.refs == {} and len(snap.l2) == 2
     subs, counts = loop.plan(snap, [], loop.Selection.parse("F146", str(SCA), "all"))
     assert subs == []
-    assert [(f["job"], f["stage"], f["refusal"]) for f in counts["failed"]] == [
-        (result["job"], "reference", result["refusal"])]
+    assert [(f["job"], f["stage"]) for f in counts["failed"]] == [(job, "reference")]
 
 
 def test_a_status_1_reference_binds_as_before(connect, tmp_path, monkeypatch, capsys):
@@ -149,9 +152,9 @@ def test_a_measured_psf_binds_its_18_rows_in_the_references_group(connect, tmp_p
     assert query(conn, "SELECT cattype FROM refimcatalogs_official ORDER BY cattype") == [(1,), (2,)]
 
 
-def test_a_status_0_measured_references_psf_rows_stay_unbound_with_it(connect, tmp_path, monkeypatch, capsys):
+def test_a_status_0_measured_reference_loads_no_psf_rows(connect, tmp_path, monkeypatch, capsys):
     conn = connect()
-    body = {**settings(psfcat={"enabled": True}),
+    body = {**settings(psfcat={"enabled": True}, infobits={"t08": 10}),
             "difference": {"reference_psf": "measured", "reference_psf_set": ""}}
     run = live_run(conn, body)
     inputs = l2_inputs(conn, run, tmp_path)
@@ -159,10 +162,15 @@ def test_a_status_0_measured_references_psf_rows_stay_unbound_with_it(connect, t
     science = {"product": "psfs", "source_job": science_job,
                "key": {"dataset": DATASET, "fid": FID, "sca": SCA, "kind": "science"}}
     fakes(monkeypatch, tmp_path)
-    code, result = job_local(run, [*inputs, science], [*ref_expects(), *psf_expects()], capsys)
-    assert code == 1 and result["refusal"].startswith("reference status 0")
-    assert query(conn, "SELECT count(*) FROM psfs WHERE job = %s", (result["job"],)) == [(18,)]
-    assert query(conn, "SELECT count(*) FROM official WHERE job = %s", (result["job"],)) == [(0,)]
+    code = cli.main(["job", "local", "--run", str(run), "--stage", "reference",
+                     "--scope", json.dumps({"field": RTID, "fid": FID, "sca": SCA}),
+                     "--inputs", json.dumps([*inputs, science]),
+                     "--expects", json.dumps([*ref_expects(), *psf_expects()])])
+    capsys.readouterr()
+    job = reference_job(conn, run)
+    assert code == 65 and query(conn, "SELECT state FROM jobs WHERE id = %s", (job,)) == [("failed",)]
+    assert query(conn, "SELECT count(*) FROM psfs WHERE job = %s", (job,)) == [(0,)]
+    assert query(conn, "SELECT count(*) FROM official WHERE job = %s", (job,)) == [(0,)]
 
 
 def test_a_fallback_leaves_the_measured_keys_out_and_binds_the_reference(connect, tmp_path, monkeypatch, capsys):

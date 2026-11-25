@@ -29,7 +29,8 @@ error falls back to a named set (no rows, ``unbound``) or, with none,
 leaves no catalog, InfoBit 16 and status 0; the PSF-fit catalog is
 ``refimcatalogs`` cattype 2 with its source count in the manifest and
 ``refimmeta.npucatsources``; a
-status 0 reference's manifest carries ``refused`` with its fatal bits;
+status 0 reference fails the job with exit 65, its fatal bits the reason,
+before any table or manifest is written;
 psfs inputs or expects the settings do not call for are rejected 65; the
 flight overlay's resolved ``[reference]`` table is valid with the catalog
 on and ``sharphi`` 1.8.
@@ -81,6 +82,7 @@ def settings(**tables) -> dict:
     body["paths"]["cfg_path"] = str(cdf_dir())
     body["mosaic"].update(naxis1=128, naxis2=128)
     body["statistics"]["clip_correction_seed"] = 1
+    body["infobits"]["t08"] = 1  # the fake catalog's four sources clear it, so a reference is status 1 unless a test says
     for table, values in tables.items():
         body[table].update(values)
     return {"reference": body}
@@ -201,9 +203,9 @@ def test_a_job_writes_its_four_tables_with_one_rfid_and_its_files(tmp_path, fram
     assert [header[f"INFIL00{i}"] for i in (1, 2, 3)] == [f[1] for f in FRAMES]  # mjdobs order
     assert manifest["reference"]["rfid"] == RFID and manifest["reference"]["not_coadded"] == []
     assert manifest["reference"]["nsexcatsources"] == 4
-    # The fake catalog's four sources are under t08 = 10: bit 8, fatal, status 0, on the row
+    # The fake catalog's four sources clear the tests' t08 = 1: no fatal bit, status 1, on the row
     # and in the header alike.
-    assert ref["infobits"] & 2**8 and ref["status"] == 0
+    assert not ref["infobits"] & 2**8 and ref["status"] == 1
     assert (header["INFOBITS"], header["STATUS"]) == (ref["infobits"], ref["status"])
     assert header["BIT08"] == 8 and "BIT09" not in header
     metrics = manifest["metrics"]
@@ -554,7 +556,7 @@ def test_precomputed_catalogs_with_the_sets_row_and_registers_cattype_2(tmp_path
     quality = manifest["reference"]["quality"]
     assert quality["npsfcat"] == 40 and quality["maglimcat"] == pytest.approx(
         26.863 - 2.5 * np.log10(5 * 0.02), abs=1e-3)
-    assert quality["maglimit"] is not None and "refused" not in manifest and "unbound" not in manifest
+    assert quality["maglimit"] is not None and "unbound" not in manifest
     (ref,) = read(prefix, "refimages")
     assert ref["status"] == 1 and not ref["infobits"] & (2**5 | 2**7 | 2**16)
 
@@ -628,36 +630,35 @@ def test_a_fallback_that_fails_its_checks_fails_65_with_both_errors(tmp_path, fr
     assert stopped.value.code == 65
 
 
-def test_a_measurement_error_with_no_set_makes_no_catalog_and_a_status_0_refused_reference(
+def test_a_measurement_error_with_no_set_makes_no_catalog_and_fails_the_reference_65(
         tmp_path, frames, psf_files, catalog_kit):
     made = catalog_kit(too_few)
-    prefix = run_reference(tmp_path, frames, body=catalog_body("measured", ""),
-                           psf_inputs=[psf_input("science"), *measured_expects()], psfs=psf_files)
-    manifest = manifest_of(prefix)
-    (ref,) = read(prefix, "refimages")
-    assert made.calls == [] and [r["cattype"] for r in read(prefix, "refimcatalogs")] == [1]
-    assert ref["infobits"] & 2**16 and ref["infobits"] & 2**7 and ref["status"] == 0
-    assert manifest["refused"].startswith("reference status 0: fatal InfoBits 7, 16")
-    assert manifest["unbound"] == ["psfs"] and manifest["reference"]["npsfcatsources"] == 0
-    assert [m["npucatsources"] for m in read(prefix, "refimmeta")] == [0]
-    assert manifest["reference"]["quality"]["maglimit"] is None
+    with pytest.raises(CommandExit, match=r"^reference status 0: fatal InfoBits 7, 16 ") as stopped:
+        run_reference(tmp_path, frames, body=catalog_body("measured", ""),
+                      psf_inputs=[psf_input("science"), *measured_expects()], psfs=psf_files)
+    prefix = tmp_path / "prefix"
+    assert stopped.value.code == 65 and made.calls == []
+    assert not (prefix / "manifest.json").exists() and not list(prefix.glob("*.parquet"))
     assert not (prefix / "ref" / reference.REFERENCE_PSF_NAME).exists()
 
 
 def test_a_catalog_with_no_source_sets_bit_16(tmp_path, frames, psf_files, catalog_kit):
     made = catalog_kit()
     made.n = 0
-    prefix = run_reference(tmp_path, frames, body=catalog_body("precomputed"),
-                           psf_inputs=[psf_input("reference")], psfs=psf_files)
-    (ref,) = read(prefix, "refimages")
-    assert ref["infobits"] & 2**16 and ref["status"] == 0
-    assert manifest_of(prefix)["reference"]["quality"]["maglimcat"] is None
+    with pytest.raises(CommandExit, match=r"^reference status 0: fatal InfoBits 7, 16 ") as stopped:
+        run_reference(tmp_path, frames, body=catalog_body("precomputed"),
+                      psf_inputs=[psf_input("reference")], psfs=psf_files)
+    assert stopped.value.code == 65 and not (tmp_path / "prefix" / "manifest.json").exists()
 
 
-def test_the_fake_catalogs_status_0_reference_carries_refused_with_its_fatal_bits(tmp_path, frames):
-    manifest = manifest_of(run_reference(tmp_path, frames))
-    assert manifest["refused"] == ("reference status 0: fatal InfoBits 8 (infobits 257); "
-                                   "published, not made official")
+def test_a_status_0_reference_fails_65_with_its_fatal_bits_and_writes_no_manifest(tmp_path, frames):
+    with pytest.raises(CommandExit, match=r"^reference status 0: fatal InfoBits 8 \(infobits \d+\)$") as stopped:
+        run_reference(tmp_path, frames, body=settings(infobits={"t08": 10}))
+    prefix = tmp_path / "prefix"
+    assert stopped.value.code == 65
+    assert not (prefix / "manifest.json").exists() and not list(prefix.glob("*.parquet"))
+    header = fits.getheader(next(prefix.glob("ref/awaicgen_output_mosaic_image.fits")))
+    assert header["STATUS"] == 0 and header["INFOBITS"] & 2**8
 
 
 @pytest.mark.parametrize("mode, psf_set, named", [
