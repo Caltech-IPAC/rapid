@@ -1,7 +1,7 @@
-# Copied unchanged from dev's modules/fake_src/rapid_l2_injections.py @ 0535ec63 (night-2026-10-24
-# task 9): dev's L2 injection, imported by scripts/inject_dataset.py so the script runs from this
-# checkout alone. No stage imports it; it runs on the host, never in the pipeline image.
-
+# Copied from dev's modules/fake_src/rapid_l2_injections.py @ 0a2d9ae9 (dev PR #608, the optional
+# empirical ePSF library), one line changed: library_epsf is imported from beside this script, not
+# from modules.fake_src. Imported by scripts/inject_dataset.py so the script runs from this checkout
+# alone. No stage imports it; it runs on the host, never in the pipeline image.
 import argparse
 import importlib
 import json
@@ -19,6 +19,8 @@ import romanisim.models.parameters as rsim_parameters
 import romanisim.psf
 import romanisim.wcs
 from romanisim.image import inject_sources_into_l2
+
+import library_epsf as libepsf
 
 
 
@@ -107,6 +109,19 @@ def _build_psf(dm):
     pixelscale = rsim_parameters.pixel_scale / gridded_psf.meta['epsf_oversample']
     imwcs = romanisim.wcs.GWCS(dm.meta.wcs)
     return GriddedEPSF(gridded_psf, pixelscale, wcs=imwcs)
+
+
+def _build_library_psf(dm, epsf_library):
+    """Build a LibraryEPSF from the empirical ePSF library file for this image's
+    filter and SCA.  A missing file is an error, not a fallback to CRDS.
+    """
+    path = libepsf.resolve_epsf_library_path(epsf_library,
+                                             dm.meta.instrument.optical_element,
+                                             int(dm.meta.instrument.detector[-2:]))
+    print(f"  {path}")
+    epsf, oversample = libepsf.read_epsf_library_file(path)
+    imwcs = romanisim.wcs.GWCS(dm.meta.wcs)
+    return libepsf.LibraryEPSF(epsf, oversample, imwcs)
 
 
 def _make_injection_catalog(ra, dec, filter_name, fluxes_maggies):
@@ -241,7 +256,8 @@ def _evaluate_catalogs_at_mjd(catalog_list_file, image_mjdobs, image_size, image
 
 
 def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
-                                   fix_wcs=False, seed=None, rng=None):
+                                   fix_wcs=False, seed=None, rng=None,
+                                   epsf_library=None):
     """Inject variable stars into a Roman L2 ASDF file.
 
     Loads an L2 calibrated image, optionally corrects the WCS, evaluates
@@ -270,6 +286,11 @@ def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
         Random seed for reproducibility.
     rng : galsim.BaseDeviate, optional
         GalSim random number generator. If None, one is constructed from seed.
+    epsf_library : str, optional
+        Filename template (local path or S3 URI) of an empirical ePSF library
+        to inject with instead of the CRDS ePSF, e.g.
+        s3://.../epsf_os3_FILTER_scaSCAID.fits; FILTER becomes e.g. f146 and
+        SCAID the zero-padded SCA number.  See modules/fake_src/library_epsf.py.
 
     Returns
     -------
@@ -311,8 +332,12 @@ def inject_variable_stars_into_l2(asdf_path, catalog_list_file, output_path,
     gain = _get_injection_gain(dm)
     print(f"  gain = {gain:.4f} e-/DN")
 
-    print("Building ePSF from CRDS reference...")
-    psf = _build_psf(dm)
+    if epsf_library is None:
+        print("Building ePSF from CRDS reference...")
+        psf = _build_psf(dm)
+    else:
+        print("Building ePSF from the empirical ePSF library...")
+        psf = _build_library_psf(dm, epsf_library)
 
     print(f"Injecting {len(ra)} sources...")
     result = inject_sources_into_l2(
@@ -340,6 +365,9 @@ if __name__ == '__main__':
                              '(required for current SOC GBTDS simulations).')
     parser.add_argument('--seed', type=int, default=None,
                         help='Integer random seed for reproducibility.')
+    parser.add_argument('--epsf-library', default=None,
+                        help='Filename template of an empirical ePSF library to use instead of '
+                             'CRDS, e.g. s3://.../epsf_os3_FILTER_scaSCAID.fits.')
     args = parser.parse_args()
 
     result, catalog = inject_variable_stars_into_l2(
@@ -347,7 +375,8 @@ if __name__ == '__main__':
         args.catalog_list_file,
         args.output_path,
         fix_wcs=args.fix_wcs,
-        seed=args.seed)
+        seed=args.seed,
+        epsf_library=args.epsf_library)
 
     print(f"Done. {len(catalog)} sources injected.")
     if len(catalog) > 0:

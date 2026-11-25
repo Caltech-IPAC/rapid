@@ -4,9 +4,10 @@ Contracts: the catalog is the same for a seed and differs for another;
 files before the bound are copied byte for byte and files after it
 injected, under their own names; the truth table has one row per source
 per injected epoch, keyed by the exposure's name, the same sources in
-every epoch of a pointing; a file's noise seed follows the seed and the
-exposure's name, the same for the 18 SCAs' names and another for another
-exposure; an
+every epoch of a pointing, with the ePSF they were drawn with; a file's
+noise seed follows the seed and the exposure's name, the same for the 18
+SCAs' names and another for another exposure; a library template reaches
+the injection; an
 object already under the destination is skipped, never rewritten; the
 dry run writes nothing; the start MJD is the file's own ``start_time``,
 read from its ASDF tree without its blocks.
@@ -15,6 +16,7 @@ read from its ASDF tree without its blocks.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -113,6 +115,21 @@ def test_truth_one_row_per_source_per_injected_epoch(tmp_path):
     assert len({frozenset(v) for v in by_epoch.values()}) == 1      # the same sources in every epoch
     r = rows[0]
     assert np.isclose(r["dnps"], 10 ** (-0.4 * (r["mag_ab"] - 26.861)))
+    assert {r["psf"] for r in rows} == {"crds"}
+
+
+def test_epsf_library_reaches_the_injection_and_the_truth(tmp_path, monkeypatch):
+    calls = []
+    fake = type(sys)("rapid_l2_injections")
+    fake.inject_variable_stars_into_l2 = lambda *a, **kw: calls.append(kw)
+    monkeypatch.setitem(sys.modules, "rapid_l2_injections", fake)
+    template = "s3://lib/epsf_os3_FILTER_scaSCAID.fits"
+    inject_dataset.inject_file(tmp_path / "in.asdf", tmp_path / "x.list", tmp_path / "out.asdf", 1,
+                               "roman_0046.pmap", epsf_library=template)
+    assert calls[0]["epsf_library"] == template
+    s3, actions, group, ctx = setup(tmp_path)
+    _, rows = inject_dataset.process_pointing(group, actions, {**ctx, "epsf_library": template})
+    assert {r["psf"] for r in rows} == {template}
 
 
 def test_existing_object_skipped_not_rewritten(tmp_path):

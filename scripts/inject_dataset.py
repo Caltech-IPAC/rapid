@@ -50,7 +50,16 @@ injected, copied and skipped and writes nothing. Prints one line per file
     python scripts/inject_dataset.py --source-root s3://.../l2/ --filter F146 --scas 8 \\
         --pointings 001_0001 --bound-mjd 61591.4056 --dest s3://bucket/prefix/r00342-inj0/ \\
         --dataset r00342-inj0 --truth DIR/truth-sca8.parquet [--seed 20261024] [--per-image 200] \\
-        [--mag-range 21 27] [--workers 8] [--dry-run]
+        [--mag-range 21 27] [--workers 8] [--epsf-library TEMPLATE] [--dry-run]
+
+The sources are drawn with the file's own CRDS ePSF unless ``--epsf-library``
+names an empirical ePSF library: a filename template, a local path or an
+``s3://`` URI, whose ``FILTER`` becomes the file's filter in lower case
+(``f146``) and ``SCAID`` its zero-padded SCA, one oversampled stamp per filter
+and SCA, constant across the SCA (dev's ``modules/fake_src/library_epsf.py``,
+``scripts/library_epsf.py`` here). A missing library file is an error, never a
+fall back to CRDS. The truth table's ``psf`` column records which: ``crds`` or
+the template.
 
 The CRDS server and cache come from ``CRDS_SERVER_URL`` (default the public
 Roman server) and ``CRDS_PATH`` (default ``$TMPDIR/inject-dataset/crds``);
@@ -64,6 +73,7 @@ file's input and output at a time per worker, removed after the upload.
 from __future__ import annotations
 
 import argparse
+import functools
 import io
 import json
 import os
@@ -93,7 +103,7 @@ DEV_EDGE = 50.0
 FILTER_NAMES = {"f062": "R062", "f087": "Z087", "f106": "Y106", "f129": "J129", "f146": "W146",
                 "f158": "H158", "f184": "F184", "f213": "K213"}
 TRUTH_COLUMNS = ("src_id", "ra", "dec", "x", "y", "mag_ab", "dnps", "zp", "exposure", "sca", "fid",
-                 "mjd", "dataset")
+                 "mjd", "dataset", "psf")
 
 
 def split(url: str) -> tuple[str, str]:
@@ -130,9 +140,10 @@ def catalog_json(sources: list[dict]) -> dict:
             for s in sources}
 
 
-def truth_rows(sources: list[dict], image: dict, dataset: str) -> list[dict]:
+def truth_rows(sources: list[dict], image: dict, dataset: str, psf: str = "crds") -> list[dict]:
     """One row per source dev's function places on ``image`` (its ``to_pixel``, ``shape``, ``mjd``,
-    ``zp``, ``exposure``, ``sca``, ``fid``)."""
+    ``zp``, ``exposure``, ``sca``, ``fid``); ``psf`` the ePSF it was drawn with, ``crds`` or the library's
+    template."""
     ra = np.array([s["ra"] for s in sources])
     dec = np.array([s["dec"] for s in sources])
     x, y = image["to_pixel"](ra, dec)
@@ -144,7 +155,7 @@ def truth_rows(sources: list[dict], image: dict, dataset: str) -> list[dict]:
         rows.append({"src_id": s["src_id"], "ra": s["ra"], "dec": s["dec"], "x": float(xi), "y": float(yi),
                      "mag_ab": s["mag"], "dnps": float(10 ** (-0.4 * (s["mag"] - image["zp"]))),
                      "zp": image["zp"], "exposure": image["exposure"], "sca": image["sca"], "fid": image["fid"],
-                     "mjd": image["mjd"], "dataset": dataset})
+                     "mjd": image["mjd"], "dataset": dataset, "psf": psf})
     return rows
 
 
@@ -189,14 +200,16 @@ def keyed(image: dict, stem: str) -> dict:
     return {**image, "exposure": stem_ids(stem)["name"], "sca": int(m["sca"]), "fid": FIDS[FILTER_NAMES[m["filter"]]]}
 
 
-def inject_file(path: Path, list_file: Path, out: Path, seed: int, context: str) -> None:
-    """Dev's injection, its CRDS context pinned to the file's own."""
+def inject_file(path: Path, list_file: Path, out: Path, seed: int, context: str,
+                epsf_library: str | None = None) -> None:
+    """Dev's injection, its CRDS context pinned to the file's own; the CRDS ePSF unless ``epsf_library``
+    names a library template."""
     os.environ["CRDS_CONTEXT"] = context
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import rapid_l2_injections  # noqa: E402 - the copy of dev's module beside this script
 
     rapid_l2_injections.inject_variable_stars_into_l2(str(path), str(list_file), str(out), fix_wcs=False,
-                                                      seed=seed)
+                                                      seed=seed, epsf_library=epsf_library)
 
 
 def process_pointing(stems: list[str], actions: dict[str, str], ctx: dict) -> tuple[list[str], list[dict]]:
@@ -204,7 +217,8 @@ def process_pointing(stems: list[str], actions: dict[str, str], ctx: dict) -> tu
 
     ``ctx``: ``source``/``dest`` (``s3://`` prefixes), ``source_client``, ``dest_client``,
     ``existing`` (names already under ``dest``'s ``l2/``), ``work``, ``seed``, ``per_image``,
-    ``mag_range``, ``dataset``, and the readers ``open_image`` and ``inject``.
+    ``mag_range``, ``dataset``, ``epsf_library`` (optional; None draws with CRDS), and the readers
+    ``open_image`` and ``inject``.
     """
     lines, rows = [], []
     src_bucket, src_prefix = split(ctx["source"])
@@ -254,7 +268,7 @@ def process_pointing(stems: list[str], actions: dict[str, str], ctx: dict) -> tu
             done = put_once(ctx["dest_client"], ctx["dest"] + "l2/" + stem + "_cal.asdf", body)
         out.unlink()
         if done:
-            rows += truth_rows(sources, image, ctx["dataset"])
+            rows += truth_rows(sources, image, ctx["dataset"], ctx.get("epsf_library") or "crds")
         lines.append(f"{stem} {'injected' if done else 'skipped'} {time.perf_counter() - t0:.1f}")
     path.unlink()
     for f in (list_file, catalog_file):
@@ -304,7 +318,7 @@ def _worker(args: tuple) -> tuple[list[str], list[dict]]:
 
     client = boto3.client("s3")
     ctx = {**ctx, "source_client": client, "dest_client": client, "open_image": open_image,
-           "inject": inject_file}
+           "inject": functools.partial(inject_file, epsf_library=ctx.get("epsf_library"))}
     return process_pointing(stems, actions, ctx)
 
 
@@ -322,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--per-image", type=int, default=200)
     p.add_argument("--mag-range", type=float, nargs=2, default=(21.0, 27.0))
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--epsf-library", default=None,
+                   help="empirical ePSF library template (FILTER, SCAID); default the file's CRDS ePSF")
     p.add_argument("--work", type=Path, default=Path(os.environ.get("TMPDIR", ".")) / "inject-dataset")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
@@ -347,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
     n_inject = sum(1 for s in stems if actions[s] == "inject")
     print(f"selection {selection.summary()}: {len(stems)} files, {n_inject} to inject, "
           f"{len(stems) - n_inject} to copy, {sum(1 for s in stems if s + '_cal.asdf' in existing)} already "
-          f"under {dest}l2/, {len(groups)} pointings x SCAs", flush=True)
+          f"under {dest}l2/, {len(groups)} pointings x SCAs, ePSF {a.epsf_library or 'crds'}", flush=True)
     if a.dry_run:
         for s in stems:
             state = "skip" if s + "_cal.asdf" in existing else actions[s]
@@ -355,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     ctx = {"source": source, "dest": dest, "existing": existing, "seed": a.seed, "per_image": a.per_image,
-           "mag_range": tuple(a.mag_range), "dataset": a.dataset}
+           "mag_range": tuple(a.mag_range), "dataset": a.dataset, "epsf_library": a.epsf_library}
     jobs = [(g, {s: actions[s] for s in g}, {**ctx, "work": str(a.work / f"{k[0]:03d}_{k[1]:04d}_{k[2]:02d}")})
             for k, g in sorted(groups.items())]
     counts, rows = defaultdict(int), []
@@ -367,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
             rows += got
     a.truth.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(rows, schema=pa.schema(
-        [(c, pa.string() if c in ("dataset", "exposure") else pa.int64() if c in ("src_id", "sca", "fid")
+        [(c, pa.string() if c in ("dataset", "exposure", "psf") else pa.int64() if c in ("src_id", "sca", "fid")
           else pa.float64()) for c in TRUTH_COLUMNS]))
     pq.write_table(table, a.truth)
     with a.truth.open("rb") as body:
