@@ -153,9 +153,9 @@ One pass, in order:
   ``NotFound``; a missing science row plans a ``psf`` job for the pair
   from one of the reference's stems (unless one of the run serves it) and
   holds the reference under ``held`` until the row is official. A
-  reference graded status 0 fails its job with exit 65, so it is reported
-  under ``failed``, holds its field and filter in the run, and gets no
-  difference.
+  reference graded status 0 is published with its binding refused, so it
+  is reported under ``failed``, holds its field and filter in the run, and
+  gets no difference.
 - With ``[reference.selection] selection_type = "coverage"``
   (``rapidpipe.products.coverage``) the frames are chosen by how much of the
   reference they cover: the candidates are the selected official rows of the
