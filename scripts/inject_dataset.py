@@ -1,4 +1,4 @@
-"""Write an injected dataset: constant sources in every epoch after a bound, the epochs before it copied.
+"""Write an injected dataset: constant sources in every epoch after a bound (and, from a catalog, before it).
 
 One-time, outside the pipeline (plan Part 6 rows 13 and 14, Ben 2026-10-22:
 injection outside the pipeline as a dataset): the pipeline never sees this
@@ -26,6 +26,20 @@ places it through its own stored WCS, as dev's function does). The catalog
 is dev's JSON shape, ``sinusoidal`` with ``amplitude`` 0 (dev has no
 constant type; a zero-amplitude sinusoid is one).
 
+``--catalog`` replaces the drawn catalog with a local Parquet of sources
+(``src_id``, ``ra``, ``dec``, ``mag_ref``, ``mag_sci``; any other column,
+such as a source's ``source_type`` or its host's, is carried to the truth as it
+is), and the epochs before the bound, the reference's, are injected too:
+a file before the bound gets each source with a ``mag_ref``, a file after
+it each source with a ``mag_sci``, a null magnitude meaning none in that
+epoch, placed through the file's own stored WCS. A variable star is a row
+with both (a fade when ``mag_sci`` is the fainter), a transient a row with
+``mag_sci`` alone and a source gone by the science epochs a row with
+``mag_ref`` alone. A file none of the catalog's sources falls on is copied
+byte for byte. The catalog is refused when a required column is missing,
+a ``src_id`` repeats or a row has neither magnitude; ``--per-image`` and
+``--mag-range`` are not used.
+
 The truth table, one row per source per injected epoch (``src_id, ra, dec,
 x, y, mag_ab, dnps, zp, exposure, sca, fid, mjd, dataset``; ``exposure`` the
 exposure's name, the stem without its detector and ``_cal``, which
@@ -50,7 +64,7 @@ injected, copied and skipped and writes nothing. Prints one line per file
     python scripts/inject_dataset.py --source-root s3://.../l2/ --filter F146 --scas 8 \\
         --pointings 001_0001 --bound-mjd 61591.4056 --dest s3://bucket/prefix/r00342-inj0/ \\
         --dataset r00342-inj0 --truth DIR/truth-sca8.parquet [--seed 20261024] [--per-image 200] \\
-        [--mag-range 21 27] [--workers 8] [--epsf-library TEMPLATE] [--dry-run]
+        [--mag-range 21 27] [--workers 8] [--epsf-library TEMPLATE] [--catalog SOURCES.parquet] [--dry-run]
 
 The sources are drawn with the file's own CRDS ePSF unless ``--epsf-library``
 names an empirical ePSF library: a filename template, a local path or an
@@ -104,6 +118,10 @@ FILTER_NAMES = {"f062": "R062", "f087": "Z087", "f106": "Y106", "f129": "J129", 
                 "f158": "H158", "f184": "F184", "f213": "K213"}
 TRUTH_COLUMNS = ("src_id", "ra", "dec", "x", "y", "mag_ab", "dnps", "zp", "exposure", "sca", "fid",
                  "mjd", "dataset", "psf")
+#: A ``--catalog``'s magnitude columns: before the bound (the reference's epochs) and after it.
+CATALOG_MAGS = ("mag_ref", "mag_sci")
+#: A ``--catalog``'s required columns; any other column is carried to the truth as it is.
+CATALOG_COLUMNS = ("src_id", "ra", "dec") + CATALOG_MAGS
 
 
 def split(url: str) -> tuple[str, str]:
@@ -140,10 +158,12 @@ def catalog_json(sources: list[dict]) -> dict:
             for s in sources}
 
 
-def truth_rows(sources: list[dict], image: dict, dataset: str, psf: str = "crds") -> list[dict]:
+def truth_rows(sources: list[dict], image: dict, dataset: str, psf: str = "crds",
+               extras: tuple[str, ...] = ()) -> list[dict]:
     """One row per source dev's function places on ``image`` (its ``to_pixel``, ``shape``, ``mjd``,
     ``zp``, ``exposure``, ``sca``, ``fid``); ``psf`` the ePSF it was drawn with, ``crds`` or the library's
-    template."""
+    template; ``extras`` the source's own columns carried through (a ``--catalog``'s ``source_type`` and the
+    like)."""
     ra = np.array([s["ra"] for s in sources])
     dec = np.array([s["dec"] for s in sources])
     x, y = image["to_pixel"](ra, dec)
@@ -155,8 +175,23 @@ def truth_rows(sources: list[dict], image: dict, dataset: str, psf: str = "crds"
         rows.append({"src_id": s["src_id"], "ra": s["ra"], "dec": s["dec"], "x": float(xi), "y": float(yi),
                      "mag_ab": s["mag"], "dnps": float(10 ** (-0.4 * (s["mag"] - image["zp"]))),
                      "zp": image["zp"], "exposure": image["exposure"], "sca": image["sca"], "fid": image["fid"],
-                     "mjd": image["mjd"], "dataset": dataset, "psf": psf})
+                     "mjd": image["mjd"], "dataset": dataset, "psf": psf,
+                     **{k: s[k] for k in extras}})
     return rows
+
+
+def catalog_sources(catalog: list[dict], epoch: str, image: dict) -> list[dict]:
+    """The rows of a ``--catalog`` with a magnitude in ``epoch`` (``mag_ref`` or ``mag_sci``) that dev's
+    function places on ``image``, as ``draw_catalog``'s sources (``mag`` the epoch's) with the rest of
+    each row's columns."""
+    rows = [c for c in catalog if c[epoch] is not None and np.isfinite(c[epoch])]
+    if not rows:
+        return []
+    x, y = image["to_pixel"](np.array([c["ra"] for c in rows]), np.array([c["dec"] for c in rows]))
+    ny, nx = image["shape"]
+    return [{**{k: v for k, v in c.items() if k not in CATALOG_MAGS}, "mag": float(c[epoch])}
+            for c, xi, yi in zip(rows, np.atleast_1d(x), np.atleast_1d(y))
+            if -DEV_EDGE <= xi < nx + DEV_EDGE and -DEV_EDGE <= yi < ny + DEV_EDGE]
 
 
 def file_seed(seed: int, stem: str) -> int:
@@ -241,6 +276,8 @@ def process_pointing(stems: list[str], actions: dict[str, str], ctx: dict) -> tu
         done = put_once(ctx["dest_client"], ctx["dest"] + "l2/" + name, body)
         lines.append(f"{stem} {'copied' if done else 'skipped'} {time.perf_counter() - t0:.1f}")
 
+    if ctx.get("catalog") is not None:
+        return _process_catalog(stems, actions, ctx, fetch, lines)
     inject = [s for s in stems if actions[s] == "inject"]
     todo = [s for s in inject if s + "_cal.asdf" not in ctx["existing"]]
     lines += [f"{s} skipped 0.0" for s in inject if s not in todo]
@@ -276,6 +313,69 @@ def process_pointing(stems: list[str], actions: dict[str, str], ctx: dict) -> tu
     return lines, rows
 
 
+def _process_catalog(stems: list[str], actions: dict[str, str], ctx: dict, fetch: Callable,
+                     lines: list[str]) -> tuple[list[str], list[dict]]:
+    """``process_pointing`` under a ``--catalog`` (``ctx['catalog']``, its rows; ``ctx['extras']``,
+    the columns carried to the truth): each file gets the rows its epoch has a magnitude for,
+    ``mag_ref`` before the bound and ``mag_sci`` after it, placed through the file's own stored WCS;
+    a file none of them falls on is copied byte for byte."""
+    rows = []
+    work = Path(ctx["work"])
+    for stem in [s for s in stems if actions[s] in ("reference", "inject")]:
+        t0 = time.perf_counter()
+        name = stem + "_cal.asdf"
+        if name in ctx["existing"]:
+            lines.append(f"{stem} skipped 0.0")
+            continue
+        path = fetch(stem)
+        image = ctx["open_image"](path, stem)
+        epoch = "mag_ref" if actions[stem] == "reference" else "mag_sci"
+        sources = catalog_sources(ctx["catalog"], epoch, image)
+        if not sources:
+            done = put_once(ctx["dest_client"], ctx["dest"] + "l2/" + name, path.read_bytes())
+            path.unlink()
+            lines.append(f"{stem} {'copied' if done else 'skipped'} {time.perf_counter() - t0:.1f}")
+            continue
+        list_file, catalog_file = work / f"{stem}.list", work / f"{stem}.json"
+        catalog_file.write_text(json.dumps(catalog_json(sources)))
+        list_file.write_text(str(catalog_file) + "\n")
+        out = work / f"{stem}_injected_cal.asdf"
+        ctx["inject"](path, list_file, out, file_seed(ctx["seed"], stem), image["context"])
+        with out.open("rb") as body:
+            done = put_once(ctx["dest_client"], ctx["dest"] + "l2/" + name, body)
+        if done:
+            rows += truth_rows(sources, image, ctx["dataset"], ctx.get("epsf_library") or "crds",
+                               ctx.get("extras", ()))
+        for f in (path, out, list_file, catalog_file):
+            f.unlink()
+        lines.append(f"{stem} {'injected' if done else 'skipped'} {time.perf_counter() - t0:.1f}")
+    return lines, rows
+
+
+def read_catalog(path: Path) -> tuple[list[dict], tuple[str, ...], Any]:
+    """A ``--catalog`` Parquet: its rows, its columns beyond ``CATALOG_COLUMNS`` (carried to the truth)
+    and its schema. Refuses a missing required column, a column the truth writes itself (``x``, ``mjd``
+    and the rest of ``TRUTH_COLUMNS``), a repeated ``src_id`` and a row with neither magnitude."""
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path)
+    missing = [c for c in CATALOG_COLUMNS if c not in table.column_names]
+    if missing:
+        raise ValueError(f"{path}: no column {', '.join(missing)}")
+    clash = [c for c in table.column_names if c in TRUTH_COLUMNS and c not in CATALOG_COLUMNS]
+    if clash:
+        raise ValueError(f"{path}: column {', '.join(clash)} is the truth's own")
+    rows = table.to_pylist()
+    ids = [r["src_id"] for r in rows]
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{path}: src_id repeated")
+    empty = [r["src_id"] for r in rows if not any(r[m] is not None and np.isfinite(r[m]) for m in CATALOG_MAGS)]
+    if empty:
+        raise ValueError(f"{path}: {len(empty)} rows with neither mag_ref nor mag_sci, first src_id {empty[0]}")
+    extras = tuple(c for c in table.column_names if c not in CATALOG_COLUMNS)
+    return rows, extras, table.schema
+
+
 #: The YAML tree's end-of-document marker; the binary blocks follow it.
 TREE_END = b"\n...\n"
 
@@ -302,10 +402,11 @@ def header_mjd(client, source: str, stem: str, chunk: int = 1 << 20) -> float:
         return float(Time(str(af.tree["roman"]["meta"]["exposure"]["start_time"])).mjd)
 
 
-def plan(stems: list[str], mjds: dict[str, float], bound: float) -> tuple[dict, dict]:
-    """Each stem's action (``inject`` after the bound, else ``copy``) and the stems per pointing and SCA,
-    in start order."""
-    actions = {s: ("inject" if mjds[s] > bound else "copy") for s in stems}
+def plan(stems: list[str], mjds: dict[str, float], bound: float,
+         reference: bool = False) -> tuple[dict, dict]:
+    """Each stem's action (``inject`` after the bound; before it ``reference`` under a catalog, which
+    injects the reference's epochs too, else ``copy``) and the stems per pointing and SCA, in start order."""
+    actions = {s: ("inject" if mjds[s] > bound else "reference" if reference else "copy") for s in stems}
     groups: dict[tuple, list[str]] = defaultdict(list)
     for s in sorted(stems, key=lambda s: mjds[s]):
         groups[pointing_key(s)].append(s)
@@ -338,6 +439,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--epsf-library", default=None,
                    help="empirical ePSF library template (FILTER, SCAID); default the file's CRDS ePSF")
+    p.add_argument("--catalog", type=Path, default=None,
+                   help="local Parquet of the sources (src_id, ra, dec, mag_ref, mag_sci, any other columns); "
+                        "replaces the drawn catalog, --per-image and --mag-range unused")
     p.add_argument("--work", type=Path, default=Path(os.environ.get("TMPDIR", ".")) / "inject-dataset")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
@@ -348,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
+    catalog, extras, catalog_schema = read_catalog(a.catalog) if a.catalog else (None, (), None)
     t_start = time.perf_counter()
     signed = boto3.client("s3")
     selection = Selection.parse(a.filter, a.scas, a.pointings)
@@ -355,15 +460,18 @@ def main(argv: list[str] | None = None) -> int:
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(16) as pool:
         mjds = dict(zip(stems, pool.map(lambda s: header_mjd(signed, source, s), stems)))
-    actions, groups = plan(stems, mjds, a.bound_mjd)
+    actions, groups = plan(stems, mjds, a.bound_mjd, reference=catalog is not None)
     bucket, prefix = split(dest + "l2/")
     existing = {item["Key"].rsplit("/", 1)[-1]
                 for page in signed.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix)
                 for item in page.get("Contents", [])}
     n_inject = sum(1 for s in stems if actions[s] == "inject")
+    n_reference = sum(1 for s in stems if actions[s] == "reference")
     print(f"selection {selection.summary()}: {len(stems)} files, {n_inject} to inject, "
-          f"{len(stems) - n_inject} to copy, {sum(1 for s in stems if s + '_cal.asdf' in existing)} already "
-          f"under {dest}l2/, {len(groups)} pointings x SCAs, ePSF {a.epsf_library or 'crds'}", flush=True)
+          f"{n_reference} reference epochs to inject, {len(stems) - n_inject - n_reference} to copy, "
+          f"{sum(1 for s in stems if s + '_cal.asdf' in existing)} already under {dest}l2/, "
+          f"{len(groups)} pointings x SCAs, ePSF {a.epsf_library or 'crds'}, "
+          f"catalog {f'{a.catalog} ({len(catalog)} sources)' if catalog else 'drawn'}", flush=True)
     if a.dry_run:
         for s in stems:
             state = "skip" if s + "_cal.asdf" in existing else actions[s]
@@ -371,7 +479,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     ctx = {"source": source, "dest": dest, "existing": existing, "seed": a.seed, "per_image": a.per_image,
-           "mag_range": tuple(a.mag_range), "dataset": a.dataset, "epsf_library": a.epsf_library}
+           "mag_range": tuple(a.mag_range), "dataset": a.dataset, "epsf_library": a.epsf_library,
+           "catalog": catalog, "extras": extras}
     jobs = [(g, {s: actions[s] for s in g}, {**ctx, "work": str(a.work / f"{k[0]:03d}_{k[1]:04d}_{k[2]:02d}")})
             for k, g in sorted(groups.items())]
     counts, rows = defaultdict(int), []
@@ -384,7 +493,8 @@ def main(argv: list[str] | None = None) -> int:
     a.truth.parent.mkdir(parents=True, exist_ok=True)
     table = pa.Table.from_pylist(rows, schema=pa.schema(
         [(c, pa.string() if c in ("dataset", "exposure", "psf") else pa.int64() if c in ("src_id", "sca", "fid")
-          else pa.float64()) for c in TRUTH_COLUMNS]))
+          else pa.float64()) for c in TRUTH_COLUMNS]
+        + [catalog_schema.field(c) for c in extras]))
     pq.write_table(table, a.truth)
     with a.truth.open("rb") as body:
         uploaded = bool(rows) and put_once(signed, dest + "catalog/" + a.truth.name, body)
