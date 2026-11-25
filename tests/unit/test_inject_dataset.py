@@ -132,6 +132,47 @@ def test_epsf_library_reaches_the_injection_and_the_truth(tmp_path, monkeypatch)
     assert {r["psf"] for r in rows} == {template}
 
 
+def catalog_row(src_id, x, mag_ref, mag_sci, cls):
+    return {"src_id": src_id, "ra": 10.0 + x * 1e-5, "dec": -5.0 + 2000 * 1e-5, "mag_ref": mag_ref,
+            "mag_sci": mag_sci, "source_type": cls}
+
+
+def test_catalog_injects_each_epochs_magnitude_and_carries_its_columns(tmp_path):
+    catalog = [catalog_row(1, 1000, 20.5, 21.0, "star"), catalog_row(2, 2000, None, 24.0, "blank"),
+               catalog_row(3, 3000, 23.5, None, "blank"), catalog_row(4, 9000, 22.0, 22.0, "star")]  # 4 off image
+    s3, _, group, ctx = setup(tmp_path)
+    actions, _ = inject_dataset.plan(STEMS, MJDS, BOUND, reference=True)
+    lines, rows = inject_dataset.process_pointing(group, actions, {**ctx, "catalog": catalog, "extras": ("source_type",)})
+    assert sorted(line.split()[1] for line in lines) == ["injected"] * 6
+    for s in STEMS:
+        name = inject_dataset.stem_ids(s)["name"]
+        epoch = {(r["src_id"], r["mag_ab"], r["source_type"]) for r in rows if r["exposure"] == name}
+        assert epoch == ({(1, 21.0, "star"), (2, 24.0, "blank")} if MJDS[s] > BOUND else
+                         {(1, 20.5, "star"), (3, 23.5, "blank")})
+    # a catalog with nothing for the reference's epochs leaves them byte for byte
+    s3, _, group, ctx = setup(tmp_path)
+    lines, _ = inject_dataset.process_pointing(group, actions, {**ctx, "catalog": catalog[1:2], "extras": ("source_type",)})
+    assert sorted(line.split()[1] for line in lines) == ["copied"] * 3 + ["injected"] * 3
+    assert s3._objects[("inputs", f"r00342-injt/l2/{STEMS[0]}_cal.asdf")] == f"bytes of {STEMS[0]}".encode()
+
+
+def test_read_catalog_refuses_a_repeated_id_no_magnitude_and_a_truth_column(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import pytest
+
+    good = [catalog_row(1, 1000, 20.5, 21.0, "star"), catalog_row(2, 2000, None, 24.0, "blank")]
+    pq.write_table(pa.Table.from_pylist(good), tmp_path / "ok.parquet")
+    rows, extras, _ = inject_dataset.read_catalog(tmp_path / "ok.parquet")
+    assert len(rows) == 2 and extras == ("source_type",)
+    for name, bad in (("dup", good + [catalog_row(1, 3000, 22.0, None, "blank")]),
+                      ("none", good + [catalog_row(3, 3000, None, None, "blank")]),
+                      ("clash", [{**r, "mjd": 1.0} for r in good])):
+        pq.write_table(pa.Table.from_pylist(bad), tmp_path / f"{name}.parquet")
+        with pytest.raises(ValueError):
+            inject_dataset.read_catalog(tmp_path / f"{name}.parquet")
+
+
 def test_existing_object_skipped_not_rewritten(tmp_path):
     s3, actions, group, ctx = setup(tmp_path, existing=[STEMS[0], STEMS[4]])
     lines, rows = inject_dataset.process_pointing(group, actions, ctx)
